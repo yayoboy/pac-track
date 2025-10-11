@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pac-Track - Network Simulator</title>
+    <meta name="description" content="Web-based network simulator with 38+ device types, DHCP, continuous traffic simulation, and verbose logging">
+    <meta name="author" content="Pac-Track">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Pac-Track - Network Simulator</h1>
+        </header>
+
+        <!-- Top Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-section">
+                <span class="toolbar-label">File</span>
+                <button class="toolbar-btn" id="save-topology" title="Save Topology">
+                    <span class="icon">💾</span>
+                </button>
+                <button class="toolbar-btn" id="load-topology" title="Load Topology">
+                    <span class="icon">📂</span>
+                </button>
+                <button class="toolbar-btn" id="export-image" title="Export as Image">
+                    <span class="icon">📸</span>
+                </button>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-section">
+                <span class="toolbar-label">Tools</span>
+                <button id="move-mode" class="toolbar-btn active" title="Move Mode">
+                    <span class="icon">✋</span>
+                </button>
+                <button id="cable-mode" class="toolbar-btn" title="Connect Devices">
+                    <span class="icon">🔌</span>
+                </button>
+                <button id="delete-mode" class="toolbar-btn" title="Delete">
+                    <span class="icon">🗑️</span>
+                </button>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-section">
+                <span class="toolbar-label">View</span>
+                <button id="snap-to-grid" class="toolbar-btn" title="Snap to Grid">
+                    <span class="icon">🔲</span>
+                </button>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-section">
+                <span class="toolbar-label">Actions</span>
+                <button id="simulate-btn" class="toolbar-btn" title="Simulate Single Packet">
+                    <span class="icon">▶️</span>
+                </button>
+                <button id="continuous-sim-btn" class="toolbar-btn" title="Toggle Continuous Simulation">
+                    <span class="icon">🔄</span>
+                </button>
+                <button id="clear-btn" class="toolbar-btn" title="Clear All">
+                    <span class="icon">🗑️</span>
+                </button>
+            </div>
+
+            <div class="toolbar-spacer"></div>
+
+            <div class="toolbar-section">
+                <span class="toolbar-label">Topology Name</span>
+                <input type="text" id="topology-name" placeholder="My Network" style="padding: 0.5rem; border: 1px solid #dfe6e9; border-radius: 4px; font-size: 0.85rem; min-width: 150px;">
+            </div>
+
+            <div class="toolbar-section">
+                <button id="toggle-console" class="toolbar-btn" title="Toggle Console">
+                    <span class="icon">📋</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Device Palette (Left Side) -->
+        <div class="main-content">
+            <div class="device-palette">
+                <div class="palette-section">
+                    <h3>Network Devices</h3>
+                    <button class="device-btn" data-type="router">
+                        <span class="icon">🔀</span>
+                        <span class="label">Router</span>
+                    </button>
+                    <button class="device-btn" data-type="switch">
+                        <span class="icon">⚡</span>
+                        <span class="label">Switch</span>
+                    </button>
+                    <button class="device-btn" data-type="hub">
+                        <span class="icon">🔘</span>
+                        <span class="label">Hub</span>
+                    </button>
+                    <button class="device-btn" data-type="modem">
+                        <span class="icon">📡</span>
+                        <span class="label">Modem</span>
+                    </button>
+                    <button class="device-btn" data-type="access-point">
+                        <span class="icon">📶</span>
+                        <span class="label">Access Point</span>
+                    </button>
+                    <button class="device-btn" data-type="internet">
+                        <span class="icon">🌍</span>
+                        <span class="label">Internet/WAN</span>
+                    </button>
+                    <button class="device-btn" data-type="cloud">
+                        <span class="icon">☁️</span>
+                        <span class="label">Cloud</span>
+                    </button>
+                </div>
+
+                <div class="palette-section">
+                    <h3>Security</h3>
+                    <button class="device-btn" data-type="firewall">
+                        <span class="icon">🔥</span>
+                        <span class="label">Firewall</span>
+                    </button>
+                    <button class="device-btn" data-type="ids">
+                        <span class="icon">🛡️</span>
+                        <span class="label">IDS/IPS</span>
+                    </button>
+                </div>
+
+                <div class="palette-section">
+                    <h3>Servers</h3>
+                    <button class="device-btn" data-type="web-server">
+                        <span class="icon">🌐</span>
+                        <span class="label">Web Server</span>
+                    </button>
+                    <button class="device-btn" data-type="database-server">
+                        <span class="icon">🗄️</span>
+                        <span class="label">Database</span>
+                    </button>
+                    <button class="device-btn" data-type="mail-server">
+                        <span class="icon">📧</span>
+                        <span class="label">Mail Server</span>
+                    </button>
+                    <button class="device-btn" data-type="dns-server">
+                        <span class="icon">🔤</span>
+                        <span class="label">DNS Server</span>
+                    </button>
+                    <button class="device-btn" data-type="ftp-server">
+                        <span class="icon">📁</span>
+                        <span class="label">FTP Server</span>
+                    </button>
+                    <button class="device-btn" data-type="proxy-server">
+                        <span class="icon">🔄</span>
+                        <span class="label">Proxy Server</span>
+                    </button>
+                </div>
+
+                <div class="palette-section">
+                    <h3>Storage & Others</h3>
+                    <button class="device-btn" data-type="nas">
+                        <span class="icon">💾</span>
+                        <span class="label">NAS</span>
+                    </button>
+                    <button class="device-btn" data-type="load-balancer">
+                        <span class="icon">⚖️</span>
+                        <span class="label">Load Balancer</span>
+                    </button>
+                </div>
+
+                <div class="palette-section">
+                    <h3>Home & IoT</h3>
+                    <button class="device-btn" data-type="wifi-router">
+                        <span class="icon">📡</span>
+                        <span class="label">WiFi Router</span>
+                    </button>
+                    <button class="device-btn" data-type="mesh-node">
+                        <span class="icon">🔗</span>
+                        <span class="label">Mesh Node</span>
+                    </button>
+                    <button class="device-btn" data-type="range-extender">
+                        <span class="icon">📶</span>
+                        <span class="label">Range Extender</span>
+                    </button>
+                    <button class="device-btn" data-type="smart-tv">
+                        <span class="icon">📺</span>
+                        <span class="label">Smart TV</span>
+                    </button>
+                    <button class="device-btn" data-type="gaming-console">
+                        <span class="icon">🎮</span>
+                        <span class="label">Gaming Console</span>
+                    </button>
+                    <button class="device-btn" data-type="smart-speaker">
+                        <span class="icon">🔊</span>
+                        <span class="label">Smart Speaker</span>
+                    </button>
+                    <button class="device-btn" data-type="security-camera">
+                        <span class="icon">📹</span>
+                        <span class="label">Security Camera</span>
+                    </button>
+                    <button class="device-btn" data-type="smart-thermostat">
+                        <span class="icon">🌡️</span>
+                        <span class="label">Thermostat</span>
+                    </button>
+                    <button class="device-btn" data-type="smart-lock">
+                        <span class="icon">🔐</span>
+                        <span class="label">Smart Lock</span>
+                    </button>
+                    <button class="device-btn" data-type="iot-sensor">
+                        <span class="icon">📡</span>
+                        <span class="label">IoT Sensor</span>
+                    </button>
+                    <button class="device-btn" data-type="smart-plug">
+                        <span class="icon">🔌</span>
+                        <span class="label">Smart Plug</span>
+                    </button>
+                    <button class="device-btn" data-type="home-hub">
+                        <span class="icon">🏠</span>
+                        <span class="label">Home Hub</span>
+                    </button>
+                </div>
+
+                <div class="palette-section">
+                    <h3>End Devices</h3>
+                    <button class="device-btn" data-type="pc">
+                        <span class="icon">💻</span>
+                        <span class="label">PC</span>
+                    </button>
+                    <button class="device-btn" data-type="laptop">
+                        <span class="icon">💾</span>
+                        <span class="label">Laptop</span>
+                    </button>
+                    <button class="device-btn" data-type="smartphone">
+                        <span class="icon">📱</span>
+                        <span class="label">Smartphone</span>
+                    </button>
+                    <button class="device-btn" data-type="tablet">
+                        <span class="icon">📱</span>
+                        <span class="label">Tablet</span>
+                    </button>
+                    <button class="device-btn" data-type="printer">
+                        <span class="icon">🖨️</span>
+                        <span class="label">Printer</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="workspace">
+                <canvas id="canvas"></canvas>
+            </div>
+        </div>
+
+        <!-- Bottom Console -->
+        <div class="console-container" id="console-container">
+            <div class="console-resize-handle" id="console-resize-handle"></div>
+            <div class="console-header">
+                <span class="console-title">📋 Console Log</span>
+                <div class="console-controls">
+                    <button id="verbose-toggle" class="console-btn" title="Toggle Verbose Mode">
+                        <span class="icon">📝</span>
+                        <span style="font-size: 0.75rem; margin-left: 0.2rem;">Verbose</span>
+                    </button>
+                    <button id="clear-console" class="console-btn" title="Clear Console">
+                        <span class="icon">🗑️</span>
+                    </button>
+                    <button id="minimize-console" class="console-btn" title="Minimize">
+                        <span class="icon">➖</span>
+                    </button>
+                </div>
+            </div>
+            <div class="console-content" id="console-content">
+                <div class="console-message info">
+                    <span class="timestamp">[00:00:00]</span>
+                    <span class="message">Network Simulator ready. Add devices to get started.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Configuration Modal -->
+    <div id="config-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Device Configuration</h2>
+            <div id="config-form">
+                <label>Device Name:</label>
+                <input type="text" id="device-name" placeholder="Enter device name">
+
+                <label>MAC Address:</label>
+                <input type="text" id="device-mac" placeholder="e.g., AA:BB:CC:DD:EE:FF" readonly>
+
+                <label>IP Address:</label>
+                <div style="position: relative;">
+                    <input type="text" id="device-ip" placeholder="e.g., 192.168.1.1" list="ip-suggestions" autocomplete="off">
+                    <datalist id="ip-suggestions"></datalist>
+                </div>
+
+                <label>Subnet Mask:</label>
+                <input type="text" id="device-subnet" placeholder="e.g., 255.255.255.0" value="255.255.255.0">
+
+                <label>Default Gateway:</label>
+                <div style="position: relative;">
+                    <input type="text" id="device-gateway" placeholder="e.g., 192.168.1.1" list="gateway-suggestions" autocomplete="off">
+                    <datalist id="gateway-suggestions"></datalist>
+                </div>
+
+                <div id="router-config" style="display:none;">
+                    <h3>Routing Table</h3>
+                    <div id="routing-table"></div>
+                    <button id="add-route" type="button">Add Route</button>
+                </div>
+
+                <div id="dhcp-config" style="display:none;">
+                    <h3>DHCP Server Configuration</h3>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                        <input type="checkbox" id="dhcp-enabled" style="width: auto;">
+                        <span>Enable DHCP Server</span>
+                    </label>
+
+                    <div id="dhcp-settings" style="display:none;">
+                        <label>DHCP Start IP:</label>
+                        <input type="text" id="dhcp-start" placeholder="e.g., 192.168.1.100" list="dhcp-start-suggestions" autocomplete="off">
+                        <datalist id="dhcp-start-suggestions"></datalist>
+
+                        <label>DHCP End IP:</label>
+                        <input type="text" id="dhcp-end" placeholder="e.g., 192.168.1.200" list="dhcp-end-suggestions" autocomplete="off">
+                        <datalist id="dhcp-end-suggestions"></datalist>
+
+                        <label>DHCP Subnet Mask:</label>
+                        <input type="text" id="dhcp-subnet" placeholder="e.g., 255.255.255.0" value="255.255.255.0">
+
+                        <label>DHCP Gateway:</label>
+                        <input type="text" id="dhcp-gateway" placeholder="Router IP address" list="dhcp-gateway-suggestions" autocomplete="off">
+                        <datalist id="dhcp-gateway-suggestions"></datalist>
+
+                        <button id="assign-dhcp" type="button" style="margin-top: 1rem; background: #27ae60; color: white; padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer;">
+                            Assign IPs to Connected Devices
+                        </button>
+
+                        <div id="dhcp-leases" style="margin-top: 1rem;">
+                            <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem;">Active Leases:</h4>
+                            <div id="leases-list" style="font-size: 0.85rem; color: #555;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="port-config">
+                    <h3>Port Configuration</h3>
+                    <div id="ports-list"></div>
+                </div>
+
+                <button id="save-config">Save Configuration</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Simulation Modal -->
+    <div id="simulation-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" id="close-sim">&times;</span>
+            <h2 style="font-size: 1.3rem; margin-bottom: 1rem;">Packet Simulation</h2>
+            <div id="simulation-form">
+                <label>Source Device:</label>
+                <select id="source-device"></select>
+
+                <label>Destination Device:</label>
+                <select id="dest-device"></select>
+
+                <label>Destination IP:</label>
+                <input type="text" id="dest-ip" placeholder="e.g., 192.168.1.10" list="sim-ip-suggestions" autocomplete="off">
+                <datalist id="sim-ip-suggestions"></datalist>
+
+                <label>Packet Type:</label>
+                <select id="packet-type">
+                    <option value="icmp">ICMP (Ping)</option>
+                    <option value="tcp">TCP (HTTP)</option>
+                    <option value="udp">UDP</option>
+                    <option value="arp">ARP Request</option>
+                    <option value="dns">DNS Query</option>
+                </select>
+
+                <button id="start-simulation">Send Packet</button>
+            </div>
+            <div id="simulation-log" style="max-height: 300px;"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

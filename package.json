@@ -1,0 +1,31 @@
+{
+  "name": "pac-track",
+  "version": "2.0.0",
+  "description": "Professional web-based network simulator with 38+ device types, DHCP server, continuous traffic simulation, and advanced logging",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8080"
+  },
+  "keywords": [
+    "network",
+    "simulator",
+    "packet-tracer",
+    "network-topology",
+    "dhcp",
+    "iot",
+    "network-visualization",
+    "education",
+    "cisco",
+    "networking"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/pac-track.git"
+  },
+  "author": "Pac-Track Contributors",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/yourusername/pac-track/issues"
+  },
+  "homepage": "https://github.com/yourusername/pac-track#readme"
+}
