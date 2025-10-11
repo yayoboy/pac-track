@@ -267,8 +267,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-- Project Link: [https://github.com/yourusername/pac-track](https://github.com/yourusername/pac-track)
-- Issues: [https://github.com/yourusername/pac-track/issues](https://github.com/yourusername/pac-track/issues)
+- Project Link: [https://github.com/yayoboy/pac-track](https://github.com/yayoboy/pac-track)
+- Issues: [https://github.com/yayoboy/pac-track/issues](https://github.com/yayoboy/pac-track/issues)
 
 ## 🔮 Future Enhancements
 
