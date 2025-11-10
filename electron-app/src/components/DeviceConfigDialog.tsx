@@ -18,6 +18,7 @@ interface DeviceConfigDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: (device: Device) => void
+  onAssignDHCPIPs?: () => void
 }
 
 export default function DeviceConfigDialog({
@@ -25,6 +26,7 @@ export default function DeviceConfigDialog({
   open,
   onOpenChange,
   onSave,
+  onAssignDHCPIPs,
 }: DeviceConfigDialogProps) {
   const [config, setConfig] = useState<Partial<Device>>({})
 
@@ -165,6 +167,13 @@ export default function DeviceConfigDialog({
         </div>
 
         <DialogFooter>
+          <div className="flex-1">
+            {onAssignDHCPIPs && config.dhcpEnabled && (
+              <Button variant="secondary" onClick={onAssignDHCPIPs}>
+                Assign IPs to Connected Devices
+              </Button>
+            )}
+          </div>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

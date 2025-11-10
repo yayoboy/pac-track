@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Device, Connection, ConsoleMessage } from '@/types/network'
+import { Device, Connection, ConsoleMessage, AnimatedPacket } from '@/types/network'
 import { getDeviceColor } from '@/lib/device-factory'
 
 interface CanvasProps {
@@ -7,6 +7,7 @@ interface CanvasProps {
   devices: Device[]
   connections: Connection[]
   snapToGrid: boolean
+  animatedPackets?: AnimatedPacket[]
   onDeviceMove: (device: Device) => void
   onDeviceDelete: (deviceId: string) => void
   onDeviceDoubleClick: (device: Device) => void
@@ -20,6 +21,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
   devices,
   connections,
   snapToGrid,
+  animatedPackets = [],
   onDeviceMove,
   onDeviceDelete,
   onDeviceDoubleClick,
@@ -223,6 +225,37 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
         }
       })
 
+      // Draw animated packets
+      animatedPackets.forEach((packet) => {
+        if (packet.currentSegment >= packet.path.length - 1) return
+
+        const fromId = packet.path[packet.currentSegment]
+        const toId = packet.path[packet.currentSegment + 1]
+        const from = devices.find((d) => d.id === fromId)
+        const to = devices.find((d) => d.id === toId)
+
+        if (from && to) {
+          const x = from.x + (to.x - from.x) * packet.progress
+          const y = from.y + (to.y - from.y) * packet.progress
+
+          // Draw packet circle
+          ctx.fillStyle = packet.color
+          ctx.shadowColor = packet.color
+          ctx.shadowBlur = 10
+          ctx.beginPath()
+          ctx.arc(x, y, 8, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.shadowBlur = 0
+
+          // Draw protocol label
+          ctx.font = 'bold 10px Arial'
+          ctx.fillStyle = '#fff'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(packet.protocol, x, y)
+        }
+      })
+
       // Draw mode indicator
       const modeText = mode.toUpperCase()
       const modeColor =
@@ -239,7 +272,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
     return () => {
       window.removeEventListener('resize', resizeCanvas)
     }
-  }, [devices, connections, hoveredDevice, hoveredConnection, connectFrom, mode])
+  }, [devices, connections, hoveredDevice, hoveredConnection, connectFrom, mode, animatedPackets])
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current

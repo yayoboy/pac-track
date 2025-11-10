@@ -23,6 +23,9 @@ interface ToolbarProps {
   onSave: () => void
   onLoad: () => void
   onExport: () => void
+  onSendPacket?: () => void
+  continuousTraffic?: boolean
+  onToggleContinuousTraffic?: () => void
 }
 
 export default function Toolbar({
@@ -34,6 +37,9 @@ export default function Toolbar({
   onSave,
   onLoad,
   onExport,
+  onSendPacket,
+  continuousTraffic = false,
+  onToggleContinuousTraffic,
 }: ToolbarProps) {
   return (
     <TooltipProvider>
@@ -88,7 +94,7 @@ export default function Toolbar({
         <div className="flex gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={onSendPacket}>
                 <Play className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -97,11 +103,17 @@ export default function Toolbar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button
+                variant={continuousTraffic ? 'default' : 'ghost'}
+                size="icon"
+                onClick={onToggleContinuousTraffic}
+              >
                 <RotateCw className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Continuous Simulation</TooltipContent>
+            <TooltipContent>
+              {continuousTraffic ? 'Stop' : 'Start'} Continuous Simulation
+            </TooltipContent>
           </Tooltip>
 
           <Tooltip>

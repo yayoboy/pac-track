@@ -87,3 +87,18 @@ export interface ConsoleMessage {
   timestamp: Date
   deviceId?: string
 }
+
+export interface AnimatedPacket {
+  id: string
+  protocol: 'ARP' | 'ICMP' | 'TCP' | 'UDP' | 'DNS'
+  path: string[]
+  currentSegment: number
+  progress: number
+  color: string
+}
+
+export interface HistoryEntry {
+  type: 'add_device' | 'delete_device' | 'move_device' | 'update_device' | 'add_connection' | 'delete_connection'
+  data: any
+  timestamp: number
+}
