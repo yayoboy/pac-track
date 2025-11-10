@@ -18,9 +18,23 @@ interface ToolbarProps {
   mode: 'move' | 'connect' | 'delete'
   onModeChange: (mode: 'move' | 'connect' | 'delete') => void
   onConsoleToggle: () => void
+  snapToGrid: boolean
+  onSnapToGridToggle: () => void
+  onSave: () => void
+  onLoad: () => void
+  onExport: () => void
 }
 
-export default function Toolbar({ mode, onModeChange, onConsoleToggle }: ToolbarProps) {
+export default function Toolbar({
+  mode,
+  onModeChange,
+  onConsoleToggle,
+  snapToGrid,
+  onSnapToGridToggle,
+  onSave,
+  onLoad,
+  onExport,
+}: ToolbarProps) {
   return (
     <TooltipProvider>
       <div className="h-14 bg-card border-b border-border flex items-center px-4 gap-2">
@@ -92,7 +106,11 @@ export default function Toolbar({ mode, onModeChange, onConsoleToggle }: Toolbar
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button
+                variant={snapToGrid ? 'default' : 'ghost'}
+                size="icon"
+                onClick={onSnapToGridToggle}
+              >
                 <Grid3x3 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -105,7 +123,7 @@ export default function Toolbar({ mode, onModeChange, onConsoleToggle }: Toolbar
         <div className="flex gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={onLoad}>
                 <FolderOpen className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -114,7 +132,7 @@ export default function Toolbar({ mode, onModeChange, onConsoleToggle }: Toolbar
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={onSave}>
                 <Save className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -123,7 +141,7 @@ export default function Toolbar({ mode, onModeChange, onConsoleToggle }: Toolbar
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={onExport}>
                 <Download className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
