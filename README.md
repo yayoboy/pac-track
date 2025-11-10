@@ -16,6 +16,20 @@
 
 ---
 
+## 🆕 New Modern Version Available!
+
+**A modern React + TypeScript + shadcn/ui version is now available in the [`electron-app/`](./electron-app/) directory!**
+
+- ⚛️ Built with **React 18** and **TypeScript 5**
+- 🎨 Beautiful UI with **shadcn/ui** components
+- ⚡ Lightning-fast with **Vite**
+- 🖥️ Ready to package as **Electron desktop app**
+- 🎯 Modern component architecture
+
+👉 **[Check it out here →](./electron-app/)**
+
+---
+
 ## 📸 Preview
 
 ![Pac-Track Preview](preview.png)
@@ -237,11 +251,16 @@ MAC: AA:BB:CC:DD:EE:FF
 
 ```
 pac-track/
-├── index.html          # Main HTML file
-├── app.js             # Application logic
-├── styles.css         # Styling
+├── index.html          # Main HTML file (classic version)
+├── app.js             # Application logic (classic version)
+├── styles.css         # Styling (classic version)
+├── electron-app/      # 🆕 Modern React + TypeScript version
+│   ├── src/           # React components and logic
+│   ├── electron/      # Electron main/preload (optional)
+│   ├── package.json   # Dependencies
+│   └── README.md      # Modern version docs
 ├── package.json       # NPM configuration
-└── README.md          # Documentation
+└── README.md          # This file
 ```
 
 ## 🤝 Contributing
