@@ -5,6 +5,7 @@ import Canvas from './components/Canvas'
 import Console from './components/Console'
 import DeviceConfigDialog from './components/DeviceConfigDialog'
 import PacketSimulationDialog from './components/PacketSimulationDialog'
+import NetworkStats from './components/NetworkStats'
 import { Device, Connection, ConsoleMessage, AnimatedPacket, HistoryEntry } from './types/network'
 import { NetworkSimulator } from './lib/network-simulator'
 import { createDevice } from './lib/device-factory'
@@ -21,12 +22,14 @@ function App() {
   // Mode & UI State
   const [mode, setMode] = useState<'move' | 'connect' | 'delete'>('move')
   const [consoleOpen, setConsoleOpen] = useState(true)
+  const [statsOpen, setStatsOpen] = useState(true)
   const [snapToGrid, setSnapToGrid] = useState(false)
 
   // Network State
   const [devices, setDevices] = useState<Device[]>([])
   const [connections, setConnections] = useState<Connection[]>([])
   const [consoleMessages, setConsoleMessages] = useState<ConsoleMessage[]>([])
+  const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set())
 
   // Dialogs
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
@@ -152,14 +155,43 @@ function App() {
         case 'g':
           setSnapToGrid((prev) => !prev)
           break
+        case 's':
+          if (!e.ctrlKey && !e.metaKey) {
+            setStatsOpen((prev) => !prev)
+          }
+          break
         case ' ':
           e.preventDefault()
           setConsoleOpen((prev) => !prev)
+          break
+        case 'delete':
+        case 'backspace':
+          if (selectedDevices.size > 0) {
+            const devicesToDelete = Array.from(selectedDevices)
+            devicesToDelete.forEach((id) => {
+              const device = devices.find((d) => d.id === id)
+              if (device) {
+                simulatorRef.current.removeDevice(id)
+                addToHistory({ type: 'delete_device', data: device })
+              }
+            })
+            setDevices((prev) => prev.filter((d) => !selectedDevices.has(d.id)))
+            setConnections((prev) =>
+              prev.filter((c) => !selectedDevices.has(c.from) && !selectedDevices.has(c.to))
+            )
+            addConsoleMessage({
+              type: 'warning',
+              text: `Deleted ${devicesToDelete.length} devices`,
+              timestamp: new Date(),
+            })
+            setSelectedDevices(new Set())
+          }
           break
         case 'escape':
           // Cancel operations
           setConfigDialogOpen(false)
           setPacketDialogOpen(false)
+          setSelectedDevices(new Set())
           break
       }
 
@@ -212,11 +244,43 @@ function App() {
     if (historyIndex < 0) return
 
     const entry = history[historyIndex]
-    // Implement undo logic based on entry type
+
+    switch (entry.type) {
+      case 'add_device':
+        setDevices((prev) => prev.filter((d) => d.id !== entry.data.id))
+        simulatorRef.current.removeDevice(entry.data.id)
+        break
+
+      case 'delete_device':
+        setDevices((prev) => [...prev, entry.data])
+        simulatorRef.current.addDevice(entry.data)
+        break
+
+      case 'move_device':
+      case 'update_device':
+        if (entry.data.old) {
+          setDevices((prev) => prev.map((d) => (d.id === entry.data.old.id ? entry.data.old : d)))
+          simulatorRef.current.addDevice(entry.data.old)
+        }
+        break
+
+      case 'add_connection':
+        setConnections((prev) => prev.filter((c) => c.id !== entry.data.id))
+        simulatorRef.current.removeConnection(entry.data.id)
+        break
+
+      case 'delete_connection':
+        if (entry.data) {
+          setConnections((prev) => [...prev, entry.data])
+          simulatorRef.current.addConnection(entry.data)
+        }
+        break
+    }
+
     setHistoryIndex((prev) => prev - 1)
     addConsoleMessage({
       type: 'info',
-      text: 'Undo: ' + entry.type,
+      text: `Undo: ${entry.type.replace('_', ' ')}`,
       timestamp: new Date(),
     })
   }
@@ -225,11 +289,43 @@ function App() {
     if (historyIndex >= history.length - 1) return
 
     const entry = history[historyIndex + 1]
-    // Implement redo logic
+
+    switch (entry.type) {
+      case 'add_device':
+        setDevices((prev) => [...prev, entry.data])
+        simulatorRef.current.addDevice(entry.data)
+        break
+
+      case 'delete_device':
+        setDevices((prev) => prev.filter((d) => d.id !== entry.data.id))
+        simulatorRef.current.removeDevice(entry.data.id)
+        break
+
+      case 'move_device':
+      case 'update_device':
+        if (entry.data.new) {
+          setDevices((prev) => prev.map((d) => (d.id === entry.data.new.id ? entry.data.new : d)))
+          simulatorRef.current.addDevice(entry.data.new)
+        }
+        break
+
+      case 'add_connection':
+        setConnections((prev) => [...prev, entry.data])
+        simulatorRef.current.addConnection(entry.data)
+        break
+
+      case 'delete_connection':
+        if (entry.data) {
+          setConnections((prev) => prev.filter((c) => c.id !== entry.data.id))
+          simulatorRef.current.removeConnection(entry.data.id)
+        }
+        break
+    }
+
     setHistoryIndex((prev) => prev + 1)
     addConsoleMessage({
       type: 'info',
-      text: 'Redo: ' + entry.type,
+      text: `Redo: ${entry.type.replace('_', ' ')}`,
       timestamp: new Date(),
     })
   }
@@ -269,20 +365,61 @@ function App() {
     })
   }
 
+  const handleDeviceSelect = (deviceId: string, shiftKey: boolean) => {
+    if (shiftKey) {
+      // Toggle selection
+      setSelectedDevices((prev) => {
+        const newSet = new Set(prev)
+        if (newSet.has(deviceId)) {
+          newSet.delete(deviceId)
+        } else {
+          newSet.add(deviceId)
+        }
+        return newSet
+      })
+    } else {
+      // Single selection
+      setSelectedDevices(new Set([deviceId]))
+    }
+  }
+
   const handleDeleteDevice = (deviceId: string) => {
-    const device = devices.find((d) => d.id === deviceId)
-    if (device) {
-      setDevices((prev) => prev.filter((d) => d.id !== deviceId))
+    // If there are selected devices, delete all selected
+    if (selectedDevices.size > 0) {
+      const devicesToDelete = Array.from(selectedDevices)
+      devicesToDelete.forEach((id) => {
+        const device = devices.find((d) => d.id === id)
+        if (device) {
+          simulatorRef.current.removeDevice(id)
+          addToHistory({ type: 'delete_device', data: device })
+        }
+      })
+      setDevices((prev) => prev.filter((d) => !selectedDevices.has(d.id)))
       setConnections((prev) =>
-        prev.filter((c) => c.from !== deviceId && c.to !== deviceId)
+        prev.filter((c) => !selectedDevices.has(c.from) && !selectedDevices.has(c.to))
       )
-      simulatorRef.current.removeDevice(deviceId)
-      addToHistory({ type: 'delete_device', data: device })
       addConsoleMessage({
         type: 'warning',
-        text: `Deleted ${device.name}`,
+        text: `Deleted ${devicesToDelete.length} devices`,
         timestamp: new Date(),
       })
+      setSelectedDevices(new Set())
+    } else {
+      // Delete single device
+      const device = devices.find((d) => d.id === deviceId)
+      if (device) {
+        setDevices((prev) => prev.filter((d) => d.id !== deviceId))
+        setConnections((prev) =>
+          prev.filter((c) => c.from !== deviceId && c.to !== deviceId)
+        )
+        simulatorRef.current.removeDevice(deviceId)
+        addToHistory({ type: 'delete_device', data: device })
+        addConsoleMessage({
+          type: 'warning',
+          text: `Deleted ${device.name}`,
+          timestamp: new Date(),
+        })
+      }
     }
   }
 
@@ -442,6 +579,8 @@ function App() {
         mode={mode}
         onModeChange={setMode}
         onConsoleToggle={() => setConsoleOpen(!consoleOpen)}
+        onStatsToggle={() => setStatsOpen(!statsOpen)}
+        statsOpen={statsOpen}
         snapToGrid={snapToGrid}
         onSnapToGridToggle={() => setSnapToGrid(!snapToGrid)}
         onSave={handleSaveTopology}
@@ -455,7 +594,7 @@ function App() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar onAddDevice={handleAddDevice} />
 
-        <div className="flex flex-col flex-1">
+        <div className="flex flex-col flex-1 relative">
           <Canvas
             ref={canvasRef}
             mode={mode}
@@ -463,13 +602,19 @@ function App() {
             connections={connections}
             snapToGrid={snapToGrid}
             animatedPackets={animatedPackets}
+            selectedDevices={selectedDevices}
             onDeviceMove={handleUpdateDevice}
             onDeviceDelete={handleDeleteDevice}
             onDeviceDoubleClick={handleDeviceDoubleClick}
+            onDeviceSelect={handleDeviceSelect}
             onConnectionAdd={handleAddConnection}
             onConnectionDelete={handleDeleteConnection}
             onMessage={addConsoleMessage}
           />
+
+          {statsOpen && (
+            <NetworkStats devices={devices} connections={connections} />
+          )}
 
           {consoleOpen && (
             <Console messages={consoleMessages} onClear={() => setConsoleMessages([])} />

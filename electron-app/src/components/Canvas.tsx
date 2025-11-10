@@ -8,9 +8,11 @@ interface CanvasProps {
   connections: Connection[]
   snapToGrid: boolean
   animatedPackets?: AnimatedPacket[]
+  selectedDevices?: Set<string>
   onDeviceMove: (device: Device) => void
   onDeviceDelete: (deviceId: string) => void
   onDeviceDoubleClick: (device: Device) => void
+  onDeviceSelect?: (deviceId: string, shiftKey: boolean) => void
   onConnectionAdd: (from: string, to: string) => void
   onConnectionDelete: (connectionId: string) => void
   onMessage: (message: ConsoleMessage) => void
@@ -22,9 +24,11 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
   connections,
   snapToGrid,
   animatedPackets = [],
+  selectedDevices = new Set(),
   onDeviceMove,
   onDeviceDelete,
   onDeviceDoubleClick,
+  onDeviceSelect,
   onConnectionAdd,
   onConnectionDelete,
 }, ref) => {
@@ -39,28 +43,47 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
   const lastClickTime = useRef(0)
   const lastClickedDevice = useRef<string | null>(null)
 
+  // Zoom & Pan state
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+
+  // Transform screen coordinates to world coordinates
+  const screenToWorld = useCallback(
+    (screenX: number, screenY: number) => {
+      return {
+        x: (screenX - pan.x) / zoom,
+        y: (screenY - pan.y) / zoom,
+      }
+    },
+    [pan, zoom]
+  )
+
   const getDeviceAtPosition = useCallback(
     (x: number, y: number): Device | null => {
+      const world = screenToWorld(x, y)
       for (let i = devices.length - 1; i >= 0; i--) {
         const device = devices[i]
-        const dx = x - device.x
-        const dy = y - device.y
+        const dx = world.x - device.x
+        const dy = world.y - device.y
         if (Math.abs(dx) < 30 && Math.abs(dy) < 30) {
           return device
         }
       }
       return null
     },
-    [devices]
+    [devices, screenToWorld]
   )
 
   const getConnectionAtPosition = useCallback(
     (x: number, y: number): Connection | null => {
+      const world = screenToWorld(x, y)
       for (const conn of connections) {
         const from = devices.find((d) => d.id === conn.from)
         const to = devices.find((d) => d.id === conn.to)
         if (from && to) {
-          const dist = distanceToLine(x, y, from.x, from.y, to.x, to.y)
+          const dist = distanceToLine(world.x, world.y, from.x, from.y, to.x, to.y)
           if (dist < 10) {
             return conn
           }
@@ -68,7 +91,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
       }
       return null
     },
-    [connections, devices]
+    [connections, devices, screenToWorld]
   )
 
   const distanceToLine = (
@@ -129,19 +152,30 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+      // Save context and apply transformations
+      ctx.save()
+      ctx.translate(pan.x, pan.y)
+      ctx.scale(zoom, zoom)
+
       // Draw grid
       ctx.strokeStyle = '#2a2a2a'
-      ctx.lineWidth = 1
-      for (let x = 0; x < canvas.width; x += 50) {
+      ctx.lineWidth = 1 / zoom
+      const gridSize = 50
+      const startX = Math.floor(-pan.x / zoom / gridSize) * gridSize
+      const startY = Math.floor(-pan.y / zoom / gridSize) * gridSize
+      const endX = Math.ceil((canvas.width - pan.x) / zoom / gridSize) * gridSize
+      const endY = Math.ceil((canvas.height - pan.y) / zoom / gridSize) * gridSize
+
+      for (let x = startX; x < endX; x += gridSize) {
         ctx.beginPath()
-        ctx.moveTo(x, 0)
-        ctx.lineTo(x, canvas.height)
+        ctx.moveTo(x, startY)
+        ctx.lineTo(x, endY)
         ctx.stroke()
       }
-      for (let y = 0; y < canvas.height; y += 50) {
+      for (let y = startY; y < endY; y += gridSize) {
         ctx.beginPath()
-        ctx.moveTo(0, y)
-        ctx.lineTo(canvas.width, y)
+        ctx.moveTo(startX, y)
+        ctx.lineTo(endX, y)
         ctx.stroke()
       }
 
@@ -185,6 +219,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
       devices.forEach((device) => {
         const isHovered = hoveredDevice === device.id
         const isConnectFrom = connectFrom === device.id
+        const isSelected = selectedDevices.has(device.id)
 
         // Device background
         ctx.fillStyle = isConnectFrom
@@ -192,14 +227,19 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
           : isHovered
           ? getDeviceColor(device.type)
           : getDeviceColor(device.type)
-        ctx.shadowColor = isHovered || isConnectFrom ? '#3b82f6' : 'transparent'
-        ctx.shadowBlur = isHovered || isConnectFrom ? 10 : 0
+        ctx.shadowColor = isHovered || isConnectFrom || isSelected ? '#3b82f6' : 'transparent'
+        ctx.shadowBlur = isHovered || isConnectFrom || isSelected ? 10 : 0
 
         ctx.fillRect(device.x - 30, device.y - 30, 60, 60)
         ctx.shadowBlur = 0
 
         // Device border
-        if (isHovered || isConnectFrom) {
+        if (isSelected) {
+          // Selected: yellow border
+          ctx.strokeStyle = '#eab308'
+          ctx.lineWidth = 3
+          ctx.strokeRect(device.x - 30, device.y - 30, 60, 60)
+        } else if (isHovered || isConnectFrom) {
           ctx.strokeStyle = '#3b82f6'
           ctx.lineWidth = 2
           ctx.strokeRect(device.x - 30, device.y - 30, 60, 60)
@@ -256,7 +296,10 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
         }
       })
 
-      // Draw mode indicator
+      // Restore context
+      ctx.restore()
+
+      // Draw mode indicator (in screen space)
       const modeText = mode.toUpperCase()
       const modeColor =
         mode === 'delete' ? '#ef4444' : mode === 'connect' ? '#3b82f6' : '#22c55e'
@@ -265,6 +308,11 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
       ctx.textAlign = 'right'
       ctx.textBaseline = 'top'
       ctx.fillText(`Mode: ${modeText}`, canvas.width - 20, 20)
+
+      // Draw zoom indicator
+      ctx.font = 'bold 12px Arial'
+      ctx.fillStyle = '#aaa'
+      ctx.fillText(`Zoom: ${Math.round(zoom * 100)}%`, canvas.width - 20, 40)
     }
 
     draw()
@@ -272,7 +320,33 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
     return () => {
       window.removeEventListener('resize', resizeCanvas)
     }
-  }, [devices, connections, hoveredDevice, hoveredConnection, connectFrom, mode, animatedPackets])
+  }, [devices, connections, hoveredDevice, hoveredConnection, connectFrom, mode, animatedPackets, selectedDevices, zoom, pan])
+
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+
+    // Zoom in/out
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
+    const newZoom = Math.max(0.1, Math.min(5, zoom * zoomFactor))
+
+    // Adjust pan to zoom towards mouse position
+    const worldBefore = screenToWorld(mouseX, mouseY)
+    setZoom(newZoom)
+    const worldAfter = {
+      x: (mouseX - pan.x) / newZoom,
+      y: (mouseY - pan.y) / newZoom,
+    }
+    setPan({
+      x: pan.x + (worldAfter.x - worldBefore.x) * newZoom,
+      y: pan.y + (worldAfter.y - worldBefore.y) * newZoom,
+    })
+  }
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
@@ -282,11 +356,25 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
 
+    // Handle panning with middle mouse button
+    if (e.button === 1) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+      return
+    }
+
     const device = getDeviceAtPosition(x, y)
 
+    // Handle multi-selection with Shift+Click
+    if (device && e.shiftKey && onDeviceSelect) {
+      onDeviceSelect(device.id, true)
+      return
+    }
+
     if (mode === 'move' && device) {
+      const world = screenToWorld(x, y)
       setDraggedDevice(device)
-      setDragOffset({ x: x - device.x, y: y - device.y })
+      setDragOffset({ x: world.x - device.x, y: world.y - device.y })
     } else if (mode === 'connect' && device) {
       if (connectFrom === null) {
         setConnectFrom(device.id)
@@ -314,6 +402,15 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
 
+    // Handle panning
+    if (isPanning) {
+      setPan({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      })
+      return
+    }
+
     // Update hovered device
     const device = getDeviceAtPosition(x, y)
     setHoveredDevice(device?.id || null)
@@ -328,8 +425,9 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
 
     // Handle dragging
     if (draggedDevice && mode === 'move') {
-      let newX = x - dragOffset.x
-      let newY = y - dragOffset.y
+      const world = screenToWorld(x, y)
+      let newX = world.x - dragOffset.x
+      let newY = world.y - dragOffset.y
 
       if (snapToGrid) {
         newX = Math.round(newX / 50) * 50
@@ -342,6 +440,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
 
   const handleMouseUp = () => {
     setDraggedDevice(null)
+    setIsPanning(false)
   }
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -390,7 +489,9 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
       <canvas
         ref={canvasRef}
         className={`absolute inset-0 ${
-          mode === 'move'
+          isPanning
+            ? 'cursor-grabbing'
+            : mode === 'move'
             ? 'cursor-move'
             : mode === 'connect'
             ? 'cursor-crosshair'
@@ -401,6 +502,7 @@ const Canvas = forwardRef<HTMLCanvasElement, CanvasProps>(({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onClick={handleClick}
+        onWheel={handleWheel}
       />
 
       <div className="absolute top-4 right-4 bg-card/80 backdrop-blur-sm p-3 rounded-lg border border-border">

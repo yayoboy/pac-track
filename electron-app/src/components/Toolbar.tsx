@@ -11,6 +11,7 @@ import {
   Download,
   Terminal,
   Grid3x3,
+  BarChart3,
 } from 'lucide-react'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip'
 
@@ -18,6 +19,8 @@ interface ToolbarProps {
   mode: 'move' | 'connect' | 'delete'
   onModeChange: (mode: 'move' | 'connect' | 'delete') => void
   onConsoleToggle: () => void
+  onStatsToggle: () => void
+  statsOpen: boolean
   snapToGrid: boolean
   onSnapToGridToggle: () => void
   onSave: () => void
@@ -32,6 +35,8 @@ export default function Toolbar({
   mode,
   onModeChange,
   onConsoleToggle,
+  onStatsToggle,
+  statsOpen,
   snapToGrid,
   onSnapToGridToggle,
   onSave,
@@ -162,6 +167,15 @@ export default function Toolbar({
         </div>
 
         <div className="flex-1" />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant={statsOpen ? 'default' : 'ghost'} size="icon" onClick={onStatsToggle}>
+              <BarChart3 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Toggle Statistics</TooltipContent>
+        </Tooltip>
 
         <Tooltip>
           <TooltipTrigger asChild>

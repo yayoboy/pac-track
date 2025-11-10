@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { ScrollArea } from './ui/scroll-area'
 import { Button } from './ui/button'
 import { Separator } from './ui/separator'
+import { Input } from './ui/input'
+import { Search, X } from 'lucide-react'
 
 const deviceCategories = [
   {
@@ -62,15 +65,46 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ onAddDevice }: SidebarProps) {
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredCategories = deviceCategories.map((category) => ({
+    ...category,
+    devices: category.devices.filter((device) =>
+      device.name.toLowerCase().includes(searchQuery.toLowerCase())
+    ),
+  })).filter((category) => category.devices.length > 0)
+
   return (
     <div className="w-64 bg-card border-r border-border flex flex-col">
       <div className="p-4 border-b border-border">
-        <h2 className="text-lg font-semibold">Devices</h2>
+        <h2 className="text-lg font-semibold mb-3">Devices</h2>
+        <div className="relative">
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search devices..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-8 pr-8"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-2.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {deviceCategories.map((category) => (
+          {filteredCategories.length === 0 && (
+            <div className="text-center text-sm text-muted-foreground py-8">
+              No devices found
+            </div>
+          )}
+          {filteredCategories.map((category) => (
             <div key={category.name}>
               <h3 className="text-sm font-medium text-muted-foreground mb-2">
                 {category.name}
@@ -90,7 +124,7 @@ export default function Sidebar({ onAddDevice }: SidebarProps) {
                   </Button>
                 ))}
               </div>
-              {category !== deviceCategories[deviceCategories.length - 1] && (
+              {category !== filteredCategories[filteredCategories.length - 1] && (
                 <Separator className="mt-4" />
               )}
             </div>
