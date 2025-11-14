@@ -1,17 +1,18 @@
 {
-  "name": "pac-track-electron",
+  "name": "pac-track-modern",
   "version": "2.0.0",
-  "description": "Professional Network Simulator - Electron Desktop App",
-  "main": "dist-electron/main.js",
+  "type": "module",
+  "description": "Professional Network Simulator - Modern Web App",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview --host"
   },
   "keywords": [
     "network",
     "simulator",
-    "electron",
+    "react",
+    "typescript",
     "pac-track"
   ],
   "author": "yayoboy",
@@ -45,25 +46,5 @@
     "react-dom": "^18.2.0",
     "tailwind-merge": "^2.1.0",
     "tailwindcss-animate": "^1.0.7"
-  },
-  "build": {
-    "appId": "com.yayoboy.pactrack",
-    "productName": "Pac-Track",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*"
-    ],
-    "mac": {
-      "category": "public.app-category.developer-tools"
-    },
-    "win": {
-      "target": "nsis"
-    },
-    "linux": {
-      "target": "AppImage"
-    }
   }
 }
