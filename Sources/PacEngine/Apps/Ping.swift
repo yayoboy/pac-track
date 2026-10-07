@@ -52,7 +52,7 @@ final class Ping {
     private(set) var result = PingResult()
     private let node: IpNode
     private let target: String
-    private let dst: UInt32
+    private var dst: UInt32 = 0
     private let opts: PingOptions
     private let id: UInt16
     private var sentAt: [Int: Int] = [:]
@@ -69,14 +69,33 @@ final class Ping {
         self.node = node
         self.target = target
         opts = o
-        dst = try parseIp(target)
+        let literal = try literalIp(target)
+        let name = literal == nil ? normalizeHostName(target) : nil
+        guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         id = UInt16(node.sim.rng.int(0x10000))
-        result.lines = ["PING \(target) (\(target)) \(o.size)(\(o.size + 28)) bytes of data."]
-        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
-        for seq in 1...o.count {
-            node.sim.sched.after((seq - 1) * o.intervalNs) { [self] in send(seq) }
+        if let literal {
+            begin(literal)
+            return
         }
-        node.sim.sched.after((o.count - 1) * o.intervalNs + o.timeoutNs) { [self] in finish(stats: true) }
+        // The runtime's app list keeps this ping alive while the name resolves.
+        node.resolver.resolve(name!) { [weak self] r in self?.resolved(r) }
+    }
+
+    private func begin(_ ip: UInt32) {
+        dst = ip
+        result.lines = ["PING \(target) (\(formatIp(ip))) \(opts.size)(\(opts.size + 28)) bytes of data."]
+        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
+        for seq in 1...opts.count {
+            node.sim.sched.after((seq - 1) * opts.intervalNs) { [self] in send(seq) }
+        }
+        node.sim.sched.after((opts.count - 1) * opts.intervalNs + opts.timeoutNs) { [self] in finish(stats: true) }
+    }
+
+    private func resolved(_ r: Resolution) {
+        guard !result.done else { return }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
+        result.lines = ["ping: \(target): " + (r == .nxdomain ? "Name or service not known" : "Temporary failure in name resolution")]
+        finish(stats: false)
     }
 
     func stop() {

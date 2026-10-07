@@ -257,6 +257,20 @@ public struct DhcpConfig: Codable, Equatable, Sendable {
     }
 }
 
+/// An A record of a DNS server.
+public struct DnsRecord: Codable, Equatable, Sendable {
+    public static let defaultTtl = 3600
+    public var name: String
+    public var ip: String
+    public var ttl: Int
+
+    public init(name: String, ip: String, ttl: Int = DnsRecord.defaultTtl) {
+        self.name = name
+        self.ip = ip
+        self.ttl = ttl
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind

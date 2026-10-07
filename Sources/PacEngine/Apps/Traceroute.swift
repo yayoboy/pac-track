@@ -58,7 +58,8 @@ private final class InFlight {
 final class Traceroute {
     private(set) var result = TracerouteResult()
     private let node: IpNode
-    private let dst: UInt32
+    private var dst: UInt32 = 0
+    private let target: String
     private let opts: TracerouteOptions
     private let srcPort: UInt16
     private var port: Int
@@ -72,13 +73,33 @@ final class Traceroute {
             throw EngineError("Invalid traceroute option: \(options)")
         }
         self.node = node
+        self.target = target
         opts = o
-        dst = try parseIp(target)
+        let literal = try literalIp(target)
+        let name = literal == nil ? normalizeHostName(target) : nil
+        guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         srcPort = UInt16(33000 + node.sim.rng.int(10000))
         port = o.firstPort
-        result.lines = ["traceroute to \(target) (\(target)), \(o.maxHops) hops max, 60 byte packets"]
+        if let literal {
+            begin(literal)
+            return
+        }
+        node.resolver.resolve(name!) { [weak self] r in self?.resolved(r) }
+    }
+
+    private func begin(_ ip: UInt32) {
+        dst = ip
+        result.lines = ["traceroute to \(target) (\(formatIp(ip))), \(opts.maxHops) hops max, 60 byte packets"]
         unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
         node.sim.sched.after(0) { [self] in sendHop(1) }
+    }
+
+    private func resolved(_ r: Resolution) {
+        guard !result.done else { return }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
+        result.lines = ["\(target): " + (r == .nxdomain ? "Name or service not known" : "Temporary failure in name resolution"),
+                        "Cannot handle \"host\" cmdline arg `\(target)' on position 1 (argc 1)"]
+        finish()
     }
 
     func stop() {

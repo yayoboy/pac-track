@@ -6,6 +6,7 @@ typealias UdpHandler = (Ipv4Packet, UdpDatagram, Interface?) -> Void
 class IpNode: Node {
     private(set) lazy var arp = Arp(node: self)
     private(set) lazy var routes = RoutingTable(interfaces: { [unowned self] in self.interfaces })
+    private(set) lazy var resolver = Resolver(node: self)
     var defaultTtl: UInt8 = 64
     var forwarding = false
     /// Name server set by hand (resolv.conf); wins over the one learned from DHCP.
@@ -13,6 +14,7 @@ class IpNode: Node {
     /// Name server from DHCP option 6.
     var learnedNameServer: UInt32?
     var dhcpServer: DhcpServer?
+    var dnsServer: DnsServer?
 
     var effectiveNameServer: UInt32? { nameServer ?? learnedNameServer }
     private var ipId: UInt16 = 0
@@ -65,6 +67,7 @@ class IpNode: Node {
 
     override func reset() {
         arp.reset()
+        resolver.reset()
         dhcpServer?.reset()
     }
 
