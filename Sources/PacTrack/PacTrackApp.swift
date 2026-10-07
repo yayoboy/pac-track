@@ -34,8 +34,10 @@ struct MainView: View {
             .focusedSceneValue(\.editor, editor)
             .preferredColorScheme(.dark)
             .task {
-                await editor.load(document.topology)
-                editor.onChange = { document.topology = $0 }
+                // Only a successfully loaded document may be overwritten by later edits.
+                if await editor.load(document.topology) {
+                    editor.onChange = { document.topology = $0 }
+                }
             }
             .task { await editor.runClock() }
     }

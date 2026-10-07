@@ -73,3 +73,28 @@ struct TableSection: View {
         }
     }
 }
+
+/// Errors with no field of their own (opening a file, cabling, apps launched from a menu, undo) show here.
+struct ErrorBanner: View {
+    let editor: Editor
+    private static let fieldPrefixes = ["ip:", "gw:", "route:", "name:"]
+
+    var body: some View {
+        if let error = editor.error, !Self.fieldPrefixes.contains(where: error.key.hasPrefix) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.err)
+                Text(error.message).foregroundStyle(Theme.fgStrong)
+                Button { editor.dismissError() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help("Chiudi")
+            }
+            .font(.system(size: 11))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.err.opacity(0.6)))
+            .padding(10)
+            .accessibilityIdentifier("error-banner")
+        }
+    }
+}

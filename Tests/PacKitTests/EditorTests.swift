@@ -140,4 +140,28 @@ actor Recording: EngineClient {
         editor.accept(Snapshot.empty)
         #expect(editor.snapshot == shown)
     }
+
+    @Test func reopensANetworkWhoseStaticRouteLostItsNextHop() async {
+        await editor.addDevice(.pc, at: origin)
+        let pc = node("PC1").id
+        await editor.edit(.setIp(node: pc, iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.edit(.addRoute(node: pc, cidr: "0.0.0.0/0", nextHop: "10.0.0.254"))
+        await editor.edit(.setIp(node: pc, iface: "eth0", cidr: "192.168.1.5/24"))
+        let saved = editor.current
+        let reopened = Editor(client: Simulation())
+        #expect(await reopened.load(saved))
+        #expect(reopened.error == nil)
+        #expect(reopened.current == saved)
+    }
+
+    @Test func overlappingUndosApplyOneAfterTheOther() async {
+        await editor.addDevice(.pc, at: origin)
+        await editor.addDevice(.pc, at: origin)
+        async let first: Void = editor.undo()
+        async let second: Void = editor.undo()
+        _ = await (first, second)
+        #expect(names.isEmpty)
+        await editor.redo()
+        #expect(names == ["PC1"])
+    }
 }

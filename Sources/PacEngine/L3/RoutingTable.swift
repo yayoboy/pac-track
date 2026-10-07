@@ -25,10 +25,11 @@ final class RoutingTable {
         self.interfaces = interfaces
     }
 
-    func addStatic(_ cidr: String, _ nextHop: String) throws {
+    /// `requireReachable: false` restores saved routes whose next hop is currently unreachable (kept inactive, like IOS).
+    func addStatic(_ cidr: String, _ nextHop: String, requireReachable: Bool = true) throws {
         let c = try parseCidr(cidr)
         let route = StaticRoute(network: networkOf(c.addr, c.prefix), prefix: c.prefix, nextHop: try parseIp(nextHop))
-        guard interfaces().contains(where: { i in i.ipv4.map { inSubnet(route.nextHop, $0.addr, $0.prefix) } ?? false }) else {
+        guard !requireReachable || interfaces().contains(where: { i in i.ipv4.map { inSubnet(route.nextHop, $0.addr, $0.prefix) } ?? false }) else {
             throw EngineError("Next hop \(nextHop) is not in a connected subnet")
         }
         statics.removeAll { $0.network == route.network && $0.prefix == route.prefix }

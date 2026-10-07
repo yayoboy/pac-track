@@ -185,7 +185,7 @@ public final class Runtime {
         }
         for l in t.links { try next.handle(.connect(id: l.id, a: l.a, b: l.b)) }
         for n in t.nodes {
-            for r in n.routes { try next.handle(.addRoute(node: n.id, cidr: r.cidr, nextHop: r.nextHop)) }
+            for r in n.routes { try next.ipNode(n.id).routes.addStatic(r.cidr, r.nextHop, requireReachable: false) }
         }
         for app in apps { app.program.stop() }
         sim = next.sim

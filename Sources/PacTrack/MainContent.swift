@@ -11,6 +11,7 @@ struct MainContent: View {
             Divider()
             VStack(spacing: 0) {
                 CanvasView(editor: editor)
+                    .overlay(alignment: .top) { ErrorBanner(editor: editor) }
                 Divider()
                 OutputPanel(editor: editor).frame(height: 170)
             }

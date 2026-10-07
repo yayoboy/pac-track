@@ -40,6 +40,8 @@ enum SelfTest {
         editor.select(.node(id("PC1")))
         let targets = NodeMenu.targets(for: id("PC1"), in: editor.snapshot.nodes).map(\.name)
         if targets != ["PC2"] { failures.append("ping menu targets \(targets), expected [PC2]") }
+        await editor.connect(id("PC1"), id("PC2")) // both ports taken: the error must be visible without opening a tab
+        if editor.error?.key != "connect" { failures.append("no connect error, got \(String(describing: editor.error))") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
     }

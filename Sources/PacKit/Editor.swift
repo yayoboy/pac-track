@@ -23,6 +23,8 @@ public final class Editor {
     private var past: [Topology] = []
     private var future: [Topology] = []
     @ObservationIgnored private var pendingMove: Topology?
+    /// Last queued action: user actions run one at a time, in order (a second Cmd+Z waits for the first).
+    @ObservationIgnored private var tail: Task<Void, Never>?
     private let client: any EngineClient
     /// Called with the new topology after every network change (document autosave hooks in here).
     @ObservationIgnored public var onChange: ((Topology) -> Void)?
@@ -52,8 +54,23 @@ public final class Editor {
         onChange?(current)
     }
 
-    /// Opens a document: replaces the network and clears history. Never counts as an edit.
-    public func load(_ t: Topology) async {
+    private func serialized<T: Sendable>(_ action: @escaping @MainActor () async -> T) async -> T {
+        let previous = tail
+        let task = Task { @MainActor in
+            await previous?.value
+            return await action()
+        }
+        tail = Task { _ = await task.value }
+        return await task.value
+    }
+
+    /// Opens a document: replaces the network and clears history. Never counts as an edit. Returns false (and shows why) on failure.
+    @discardableResult
+    public func load(_ t: Topology) async -> Bool {
+        await serialized { await self.loadNow(t) }
+    }
+
+    private func loadNow(_ t: Topology) async -> Bool {
         do {
             accept(try await client.send(.load(t)))
             positions = PacKit.positions(of: t)
@@ -61,14 +78,20 @@ public final class Editor {
             future = []
             selection = nil
             error = nil
+            return true
         } catch {
             fail("file", error)
+            return false
         }
     }
 
     /// Sends a command that does not change the topology (apps, clock).
     @discardableResult
     public func run(_ cmd: Command, key: String? = nil) async -> Bool {
+        await serialized { await self.runNow(cmd, key: key) }
+    }
+
+    private func runNow(_ cmd: Command, key: String?) async -> Bool {
         do {
             accept(try await client.send(cmd))
             error = nil
@@ -82,9 +105,14 @@ public final class Editor {
     /// Sends topology changes as a single undo step.
     @discardableResult
     public func edit(_ cmds: [Command], key: String? = nil) async -> Bool {
+        await serialized { await self.editNow(cmds, key: key) }
+    }
+
+    @discardableResult
+    private func editNow(_ cmds: [Command], key: String? = nil) async -> Bool {
         let before = current
         for (i, cmd) in cmds.enumerated() {
-            guard await run(cmd, key: key) else {
+            guard await runNow(cmd, key: key) else {
                 if i > 0 { remember(before) }
                 return false
             }
@@ -98,6 +126,10 @@ public final class Editor {
         await edit([cmd], key: key)
     }
 
+    public func dismissError() {
+        error = nil
+    }
+
     public func select(_ s: Selection?) {
         selection = s
     }
@@ -107,28 +139,40 @@ public final class Editor {
     }
 
     public func addDevice(_ kind: DeviceKind, at pos: Pos) async {
+        await serialized { await self.addDeviceNow(kind, at: pos) }
+    }
+
+    private func addDeviceNow(_ kind: DeviceKind, at pos: Pos) async {
         let id = newId()
         positions[id] = pos
-        if await edit(.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))) {
+        if await editNow([.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))]) {
             selection = .node(id)
         }
     }
 
     public func connect(_ aId: String, _ bId: String) async {
+        await serialized { await self.connectNow(aId, bId) }
+    }
+
+    private func connectNow(_ aId: String, _ bId: String) async {
         guard aId != bId, let a = snapshot.nodes.first(where: { $0.id == aId }), let b = snapshot.nodes.first(where: { $0.id == bId }) else { return }
         guard let ia = firstFreeIface(a), let ib = firstFreeIface(b) else {
             error = EditorError(key: "connect", message: "\(firstFreeIface(a) == nil ? a.name : b.name) has no free port")
             return
         }
-        await edit(.connect(id: newId(), a: IfaceRef(node: aId, iface: ia), b: IfaceRef(node: bId, iface: ib)), key: "connect")
+        await editNow([.connect(id: newId(), a: IfaceRef(node: aId, iface: ia), b: IfaceRef(node: bId, iface: ib))], key: "connect")
     }
 
     /// Deletes nodes and cables in one undo step (cables of deleted nodes go with them).
     public func remove(nodes nodeIds: [String], links linkIds: [String]) async {
+        await serialized { await self.removeNow(nodes: nodeIds, links: linkIds) }
+    }
+
+    private func removeNow(nodes nodeIds: [String], links linkIds: [String]) async {
         let gone = Set(nodeIds)
         let cables = linkIds.filter { id in snapshot.links.contains { $0.id == id && !gone.contains($0.a.node) && !gone.contains($0.b.node) } }
         let cmds = cables.map { Command.disconnect(id: $0) } + nodeIds.map { Command.removeNode(id: $0) }
-        if !cmds.isEmpty { await edit(cmds) }
+        if !cmds.isEmpty { await editNow(cmds) }
         selection = nil
     }
 
@@ -149,26 +193,42 @@ public final class Editor {
         pendingMove = nil
     }
 
-    private func restore(_ t: Topology) async {
-        if !sameNetwork(t, current), let s = try? await client.send(.load(t)) { accept(s) }
+    /// Returns false (history untouched, error shown) if the engine refuses the state.
+    private func restore(_ t: Topology) async -> Bool {
+        if !sameNetwork(t, current) {
+            do {
+                accept(try await client.send(.load(t)))
+            } catch {
+                fail("history", error)
+                return false
+            }
+        }
         positions = PacKit.positions(of: t)
         selection = nil
         error = nil
+        return true
     }
 
     public func undo() async {
-        guard let previous = past.popLast() else { return }
-        future.insert(current, at: 0)
-        await restore(previous)
-        onChange?(current)
+        await serialized {
+            guard let previous = self.past.last else { return }
+            let now = self.current
+            guard await self.restore(previous) else { return }
+            self.past.removeLast()
+            self.future.insert(now, at: 0)
+            self.onChange?(self.current)
+        }
     }
 
     public func redo() async {
-        guard !future.isEmpty else { return }
-        let next = future.removeFirst()
-        past.append(current)
-        await restore(next)
-        onChange?(current)
+        await serialized {
+            guard let next = self.future.first else { return }
+            let now = self.current
+            guard await self.restore(next) else { return }
+            self.future.removeFirst()
+            self.past.append(now)
+            self.onChange?(self.current)
+        }
     }
 
     public func tick(wallMs: Double) async {
