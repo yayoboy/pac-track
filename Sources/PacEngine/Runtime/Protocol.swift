@@ -27,6 +27,11 @@ public enum SimMode: String, Codable, Sendable {
     case simulation
 }
 
+/// How a host interface gets its address.
+public enum IfaceMode: String, Codable, Sendable {
+    case `static`, dhcp
+}
+
 public enum Proto: String, CaseIterable, Sendable {
     case arp, icmp, dhcp, dns, udp
 }
@@ -42,6 +47,15 @@ public enum Command: Sendable {
     case removeRoute(node: String, cidr: String)
     case ping(node: String, target: String)
     case traceroute(node: String, target: String)
+    case setIfaceMode(node: String, iface: String, mode: IfaceMode)
+    /// Name server address typed by hand; nil or empty clears it.
+    case setNameServer(node: String, ip: String?)
+    /// nil turns the server off.
+    case setDhcpServer(node: String, config: DhcpConfig?)
+    /// nil turns the server off; the records replace the previous ones.
+    case setDnsServer(node: String, records: [DnsRecord]?)
+    case renewDhcp(node: String)
+    case nslookup(node: String, name: String)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -64,6 +78,12 @@ public enum Command: Sendable {
         case .removeRoute: "removeRoute"
         case .ping: "ping"
         case .traceroute: "traceroute"
+        case .setIfaceMode: "setIfaceMode"
+        case .setNameServer: "setNameServer"
+        case .setDhcpServer: "setDhcpServer"
+        case .setDnsServer: "setDnsServer"
+        case .renewDhcp: "renewDhcp"
+        case .nslookup: "nslookup"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -81,6 +101,7 @@ public struct IfaceView: Equatable, Sendable {
     public let mac: String
     public let cidr: String?
     public let linked: Bool
+    public let mode: IfaceMode
 }
 
 public struct RouteRow: Equatable, Sendable {
@@ -88,6 +109,8 @@ public struct RouteRow: Equatable, Sendable {
     public let nextHop: String?
     public let iface: String
     public let isStatic: Bool
+    /// Default route learned from DHCP.
+    public var dhcp = false
 }
 
 public struct ArpRow: Equatable, Sendable {
@@ -103,6 +126,35 @@ public struct MacRow: Equatable, Sendable {
     public let ageS: Int
 }
 
+public struct LeaseRow: Equatable, Sendable {
+    public let ip: String
+    public let mac: String
+    public let expiresS: Int
+    /// False while only offered.
+    public let bound: Bool
+}
+
+public struct DnsCacheRow: Equatable, Sendable {
+    public let name: String
+    public let ip: String
+    public let ttlS: Int
+}
+
+/// A host's DHCP client: RFC 2131 state, server, seconds to expiry and to renewal (T1).
+public struct DhcpClientView: Equatable, Sendable {
+    public let state: String
+    public let server: String?
+    public let leaseS: Int?
+    public let renewS: Int?
+
+    public init(state: String, server: String?, leaseS: Int?, renewS: Int?) {
+        self.state = state
+        self.server = server
+        self.leaseS = leaseS
+        self.renewS = renewS
+    }
+}
+
 public struct NodeView: Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: DeviceKind
@@ -112,6 +164,18 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let routes: [RouteRow]
     public let arp: [ArpRow]
     public let mac: [MacRow]
+    /// Name server typed by hand.
+    public let nameServer: String?
+    /// Name server learned from DHCP.
+    public let learnedNameServer: String?
+    /// Set while the host's interface is in DHCP mode.
+    public let dhcpClient: DhcpClientView?
+    /// nil while the DHCP server is off.
+    public let dhcpServer: DhcpConfig?
+    public let leases: [LeaseRow]
+    /// nil while the DNS server is off.
+    public let dnsRecords: [DnsRecord]?
+    public let dnsCache: [DnsCacheRow]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -221,10 +285,21 @@ public struct Snapshot: Equatable, Sendable {
 
 public struct TopologyIface: Codable, Equatable, Sendable {
     public var name: String
+    /// Always nil in DHCP mode: a leased address is never saved.
     public var cidr: String?
-    public init(name: String, cidr: String?) {
+    public var mode: IfaceMode
+    public init(name: String, cidr: String?, mode: IfaceMode = .`static`) {
         self.name = name
         self.cidr = cidr
+        self.mode = mode
+    }
+
+    /// Files written before M3 have no `mode`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        cidr = try c.decodeIfPresent(String.self, forKey: .cidr)
+        mode = try c.decodeIfPresent(IfaceMode.self, forKey: .mode) ?? .`static`
     }
 }
 
@@ -279,7 +354,11 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var ifaces: [TopologyIface]
     public var routes: [TopologyRoute]
     public var powered: Bool
-    public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true) {
+    public var nameServer: String?
+    public var dhcp: DhcpConfig?
+    public var dns: [DnsRecord]?
+    public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
+                nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -287,9 +366,12 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.ifaces = ifaces
         self.routes = routes
         self.powered = powered
+        self.nameServer = nameServer
+        self.dhcp = dhcp
+        self.dns = dns
     }
 
-    /// Files written before M2b have no `powered`.
+    /// Files written before M2b have no `powered`, before M3 no services.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -299,6 +381,9 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         ifaces = try c.decode([TopologyIface].self, forKey: .ifaces)
         routes = try c.decode([TopologyRoute].self, forKey: .routes)
         powered = try c.decodeIfPresent(Bool.self, forKey: .powered) ?? true
+        nameServer = try c.decodeIfPresent(String.self, forKey: .nameServer)
+        dhcp = try c.decodeIfPresent(DhcpConfig.self, forKey: .dhcp)
+        dns = try c.decodeIfPresent([DnsRecord].self, forKey: .dns)
     }
 }
 

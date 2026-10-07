@@ -10,14 +10,21 @@ private let MAX_EVENTS_PER_ADVANCE = 50_000
 /// A step whose events log nothing (only timers) gives up after this many.
 private let MAX_SILENT_EVENTS = 100_000
 
+/// Whole seconds left, rounded up (a lease with 0.2 s left shows 1 s).
+private func secondsLeft(_ ns: Int) -> Int {
+    (ns + S - 1) / S
+}
+
 private enum Program {
     case ping(Ping)
     case trace(Traceroute)
+    case nslookup(NsLookup)
 
     var lines: [String] {
         switch self {
         case .ping(let p): p.result.lines
         case .trace(let t): t.result.lines
+        case .nslookup(let n): n.result.lines
         }
     }
 
@@ -25,6 +32,7 @@ private enum Program {
         switch self {
         case .ping(let p): p.result.done
         case .trace(let t): t.result.done
+        case .nslookup(let n): n.result.done
         }
     }
 
@@ -32,6 +40,7 @@ private enum Program {
         switch self {
         case .ping(let p): p.stop()
         case .trace(let t): t.stop()
+        case .nslookup(let n): n.stop()
         }
     }
 }
@@ -84,6 +93,9 @@ public final class Runtime {
             }
             linkOrder.removeAll { links[$0] == nil }
             for app in apps where app.node == id { app.program.stop() }
+            // Nothing keeps running on a removed device (its DHCP client would broadcast forever).
+            node.powered = false
+            node.reset()
             nodes[id] = nil
             nodeOrder.removeAll { $0 == id }
         case let .rename(id, name):
@@ -100,6 +112,7 @@ public final class Runtime {
             linkOrder.removeAll { $0 == id }
         case let .setIp(node, iface, cidr):
             let ip = try ipNode(node)
+            if let client = (ip as? Host)?.dhcp, client.iface.name == iface { throw EngineError("\(iface) is configured by DHCP") }
             if let cidr = cidr?.trimmingCharacters(in: .whitespaces), !cidr.isEmpty {
                 try ip.setIp(iface, cidr)
             } else {
@@ -115,6 +128,28 @@ public final class Runtime {
         case let .traceroute(node, target):
             let t = target.trimmingCharacters(in: .whitespaces)
             start(node, "traceroute \(t)", .trace(try Traceroute(node: try liveIpNode(node), target: t)))
+        case let .setIfaceMode(node, iface, mode):
+            let n = try get(node)
+            guard let host = n as? Host else { throw EngineError("\(n.name) has no DHCP client") }
+            _ = try host.iface(iface)
+            try host.setDhcp(mode == .dhcp)
+        case let .setNameServer(node, ip):
+            let n = try ipNode(node)
+            let text = ip?.trimmingCharacters(in: .whitespaces) ?? ""
+            n.nameServer = try text.isEmpty ? nil : parseIp(text)
+        case let .setDhcpServer(node, config):
+            try setDhcpServer(node, config, requireInSubnet: true)
+        case let .setDnsServer(node, records):
+            let n = try ipNode(node)
+            guard records == nil || nodes[node]?.kind == .server else { throw EngineError("\(n.name) cannot run a DNS server") }
+            try n.configureDnsServer(records)
+        case let .renewDhcp(node):
+            let n = try liveIpNode(node)
+            guard let client = (n as? Host)?.dhcp else { throw EngineError("\(n.name) is not using DHCP") }
+            client.renewNow()
+        case let .nslookup(node, name):
+            let t = name.trimmingCharacters(in: .whitespaces)
+            start(node, "nslookup \(t)", .nslookup(try NsLookup(node: try liveIpNode(node), name: t)))
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -127,7 +162,9 @@ public final class Runtime {
             let node = try get(id)
             guard node.powered != on else { return }
             node.powered = on
-            if !on {
+            if on {
+                node.powerOn()
+            } else {
                 node.reset()
                 for app in apps where app.node == id { app.program.stop() }
             }
@@ -191,21 +228,39 @@ public final class Runtime {
         let nodeViews = nodeOrder.map { id -> NodeView in
             let (node, kind) = nodes[id]!
             let ip = node as? IpNode
+            let host = node as? Host
             return NodeView(
                 id: id,
                 kind: kind,
                 name: node.name,
                 powered: node.powered,
                 ifaces: node.interfaces.map {
-                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil)
+                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil,
+                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`)
                 },
                 routes: ip?.routes.view().map {
-                    RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface, isStatic: $0.isStatic)
+                    RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
+                             isStatic: $0.isStatic, dhcp: $0.dhcp)
                 } ?? [],
                 arp: ip?.arp.entries().map {
                     ArpRow(ip: formatIp($0.ip), mac: $0.mac, iface: $0.iface, ttlS: ($0.expiresAt - now + S - 1) / S)
                 } ?? [],
-                mac: (node as? Switch)?.macTable().map { MacRow(mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? []
+                mac: (node as? Switch)?.macTable().map { MacRow(mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
+                nameServer: ip?.nameServer.map(formatIp),
+                learnedNameServer: ip?.learnedNameServer.map(formatIp),
+                dhcpClient: host?.dhcp.map { c in
+                    DhcpClientView(state: c.state.rawValue, server: c.server.map(formatIp),
+                                   leaseS: c.hasLease ? secondsLeft(c.expiry - now) : nil,
+                                   renewS: c.state == .bound ? secondsLeft(c.t1 - now) : nil)
+                },
+                dhcpServer: ip?.dhcpServer?.pool.config,
+                leases: ip?.dhcpServer?.view().map {
+                    LeaseRow(ip: formatIp($0.ip), mac: $0.mac, expiresS: secondsLeft($0.expiresAt - now), bound: $0.bound)
+                } ?? [],
+                dnsRecords: ip?.dnsServer?.records.map { DnsRecord(name: $0.name, ip: formatIp($0.addr), ttl: $0.ttl) },
+                dnsCache: ip?.resolver.entries().flatMap { e in
+                    e.addrs.map { DnsCacheRow(name: e.name, ip: formatIp($0), ttlS: secondsLeft(e.expiresAt - now)) }
+                } ?? []
             )
         }
         let linkViews = linkOrder.map { id in
@@ -250,6 +305,14 @@ public final class Runtime {
         return ip
     }
 
+    private func setDhcpServer(_ id: String, _ config: DhcpConfig?, requireInSubnet: Bool) throws {
+        let ip = try ipNode(id)
+        guard config == nil || nodes[id]?.kind == .router || nodes[id]?.kind == .server else {
+            throw EngineError("\(ip.name) cannot run a DHCP server")
+        }
+        try ip.configureDhcpServer(config, requireInSubnet: requireInSubnet)
+    }
+
     private func start(_ node: String, _ title: String, _ program: Program) {
         appId += 1
         apps.append(App(id: appId, node: node, title: title, program: program))
@@ -271,6 +334,12 @@ public final class Runtime {
         }
         for n in t.nodes {
             for r in n.routes { try next.ipNode(n.id).routes.addStatic(r.cidr, r.nextHop, requireReachable: false) }
+        }
+        for n in t.nodes {
+            for i in n.ifaces where i.mode == .dhcp { try next.handle(.setIfaceMode(node: n.id, iface: i.name, mode: .dhcp)) }
+            if let server = n.nameServer { try next.handle(.setNameServer(node: n.id, ip: server)) }
+            if let config = n.dhcp { try next.setDhcpServer(n.id, config, requireInSubnet: false) }
+            if let records = n.dns { try next.handle(.setDnsServer(node: n.id, records: records)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }
