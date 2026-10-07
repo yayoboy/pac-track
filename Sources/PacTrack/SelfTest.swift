@@ -23,6 +23,14 @@ enum SelfTest {
         let editor = Editor(client: Simulation())
         for _ in 0..<5 { await editor.tick(wallMs: 100) }
         if editor.snapshot.timeNs != 500_000_000 { failures.append("clock at \(editor.snapshot.timeNs) ns, expected 500 ms") }
+
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 140))
+        await editor.addDevice(.pc, at: Pos(x: 380, y: 340))
+        await editor.addDevice(.pc, at: Pos(x: 740, y: 340))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("SW1"), id("PC1"))
+        await editor.connect(id("SW1"), id("PC2"))
+        if editor.snapshot.links.count != 2 { failures.append("expected 2 cables, got \(editor.snapshot.links.count)") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
     }

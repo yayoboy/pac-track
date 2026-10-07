@@ -7,10 +7,10 @@ struct MainContent: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Theme.panel.frame(width: 170)
+            PaletteView().frame(width: 170)
             Divider()
             VStack(spacing: 0) {
-                Theme.bg
+                CanvasView(editor: editor)
                 Divider()
                 Theme.panel.frame(height: 170)
             }
