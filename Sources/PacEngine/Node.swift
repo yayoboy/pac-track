@@ -59,4 +59,7 @@ class Node {
 
     /// Power cycle: forgets everything learned at run time (configuration stays).
     func reset() {}
+
+    /// Power on: starts what boots with the device (a DHCP client); configuration was kept.
+    func powerOn() {}
 }

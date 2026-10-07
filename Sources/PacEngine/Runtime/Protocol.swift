@@ -237,6 +237,26 @@ public struct TopologyRoute: Codable, Equatable, Sendable {
     }
 }
 
+/// DHCP server settings as typed in the inspector and saved in the project (addresses as text).
+public struct DhcpConfig: Codable, Equatable, Sendable {
+    public var start: String
+    public var end: String
+    /// Single addresses ("10.0.0.5") or ranges ("10.0.0.1-10.0.0.9").
+    public var excluded: [String]
+    public var gateway: String?
+    public var dns: String?
+    public var leaseS: Int
+
+    public init(start: String, end: String, excluded: [String] = [], gateway: String? = nil, dns: String? = nil, leaseS: Int = 86_400) {
+        self.start = start
+        self.end = end
+        self.excluded = excluded
+        self.gateway = gateway
+        self.dns = dns
+        self.leaseS = leaseS
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind

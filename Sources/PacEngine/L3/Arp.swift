@@ -73,12 +73,14 @@ final class Arp {
         let own = iface.ipv4?.addr
         let forUs = own != nil && arp.targetIp == own
         let known = cache[arp.senderIp] != nil
-        if forUs || known { cache[arp.senderIp] = (arp.senderMac, iface, node.sim.now + ARP_CACHE_NS) }
+        // A reply to our own pending request counts even if our address changed meanwhile (a DHCP RELEASE sent as the lease is dropped).
+        let awaited = arp.op == 2 && pending[arp.senderIp] != nil
+        if forUs || known || awaited { cache[arp.senderIp] = (arp.senderMac, iface, node.sim.now + ARP_CACHE_NS) }
         if forUs, arp.op == 1, let own {
             node.sendFrame(iface, to: arp.senderMac, etherType: ETHERTYPE_ARP,
                            .arp(ArpPacket(op: 2, senderMac: iface.mac, senderIp: own, targetMac: arp.senderMac, targetIp: arp.senderIp)))
         }
-        if forUs || known, let waiting = pending.removeValue(forKey: arp.senderIp) {
+        if forUs || known || awaited, let waiting = pending.removeValue(forKey: arp.senderIp) {
             for p in waiting.packets { node.sendFrame(waiting.iface, to: arp.senderMac, etherType: ETHERTYPE_IPV4, .ipv4(p)) }
         }
     }

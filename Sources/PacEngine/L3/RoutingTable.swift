@@ -9,6 +9,8 @@ struct RouteView: Equatable {
     let prefix: Int
     let nextHop: UInt32?
     let iface: String
+    /// Default route learned from DHCP.
+    var dhcp = false
 }
 
 private struct StaticRoute {
@@ -19,6 +21,8 @@ private struct StaticRoute {
 
 final class RoutingTable {
     private var statics: [StaticRoute] = []
+    /// Default gateway learned from DHCP (option 3). A static default route wins over it, as IOS gives DHCP routes distance 254.
+    var dhcpGateway: UInt32?
     private let interfaces: () -> [Interface]
 
     init(interfaces: @escaping () -> [Interface]) {
@@ -50,7 +54,10 @@ final class RoutingTable {
         let statics = statics.map {
             RouteView(isStatic: true, network: $0.network, prefix: $0.prefix, nextHop: $0.nextHop, iface: connectedFor($0.nextHop)?.iface.name ?? "-")
         }
-        return connected + statics
+        let learned = dhcpGateway.map {
+            [RouteView(isStatic: false, network: 0, prefix: 0, nextHop: $0, iface: connectedFor($0)?.iface.name ?? "-", dhcp: true)]
+        } ?? []
+        return connected + statics + learned
     }
 
     /// Longest-prefix match; on equal length a connected route wins.
@@ -63,6 +70,10 @@ final class RoutingTable {
             guard let via = connectedFor(r.nextHop) else { continue }
             best = NextHop(iface: via.iface, nextHop: r.nextHop)
             bestPrefix = r.prefix
+        }
+        if best == nil, let gw = dhcpGateway, let via = connectedFor(gw) {
+            best = NextHop(iface: via.iface, nextHop: gw)
+            bestPrefix = 0
         }
         if let conn, conn.prefix >= bestPrefix { return NextHop(iface: conn.iface, nextHop: dst) }
         return best

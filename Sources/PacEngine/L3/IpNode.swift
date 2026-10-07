@@ -8,6 +8,13 @@ class IpNode: Node {
     private(set) lazy var routes = RoutingTable(interfaces: { [unowned self] in self.interfaces })
     var defaultTtl: UInt8 = 64
     var forwarding = false
+    /// Name server set by hand (resolv.conf); wins over the one learned from DHCP.
+    var nameServer: UInt32?
+    /// Name server from DHCP option 6.
+    var learnedNameServer: UInt32?
+    var dhcpServer: DhcpServer?
+
+    var effectiveNameServer: UInt32? { nameServer ?? learnedNameServer }
     private var ipId: UInt16 = 0
     private var udp: [UInt16: UdpHandler] = [:]
     /// Ordered (not a dictionary): listener order must be deterministic.
@@ -58,6 +65,7 @@ class IpNode: Node {
 
     override func reset() {
         arp.reset()
+        dhcpServer?.reset()
     }
 
     /// Originates a packet. Returns false when there is no route to `dst`.
