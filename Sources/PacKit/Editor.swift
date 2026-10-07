@@ -28,6 +28,8 @@ public final class Editor {
     public private(set) var selectedEvent: Int?
     /// Headers of `selectedEvent`; nil while loading or once the engine forgot it.
     public private(set) var pdu: [PduLayer]?
+    /// Tab last picked in the node inspector; kept while moving between devices that have it.
+    public var inspectorTab: InspectorTab?
     private var dismissedWarning = 0
     @ObservationIgnored private var eventCursor = 0
     @ObservationIgnored private var eventEpoch = 0
@@ -328,12 +330,15 @@ public final class Editor {
         }
     }
 
-    /// Adds a device of the same kind and power state as `src` (no addresses, routes or cables: a copied IP would
+    /// Adds a device of the same kind, power state, interface modes and name server as `src` (no addresses, routes or cables: a copied IP would
     /// silently conflict on the same segment, and static routes need an address) in one undo step.
     private func insertCopy(of src: TopologyNode) async {
         let id = newId()
         positions[id] = src.pos
         var cmds: [Command] = [.addNode(id: id, kind: src.kind, name: defaultName(src.kind, existing: snapshot.nodes))]
+        // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
+        for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
+        if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
         if !src.powered { cmds.append(.setPower(id: id, on: false)) }
         if await editNow(cmds, key: "paste") { selection = .node(id) }
     }
@@ -351,6 +356,70 @@ public final class Editor {
                 return
             }
             await self.editNow([.updateLink(id: id, options: options)], key: key)
+        }
+    }
+
+    /// Turns the DHCP server on with a pool suggested from the device's first address (router: itself as gateway;
+    /// with a DNS server running: itself as DNS), or off.
+    public func enableDhcp(_ id: String, _ on: Bool) async {
+        await serialized {
+            let key = "dhcp:\(id):enabled"
+            guard on else {
+                await self.editNow([.setDhcpServer(node: id, config: nil)], key: key)
+                return
+            }
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), let cidr = node.ifaces.lazy.compactMap(\.cidr).first,
+                  var config = suggestedDhcpConfig(cidr: cidr) else {
+                self.error = EditorError(key: key, message: "Assign an IPv4 address to an interface first")
+                return
+            }
+            let own = String(cidr.split(separator: "/")[0])
+            config.gateway = node.kind == .router ? own : gatewayOf(node)
+            config.dns = node.dnsRecords != nil ? own : node.nameServer
+            await self.editNow([.setDhcpServer(node: id, config: config)], key: key)
+        }
+    }
+
+    /// Applies one DHCP setting typed in the Servizi tab; errors show under that field.
+    public func setDhcp(_ id: String, _ field: DhcpField, _ text: String) async {
+        await serialized {
+            let key = "dhcp:\(id):\(field.rawValue)"
+            guard let config = self.snapshot.nodes.first(where: { $0.id == id })?.dhcpServer else { return }
+            let next: DhcpConfig
+            do {
+                next = try field.apply(text, to: config)
+            } catch {
+                self.fail(key, error)
+                return
+            }
+            await self.editNow([.setDhcpServer(node: id, config: next)], key: key)
+        }
+    }
+
+    public func enableDns(_ id: String, _ on: Bool) async {
+        await edit(.setDnsServer(node: id, records: on ? [] : nil), key: "dnsrec:\(id)")
+    }
+
+    /// Adds an A record (empty TTL: 3600 s). Returns false, with the error under the record form, if refused.
+    @discardableResult
+    public func addDnsRecord(_ id: String, name: String, ip: String, ttl: String) async -> Bool {
+        await serialized {
+            let key = "dnsrec:\(id)"
+            guard let records = self.snapshot.nodes.first(where: { $0.id == id })?.dnsRecords else { return false }
+            let t = ttl.trimmingCharacters(in: .whitespaces)
+            guard let seconds = t.isEmpty ? DnsRecord.defaultTtl : Int(t) else {
+                self.error = EditorError(key: key, message: "Invalid number: \"\(ttl)\"")
+                return false
+            }
+            return await self.editNow([.setDnsServer(node: id, records: records + [DnsRecord(name: name, ip: ip, ttl: seconds)])], key: key)
+        }
+    }
+
+    public func removeDnsRecord(_ id: String, at index: Int) async {
+        await serialized {
+            guard var records = self.snapshot.nodes.first(where: { $0.id == id })?.dnsRecords, records.indices.contains(index) else { return }
+            records.remove(at: index)
+            await self.editNow([.setDnsServer(node: id, records: records)], key: "dnsrec:\(id)")
         }
     }
 
