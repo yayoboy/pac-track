@@ -24,7 +24,7 @@ final class Link {
     init(sim: Sim, _ a: Interface, _ b: Interface, _ opts: LinkOptions = LinkOptions()) throws {
         guard a.node !== b.node else { throw EngineError("Cannot connect a node to itself") }
         guard a.link == nil, b.link == nil else { throw EngineError("Interface already connected: \(a.link != nil ? a.id : b.id)") }
-        guard opts.bandwidthBps > 0, opts.propDelayNs >= 0, (0...1).contains(opts.lossRate), opts.queueLimit >= 0 else {
+        guard opts.bandwidthBps >= 1, opts.propDelayNs >= 0, (0...1).contains(opts.lossRate), opts.queueLimit >= 0 else {
             throw EngineError("Invalid link options: \(opts)")
         }
         self.sim = sim

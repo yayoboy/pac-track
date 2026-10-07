@@ -70,7 +70,7 @@ private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: P
 
     @Test func rejectsInvalidLinkOptions() throws {
         let invalid = [LinkOptions(bandwidthBps: 0), LinkOptions(propDelayNs: -5), LinkOptions(lossRate: 1.5),
-                       LinkOptions(lossRate: -0.1), LinkOptions(queueLimit: -1), LinkOptions(bandwidthBps: .nan)]
+                       LinkOptions(lossRate: -0.1), LinkOptions(queueLimit: -1), LinkOptions(bandwidthBps: .nan), LinkOptions(bandwidthBps: 0.5)]
         for opts in invalid {
             let sim = Sim()
             let a = Probe(sim: sim, id: "A")

@@ -46,7 +46,6 @@ private final class InFlight {
     let hopIndex: Int
     var sent: [UInt16: (index: Int, at: Int)] = [:]
     var pending: Int
-    var timer: SimTimer?
 
     init(hopIndex: Int, pending: Int) {
         self.hopIndex = hopIndex
@@ -54,7 +53,8 @@ private final class InFlight {
     }
 }
 
-/// Linux-style UDP traceroute: `probes` probes per TTL, one hop at a time. Keeps itself alive until finished.
+/// Linux-style UDP traceroute: `probes` probes per TTL, one hop at a time.
+/// Pending timers keep it alive; it stores none itself (retain cycle), so a hop timeout checks it is still current.
 final class Traceroute {
     private(set) var result = TracerouteResult()
     private let node: IpNode
@@ -67,8 +67,8 @@ final class Traceroute {
 
     init(node: IpNode, target: String, options: TracerouteOptions = TracerouteOptions()) throws {
         let o = options
-        guard (1...255).contains(o.maxHops), o.probes >= 1, o.waitNs > 0, o.firstPort >= 1,
-              o.firstPort + o.maxHops * o.probes <= 0x10000 else {
+        guard (1...255).contains(o.maxHops), (1...10).contains(o.probes), (1...60 * S).contains(o.waitNs),
+              (1...0xFFFF).contains(o.firstPort), o.firstPort + o.maxHops * o.probes <= 0x10000 else {
             throw EngineError("Invalid traceroute option: \(options)")
         }
         self.node = node
@@ -77,7 +77,7 @@ final class Traceroute {
         srcPort = UInt16(33000 + node.sim.rng.int(10000))
         port = o.firstPort
         result.lines = ["traceroute to \(target) (\(target)), \(o.maxHops) hops max, 60 byte packets"]
-        unlisten = node.onIcmp { [self] p, m in onIcmp(p, m) }
+        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
         node.sim.sched.after(0) { [self] in sendHop(1) }
     }
 
@@ -86,6 +86,7 @@ final class Traceroute {
     }
 
     private func sendHop(_ ttl: Int) {
+        guard !result.done else { return }
         result.hops.append(TraceHop(ttl: ttl, probes: Array(repeating: TraceProbe(), count: opts.probes)))
         let flight = InFlight(hopIndex: result.hops.count - 1, pending: opts.probes)
         current = flight
@@ -98,12 +99,13 @@ final class Traceroute {
                 return finish()
             }
         }
-        flight.timer = node.sim.sched.after(opts.waitNs) { [self] in closeHop() }
+        node.sim.sched.after(opts.waitNs) { [self] in
+            if current === flight { closeHop() }
+        }
     }
 
     private func closeHop() {
         guard let flight = current else { return }
-        flight.timer?.cancel()
         current = nil
         let hop = result.hops[flight.hopIndex]
         result.lines.append(formatHop(hop))
@@ -134,7 +136,6 @@ final class Traceroute {
     private func finish() {
         guard !result.done else { return }
         result.done = true
-        current?.timer?.cancel()
         current = nil
         unlisten()
     }

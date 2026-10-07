@@ -87,6 +87,28 @@ private func slowPair() throws -> (sim: Sim, a: Host, b: Host) {
         #expect(p.result.lines.last == "2 packets transmitted, 2 received, 0% packet loss")
     }
 
+    @Test func formatsMillisecondsLikeTypeScriptToFixed() {
+        #expect(formatMs(62_500) == "0.063")
+        #expect(formatMs(312_500) == "0.313")
+        #expect(formatMs(4_329_600) == "4.330")
+        #expect(formatMs(0) == "0.000")
+    }
+
+    @Test func releasesEverythingWhenTheSimulationIsDroppedMidPing() throws {
+        weak var weakHost: Host?
+        weak var weakPing: Ping?
+        do {
+            let (sim, a, _) = try slowPair()
+            let p = try Ping(node: a, target: "10.0.0.2")
+            weakHost = a
+            weakPing = p
+            sim.run(1500 * MS)
+            #expect(!p.result.done)
+        }
+        #expect(weakPing == nil)
+        #expect(weakHost == nil)
+    }
+
     @Test func rejectsAnInvalidTarget() throws {
         let (_, a, _) = try slowPair()
         expectError("Invalid IPv4") { _ = try Ping(node: a, target: "10.0.0.300") }
@@ -95,7 +117,8 @@ private func slowPair() throws -> (sim: Sim, a: Host, b: Host) {
     @Test func rejectsInvalidOptionsSynchronously() throws {
         let (_, a, _) = try slowPair()
         let invalid = [PingOptions(size: -1), PingOptions(size: 65508), PingOptions(ttl: 0), PingOptions(ttl: 256),
-                       PingOptions(count: 0), PingOptions(intervalNs: 0), PingOptions(timeoutNs: 0)]
+                       PingOptions(count: 0), PingOptions(intervalNs: 0), PingOptions(timeoutNs: 0),
+                       PingOptions(count: 10_001), PingOptions(intervalNs: 3601 * S), PingOptions(timeoutNs: 3601 * S)]
         for opts in invalid {
             expectError("Invalid ping option") { _ = try Ping(node: a, target: "10.0.0.2", options: opts) }
         }

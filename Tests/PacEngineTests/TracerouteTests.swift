@@ -58,10 +58,35 @@ import Testing
     @Test func rejectsInvalidOptionsSynchronously() throws {
         let (_, h1, _, _, _) = try twoRouters()
         let invalid = [TracerouteOptions(maxHops: 0), TracerouteOptions(maxHops: 256), TracerouteOptions(probes: 0),
-                       TracerouteOptions(waitNs: 0), TracerouteOptions(firstPort: 70000)]
+                       TracerouteOptions(waitNs: 0), TracerouteOptions(firstPort: 70000), TracerouteOptions(probes: 11),
+                       TracerouteOptions(waitNs: 61 * S), TracerouteOptions(firstPort: Int.max)]
         for opts in invalid {
             expectError("Invalid traceroute option") { _ = try Traceroute(node: h1, target: "10.0.2.10", options: opts) }
         }
+    }
+
+    @Test func stopBeforeTheFirstHopSendsNothing() throws {
+        let (sim, h1, _, _, _) = try twoRouters()
+        let t = try Traceroute(node: h1, target: "10.0.2.10")
+        t.stop()
+        sim.run(30 * S)
+        #expect(t.result.done)
+        #expect(t.result.hops.isEmpty)
+        #expect(t.result.lines.count == 1)
+    }
+
+    @Test func releasesEverythingWhenTheSimulationIsDroppedMidTrace() throws {
+        weak var weakTrace: Traceroute?
+        weak var weakHost: Host?
+        do {
+            let net = try twoRouters()
+            let t = try Traceroute(node: net.h1, target: "10.0.2.10")
+            weakTrace = t
+            weakHost = net.h1
+            net.sim.run(1 * MS)
+        }
+        #expect(weakTrace == nil)
+        #expect(weakHost == nil)
     }
 
     @Test func sameSeedAndTopologyProduceAnIdenticalEventLog() throws {

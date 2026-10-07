@@ -1,5 +1,3 @@
-import Foundation
-
 struct PingOptions: Sendable {
     var count = 4
     var intervalNs = 1 * S
@@ -40,11 +38,16 @@ private let ERROR_TEXT: [String: String] = [
     "11/0": "Time to live exceeded",
 ]
 
+/// Milliseconds with 3 decimals, rounding half up like JavaScript's toFixed (printf would round half to even).
 func formatMs(_ ns: Int) -> String {
-    String(format: "%.3f", Double(ns) / Double(MS))
+    let us = (ns + 500) / 1000
+    let fraction = String(us % 1000)
+    return "\(us / 1000)." + String(repeating: "0", count: 3 - fraction.count) + fraction
 }
 
-/// Linux-style ping. Output lines mimic iputils. Keeps itself alive (timers, listener) until finished.
+/// Linux-style ping. Output lines mimic iputils.
+/// Pending timers keep it alive until it finishes; it stores no timers itself (that would be a retain cycle),
+/// so callbacks check `result.done` instead of being cancelled.
 final class Ping {
     private(set) var result = PingResult()
     private let node: IpNode
@@ -53,12 +56,13 @@ final class Ping {
     private let opts: PingOptions
     private let id: UInt16
     private var sentAt: [Int: Int] = [:]
-    private var timers: [SimTimer] = []
     private var unlisten: () -> Void = {}
 
     init(node: IpNode, target: String, options: PingOptions = PingOptions()) throws {
         let o = options
-        guard o.count >= 1, o.intervalNs > 0, o.timeoutNs > 0, (0...65507).contains(o.size),
+        // Upper bounds keep timer arithmetic far from overflow and the timer list small.
+        guard (1...10_000).contains(o.count), (1...3600 * S).contains(o.intervalNs), (1...3600 * S).contains(o.timeoutNs),
+              (0...65507).contains(o.size),
               o.ttl.map({ (1...255).contains($0) }) ?? true else {
             throw EngineError("Invalid ping option: \(options)")
         }
@@ -68,11 +72,11 @@ final class Ping {
         dst = try parseIp(target)
         id = UInt16(node.sim.rng.int(0x10000))
         result.lines = ["PING \(target) (\(target)) \(o.size)(\(o.size + 28)) bytes of data."]
-        unlisten = node.onIcmp { [self] p, m in onIcmp(p, m) }
+        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
         for seq in 1...o.count {
-            timers.append(node.sim.sched.after((seq - 1) * o.intervalNs) { [self] in send(seq) })
+            node.sim.sched.after((seq - 1) * o.intervalNs) { [self] in send(seq) }
         }
-        timers.append(node.sim.sched.after((o.count - 1) * o.intervalNs + o.timeoutNs) { [self] in finish(stats: true) })
+        node.sim.sched.after((o.count - 1) * o.intervalNs + o.timeoutNs) { [self] in finish(stats: true) }
     }
 
     func stop() {
@@ -80,6 +84,7 @@ final class Ping {
     }
 
     private func send(_ seq: Int) {
+        guard !result.done else { return }
         let payload = L4.icmp(makeIcmp(type: ICMP_ECHO_REQUEST, code: 0, id: id, seq: UInt16(truncatingIfNeeded: seq),
                                        data: [UInt8](repeating: 0, count: opts.size)))
         sentAt[seq] = node.sim.now
@@ -120,7 +125,6 @@ final class Ping {
     private func finish(stats: Bool) {
         guard !result.done else { return }
         result.done = true
-        timers.forEach { $0.cancel() }
         unlisten()
         guard stats else { return }
         let lost = result.transmitted - result.received

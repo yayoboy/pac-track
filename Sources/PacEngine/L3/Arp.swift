@@ -7,7 +7,6 @@ private final class Pending {
     let iface: Interface
     var packets: [Ipv4Packet]
     var tries = 0
-    var timer: SimTimer?
 
     init(iface: Interface, packets: [Ipv4Packet]) {
         self.iface = iface
@@ -61,7 +60,6 @@ final class Arp {
                            .arp(ArpPacket(op: 2, senderMac: iface.mac, senderIp: own, targetMac: arp.senderMac, targetIp: arp.senderIp)))
         }
         if forUs || known, let waiting = pending.removeValue(forKey: arp.senderIp) {
-            waiting.timer?.cancel()
             for p in waiting.packets { node.sendFrame(waiting.iface, to: arp.senderMac, etherType: ETHERTYPE_IPV4, .ipv4(p)) }
         }
     }
@@ -70,7 +68,9 @@ final class Arp {
         p.tries += 1
         node.sendFrame(p.iface, to: BROADCAST_MAC, etherType: ETHERTYPE_ARP,
                        .arp(ArpPacket(op: 1, senderMac: p.iface.mac, senderIp: p.iface.ipv4?.addr ?? 0, targetMac: "00:00:00:00:00:00", targetIp: ip)))
-        p.timer = node.sim.sched.after(ARP_RETRY_NS) { [self] in
+        // No stored timer (it would retain `p` in a cycle): a resolved request is simply no longer pending.
+        node.sim.sched.after(ARP_RETRY_NS) { [self] in
+            guard pending[ip] === p else { return }
             if p.tries < ARP_RETRIES { return request(ip, p) }
             pending[ip] = nil
             for packet in p.packets {
