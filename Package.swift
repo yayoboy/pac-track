@@ -7,6 +7,7 @@ let package = Package(
     targets: [
         .target(name: "PacEngine"),
         .target(name: "PacKit", dependencies: ["PacEngine"]),
+        .executableTarget(name: "PacTrack", dependencies: ["PacKit", "PacEngine"]),
         .testTarget(name: "PacEngineTests", dependencies: ["PacEngine"]),
         .testTarget(name: "PacKitTests", dependencies: ["PacKit", "PacEngine"]),
     ]
