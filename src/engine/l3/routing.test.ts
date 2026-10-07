@@ -35,10 +35,18 @@ describe('RoutingTable', () => {
     expect(hop(rt, '10.0.2.200')).toBe('eth0 via 10.0.1.253')
   })
 
-  it('ignores static routes whose next hop is not reachable', () => {
+  it('rejects static routes whose next hop is not in a connected subnet', () => {
     const { rt } = setup()
-    rt.addStatic('172.16.0.0/16', '192.168.0.1')
+    expect(() => rt.addStatic('172.16.0.0/16', '192.168.0.1')).toThrow(/not in a connected subnet/)
     expect(hop(rt, '172.16.5.5')).toBeUndefined()
+  })
+
+  it('falls back to a shorter route when the longer one loses its next hop', () => {
+    const { node, rt } = setup()
+    rt.addStatic('0.0.0.0/0', '10.0.1.254')
+    rt.addStatic('10.0.2.0/24', '10.0.12.2')
+    node.iface('eth1').up = false
+    expect(hop(rt, '10.0.2.10')).toBe('eth0 via 10.0.1.254')
   })
 
   it('drops connected routes of interfaces that are down', () => {

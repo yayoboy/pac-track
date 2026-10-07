@@ -46,6 +46,26 @@ describe('traceroute', () => {
     sim.run(1 * S)
     expect(p.result.replies[0].ttl).toBe(62)
   })
+
+  it('keeps concurrent traceroutes from the same node apart', () => {
+    const { sim, h1 } = twoRouters()
+    // Resolve the gateway first: 6 simultaneous probes would overflow the 3-packet ARP queue.
+    ping(h1, '10.0.1.1', { count: 1 })
+    sim.run(1 * S)
+    const good = traceroute(h1, '10.0.2.10')
+    const bad = traceroute(h1, '10.0.9.9')
+    sim.run(60 * S)
+    expect(good.result.hops.map((h) => h.probes[0].from)).toEqual(['10.0.1.1', '10.0.12.2', '10.0.2.10'])
+    expect(bad.result.hops.map((h) => h.probes[0].from)).toEqual(['10.0.1.1', '10.0.1.1'])
+    expect(bad.result.lines[2]).toMatch(/!N/)
+  })
+
+  it('rejects invalid options synchronously', () => {
+    const { h1 } = twoRouters()
+    for (const opts of [{ maxHops: 0 }, { maxHops: 256 }, { probes: 0 }, { waitNs: 0 }, { firstPort: 70000 }]) {
+      expect(() => traceroute(h1, '10.0.2.10', opts)).toThrow(/Invalid traceroute option/)
+    }
+  })
 })
 
 describe('determinism', () => {

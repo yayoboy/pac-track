@@ -55,6 +55,23 @@ describe('Link', () => {
     expect(drops(sim, 'no-link')).toBe(1)
   })
 
+  it('never transmits a frame in zero time', () => {
+    const { sim, a, b } = pair({ bandwidthBps: 1e15, propDelayNs: 0 })
+    a.sendRaw()
+    sim.run(MS)
+    expect(b.got[0].time).toBeGreaterThan(0)
+  })
+
+  it('rejects invalid link options', () => {
+    for (const opts of [{ bandwidthBps: 0 }, { propDelayNs: -5 }, { lossRate: 1.5 }, { lossRate: -0.1 }, { queueLimit: -1 }, { bandwidthBps: NaN }]) {
+      const sim = new Sim()
+      const a = new Probe(sim, 'A')
+      const b = new Probe(sim, 'B')
+      expect(() => new Link(sim, a.iface('eth0'), b.iface('eth0'), opts)).toThrow(/Invalid link option/)
+      expect(a.iface('eth0').link).toBeUndefined()
+    }
+  })
+
   it('refuses self-links and double connections', () => {
     const { sim, a, b } = pair()
     const c = new Probe(sim, 'C')

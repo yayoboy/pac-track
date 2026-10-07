@@ -52,10 +52,6 @@ export abstract class IpNode extends Node {
   }
 
   setGateway(ip: string): void {
-    const gw = parseIp(ip)
-    if (!this.interfaces.some((i) => i.ipv4 && inSubnet(gw, i.ipv4.addr, i.ipv4.prefix))) {
-      throw new Error(`Gateway ${ip} is not in a connected subnet`)
-    }
     this.routes.addStatic('0.0.0.0/0', ip)
   }
 

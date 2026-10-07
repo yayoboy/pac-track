@@ -54,6 +54,12 @@ const ERROR_TEXT: Record<string, string> = {
 /** Linux-style ping. Output lines mimic iputils. */
 export function ping(node: IpNode, target: string, options: Partial<PingOptions> = {}): PingHandle {
   const opts = { ...PING_DEFAULTS, ...options }
+  const valid =
+    Number.isInteger(opts.count) && opts.count >= 1 &&
+    opts.intervalNs > 0 && opts.timeoutNs > 0 &&
+    Number.isInteger(opts.size) && opts.size >= 0 && opts.size <= 65507 &&
+    (opts.ttl === undefined || (Number.isInteger(opts.ttl) && opts.ttl >= 1 && opts.ttl <= 255))
+  if (!valid) throw new Error(`Invalid ping option: ${JSON.stringify(options)}`)
   const dst = parseIp(target)
   const sim = node.sim
   const id = sim.rng.int(0x10000)

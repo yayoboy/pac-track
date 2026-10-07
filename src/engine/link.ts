@@ -33,7 +33,10 @@ export class Link {
   ) {
     if (a.node === b.node) throw new Error('Cannot connect a node to itself')
     if (a.link || b.link) throw new Error(`Interface already connected: ${a.link ? a.id : b.id}`)
-    this.opts = { ...DEFAULT_LINK, ...opts }
+    const o = (this.opts = { ...DEFAULT_LINK, ...opts })
+    if (!(o.bandwidthBps > 0 && o.propDelayNs >= 0 && o.lossRate >= 0 && o.lossRate <= 1 && o.queueLimit >= 0)) {
+      throw new Error(`Invalid link options: ${JSON.stringify(opts)}`)
+    }
     this.dirs = new Map([
       [a, { queue: [], busy: false }],
       [b, { queue: [], busy: false }],
@@ -57,7 +60,8 @@ export class Link {
   private startTx(from: Interface, dir: Direction, frame: EthernetFrame): void {
     dir.busy = true
     this.sim.emit({ kind: 'tx', node: from.node.id, iface: from.name, frame })
-    const txNs = Math.round((wireBytes(frame) * 8 * S) / this.opts.bandwidthBps)
+    // At least 1 ns, so time always advances (a zero-time loop would never end).
+    const txNs = Math.max(1, Math.round((wireBytes(frame) * 8 * S) / this.opts.bandwidthBps))
     this.sim.sched.after(txNs, () => {
       const to = this.peer(from)
       const lost = this.opts.lossRate > 0 && this.sim.rng.next() < this.opts.lossRate

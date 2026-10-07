@@ -60,6 +60,13 @@ interface InFlight {
 /** Linux-style UDP traceroute: `probes` probes per TTL, one hop at a time. */
 export function traceroute(node: IpNode, target: string, options: Partial<TracerouteOptions> = {}) {
   const opts = { ...TRACEROUTE_DEFAULTS, ...options }
+  const valid =
+    Number.isInteger(opts.maxHops) && opts.maxHops >= 1 && opts.maxHops <= 255 &&
+    Number.isInteger(opts.probes) && opts.probes >= 1 &&
+    opts.waitNs > 0 &&
+    Number.isInteger(opts.firstPort) && opts.firstPort >= 1 &&
+    opts.firstPort + opts.maxHops * opts.probes <= 0x10000
+  if (!valid) throw new Error(`Invalid traceroute option: ${JSON.stringify(options)}`)
   const dst = parseIp(target)
   const sim = node.sim
   const srcPort = 33000 + sim.rng.int(10000)
@@ -110,9 +117,13 @@ export function traceroute(node: IpNode, target: string, options: Partial<Tracer
     // Quoted datagram: original IPv4 header (20 B) + UDP header (8 B).
     const q = icmp.data
     if (q.length < 28 || q[9] !== IPPROTO_UDP) return
-    const probe = current.sent.get((q[22] << 8) | q[23])
+    // Only our own probes: quoted destination and source port must match this run.
+    const quotedDst = ((q[16] << 24) | (q[17] << 16) | (q[18] << 8) | q[19]) >>> 0
+    if (quotedDst !== dst || ((q[20] << 8) | q[21]) !== srcPort) return
+    const dport = (q[22] << 8) | q[23]
+    const probe = current.sent.get(dport)
     if (!probe) return
-    current.sent.delete((q[22] << 8) | q[23])
+    current.sent.delete(dport)
     const note = icmp.type === ICMP_DEST_UNREACH && icmp.code !== UNREACH_PORT ? NOTES[icmp.code] ?? `!<${icmp.code}>` : undefined
     current.hop.probes[probe.index] = { from: formatIp(p.src), rttNs: sim.now - probe.at, note }
     if (icmp.type === ICMP_DEST_UNREACH) result.reached = true

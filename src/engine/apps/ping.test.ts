@@ -97,4 +97,11 @@ describe('ping', () => {
     const { a } = slowPair()
     expect(() => ping(a, '10.0.0.300')).toThrow(/Invalid IPv4/)
   })
+
+  it('rejects invalid options synchronously', () => {
+    const { a } = slowPair()
+    for (const opts of [{ size: -1 }, { size: 65508 }, { ttl: 0 }, { ttl: 256 }, { count: 0 }, { count: 1.5 }, { intervalNs: 0 }, { timeoutNs: NaN }]) {
+      expect(() => ping(a, '10.0.0.2', opts)).toThrow(/Invalid ping option/)
+    }
+  })
 })
