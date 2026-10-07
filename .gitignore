@@ -61,3 +61,7 @@ coverage/
 
 # Brainstorming companion
 .superpowers/
+
+# SwiftPM
+.build/
+.swiftpm/
