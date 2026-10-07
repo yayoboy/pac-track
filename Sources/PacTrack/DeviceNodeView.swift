@@ -104,6 +104,10 @@ struct NodeMenu: View {
                 }
             }
             .disabled(targets.isEmpty || !node.powered)
+            if node.kind.isHost {
+                Button("Rinnova DHCP") { Task { await editor.run(.renewDhcp(node: node.id), key: "app:\(node.id)") } }
+                    .disabled(!node.powered || !node.ifaces.contains { $0.mode == .dhcp })
+            }
         }
         Button(node.powered ? "Spegni" : "Accendi") { Task { await editor.edit(.setPower(id: node.id, on: !node.powered)) } }
         Divider()

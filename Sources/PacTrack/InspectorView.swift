@@ -26,26 +26,12 @@ struct InspectorView: View {
     }
 }
 
-private enum Tab: String, CaseIterable {
-    case interfaces = "Interfacce", ports = "Porte", routing = "Routing", tables = "Tabelle", app = "App"
-}
-
 private struct NodeInspector: View {
     let node: NodeView
     @Bindable var editor: Editor
-    @State private var tab: Tab
-
-    init(node: NodeView, editor: Editor) {
-        self.node = node
-        self.editor = editor
-        _tab = State(initialValue: node.kind.hasIp ? .interfaces : .ports)
-    }
-
-    private var tabs: [Tab] {
-        node.kind.hasIp ? [.interfaces, .routing, .tables, .app] : node.kind == .switch ? [.ports, .tables] : [.ports]
-    }
-
     var body: some View {
+        let tabs = inspectorTabs(for: node.kind)
+        let tab = editor.inspectorTab.flatMap { tabs.contains($0) ? $0 : nil } ?? tabs[0]
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .bottom, spacing: 8) {
                 Image(systemName: node.kind.symbol).font(.system(size: 16))
@@ -59,13 +45,17 @@ private struct NodeInspector: View {
                 .help(node.powered ? "Spegni" : "Accendi")
                 .accessibilityIdentifier("power")
             }
-            Picker("", selection: $tab) { ForEach(tabs, id: \.self) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+            Picker("", selection: Binding(get: { tab }, set: { editor.inspectorTab = $0 })) {
+                ForEach(tabs, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
             switch tab {
             case .interfaces: interfaces
             case .ports: ports
             case .routing: RoutingTab(node: node, editor: editor)
+            case .services: ServicesTab(node: node, editor: editor)
             case .tables: tables
             case .app: AppTab(node: node, editor: editor)
             }
@@ -77,6 +67,7 @@ private struct NodeInspector: View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(node.ifaces, id: \.name) { iface in
                 let key = "ip:\(node.id):\(iface.name)"
+                let modeKey = "mode:\(node.id):\(iface.name)"
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text(iface.name).foregroundStyle(Theme.fgStrong)
@@ -84,11 +75,40 @@ private struct NodeInspector: View {
                         Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
                     }
                     .font(.system(size: 11))
-                    CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24", errorKey: key, editor: editor) { text in
-                        let trimmed = text.trimmingCharacters(in: .whitespaces)
-                        await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
+                    if node.kind.isHost {
+                        Picker("", selection: Binding(get: { iface.mode }, set: { mode in
+                            Task { await editor.edit(.setIfaceMode(node: node.id, iface: iface.name, mode: mode), key: modeKey) }
+                        })) {
+                            Text("Statico").tag(IfaceMode.`static`)
+                            Text("DHCP").tag(IfaceMode.dhcp)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .accessibilityIdentifier("mode-\(iface.name)")
+                        ErrorLine(editor: editor, key: modeKey)
+                    }
+                    if iface.mode == .dhcp {
+                        Text("Indirizzo IPv4 (da DHCP)").font(Theme.small).foregroundStyle(Theme.muted)
+                        Text(iface.cidr ?? "in attesa…").font(Theme.mono).foregroundStyle(iface.cidr == nil ? Theme.muted : Theme.fgStrong)
+                        if let client = node.dhcpClient {
+                            Text(dhcpStatus(client)).font(Theme.small).foregroundStyle(Theme.muted)
+                        }
+                    } else {
+                        CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24", errorKey: key, editor: editor) { text in
+                            let trimmed = text.trimmingCharacters(in: .whitespaces)
+                            await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
+                        }
                     }
                     Text("MAC \(iface.mac)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
+                }
+            }
+            if node.kind.isHost {
+                let key = "dns:\(node.id)"
+                CommitField(label: "Server DNS", value: node.nameServer ?? "",
+                            placeholder: node.learnedNameServer.map { "\($0) (da DHCP)" } ?? "10.0.0.53", errorKey: key, editor: editor) { text in
+                    let trimmed = text.trimmingCharacters(in: .whitespaces)
+                    await editor.edit(.setNameServer(node: node.id, ip: trimmed.isEmpty ? nil : trimmed), key: key)
                 }
             }
         }
@@ -113,8 +133,14 @@ private struct NodeInspector: View {
                 TableSection(title: "Tabella MAC", head: ["MAC", "Porta", "Età"], rows: node.mac.map { [$0.mac, $0.iface, "\($0.ageS)s"] })
             } else {
                 TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
-                             rows: node.routes.map { [$0.dest, $0.nextHop ?? "connessa", $0.iface] })
+                             rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
+                if node.kind.isHost {
+                    TableSection(title: "Cache DNS", head: ["Nome", "IP", "TTL"], rows: node.dnsCache.map { [$0.name, $0.ip, "\($0.ttlS)s"] })
+                }
+                if node.dhcpServer != nil {
+                    TableSection(title: "Lease DHCP", head: ["IP", "MAC", "Scade", "Stato"], rows: leaseRows(node.leases))
+                }
             }
         }
     }
@@ -179,10 +205,11 @@ private struct AppTab: View {
         let key = "app:\(node.id)"
         VStack(alignment: .leading, spacing: 8) {
             Text("Destinazione").font(Theme.small).foregroundStyle(Theme.muted)
-            TextField("10.0.0.2", text: $target).textFieldStyle(.roundedBorder).font(Theme.mono).accessibilityIdentifier("app-target")
+            TextField("10.0.0.2 o nome host", text: $target).textFieldStyle(.roundedBorder).font(Theme.mono).accessibilityIdentifier("app-target")
             HStack {
                 Button("Ping") { Task { await editor.run(.ping(node: node.id, target: target), key: key) } }
                 Button("Traceroute") { Task { await editor.run(.traceroute(node: node.id, target: target), key: key) } }
+                Button("nslookup") { Task { await editor.run(.nslookup(node: node.id, name: target), key: key) } }
             }
             ErrorLine(editor: editor, key: key)
             Text("L'output compare nel pannello in basso.").font(Theme.small).foregroundStyle(Theme.muted)

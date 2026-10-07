@@ -165,8 +165,7 @@ public enum DhcpField: String, CaseIterable, Sendable {
         switch self {
         case .start: "10.0.0.100"
         case .end: "10.0.0.199"
-        case .excluded: "10.0.0.120, 10.0.0.150-10.0.0.159"
-        case .gateway, .dns: "nessuno"
+        case .excluded, .gateway, .dns: "nessuno"
         case .lease: "86400"
         }
     }
@@ -211,5 +210,5 @@ public func dhcpStatus(_ c: DhcpClientView) -> String {
 }
 
 public func leaseRows(_ leases: [LeaseRow]) -> [[String]] {
-    leases.map { [$0.ip, $0.mac, "\($0.expiresS)s", $0.bound ? "assegnato" : "offerto"] }
+    leases.map { [$0.ip, $0.mac, "\($0.expiresS)s", $0.bound ? "attivo" : "offerto"] }
 }

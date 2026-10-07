@@ -22,7 +22,7 @@ struct MainContent: View {
                     .frame(minHeight: 110, idealHeight: 240)
             }
             Divider()
-            InspectorView(editor: editor).frame(width: 290)
+            InspectorView(editor: editor).frame(width: 300)
         }
         .background(Theme.bg)
         .foregroundStyle(Theme.fg)

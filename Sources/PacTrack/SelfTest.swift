@@ -72,7 +72,58 @@ enum SelfTest {
         let o = CanvasView.zoomed(offset: CGSize(width: 10, height: 20), zoom: 1, to: 2, anchor: CGPoint(x: 110, y: 120))
         if o != CGSize(width: -90, height: -80) { failures.append("anchored zoom offset \(o)") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
+        failures += await servicesScenario(output: output)
         return failures
+    }
+
+    /// M3: SRV1 runs DHCP and DNS; PC1 and PC2 in DHCP mode get addresses and resolve srv1.lab.
+    private static func servicesScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 140))
+        await editor.addDevice(.server, at: Pos(x: 560, y: 360))
+        await editor.addDevice(.pc, at: Pos(x: 360, y: 300))
+        await editor.addDevice(.pc, at: Pos(x: 760, y: 300))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        for name in ["SRV1", "PC1", "PC2"] { await editor.connect(id("SW1"), id(name)) }
+        await editor.edit(.setIp(node: id("SRV1"), iface: "eth0", cidr: "10.0.0.2/24"))
+        await editor.enableDns(id("SRV1"), true)
+        await editor.addDnsRecord(id("SRV1"), name: "srv1.lab", ip: "10.0.0.2", ttl: "")
+        await editor.enableDhcp(id("SRV1"), true)
+        let config = editor.snapshot.nodes.first { $0.name == "SRV1" }?.dhcpServer
+        if config != DhcpConfig(start: "10.0.0.100", end: "10.0.0.199", dns: "10.0.0.2") { failures.append("suggested pool \(String(describing: config))") }
+        await editor.setDhcp(id("SRV1"), .start, "10.0.1.5")
+        if editor.error?.key != "dhcp:\(id("SRV1")):start" { failures.append("pool error: \(String(describing: editor.error))") }
+        for name in ["PC1", "PC2"] { await editor.edit(.setIfaceMode(node: id(name), iface: "eth0", mode: .dhcp)) }
+        for _ in 0..<10 { await editor.tick(wallMs: 100) }
+        let ips = ["PC1", "PC2"].map { name in editor.snapshot.nodes.first { $0.name == name }?.ifaces.first?.cidr }
+        if ips != ["10.0.0.100/24", "10.0.0.101/24"] { failures.append("DHCP addresses \(ips)") }
+        await editor.run(.nslookup(node: id("PC1"), name: "srv1.lab"))
+        await editor.run(.ping(node: id("PC2"), target: "srv1.lab"))
+        for _ in 0..<50 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.flatMap(\.lines)
+        if !lines.contains("Address: 10.0.0.2") { failures.append("nslookup output \(lines)") }
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") { failures.append("ping by name \(lines)") }
+        let protos = Set(editor.events.map(\.proto))
+        if !protos.isSuperset(of: [.dhcp, .dns]) { failures.append("no DHCP/DNS events: \(protos)") }
+        if let offer = editor.events.first(where: { $0.proto == .dhcp && $0.kind == .tx && $0.info.contains("Offer") }) {
+            await editor.selectEvent(offer.id)
+            if editor.pdu?.last?.title != "DHCP" { failures.append("Offer PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no DHCP Offer in the event list")
+        }
+        editor.select(.node(id("SRV1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m3")) { failures.append("could not write the M3 services image") }
+        editor.select(.node(id("PC1")))
+        editor.inspectorTab = .interfaces
+        if !render(editor, to: sibling(output, "m3-pc")) { failures.append("could not write the M3 host image") }
+        return failures
+    }
+
+    /// "build/selftest.png" → "build/selftest-m3.png".
+    static func sibling(_ path: String, _ suffix: String) -> String {
+        URL(fileURLWithPath: path).deletingPathExtension().path + "-\(suffix).png"
     }
 
     /// Two switches cabled twice: the ARP broadcast circulates and the UI must warn.
