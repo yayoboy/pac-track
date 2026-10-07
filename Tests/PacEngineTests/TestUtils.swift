@@ -86,3 +86,26 @@ func routedPair(_ sim: Sim = Sim()) throws -> (sim: Sim, h1: Host, h2: Host, r1:
     try h2.setGateway("10.0.2.1")
     return (sim, h1, h2, r1)
 }
+
+/// H1 10.0.1.10 — R1 (10.0.1.1 | 10.0.12.1/30) — R2 (10.0.12.2/30 | 10.0.2.1) — H2 10.0.2.10.
+func twoRouters(_ sim: Sim = Sim(), lastLink: LinkOptions = LinkOptions()) throws
+    -> (sim: Sim, h1: Host, h2: Host, r1: Router, r2: Router) {
+    let h1 = Host(sim: sim, id: "H1")
+    let h2 = Host(sim: sim, id: "H2")
+    let r1 = Router(sim: sim, id: "R1", ports: 2)
+    let r2 = Router(sim: sim, id: "R2", ports: 2)
+    _ = try Link(sim: sim, try h1.iface("eth0"), try r1.iface("Gi0/0"))
+    _ = try Link(sim: sim, try r1.iface("Gi0/1"), try r2.iface("Gi0/0"))
+    _ = try Link(sim: sim, try r2.iface("Gi0/1"), try h2.iface("eth0"), lastLink)
+    try r1.setIp("Gi0/0", "10.0.1.1/24")
+    try r1.setIp("Gi0/1", "10.0.12.1/30")
+    try r2.setIp("Gi0/0", "10.0.12.2/30")
+    try r2.setIp("Gi0/1", "10.0.2.1/24")
+    try r1.routes.addStatic("10.0.2.0/24", "10.0.12.2")
+    try r2.routes.addStatic("10.0.1.0/24", "10.0.12.1")
+    try h1.setIp("eth0", "10.0.1.10/24")
+    try h1.setGateway("10.0.1.1")
+    try h2.setIp("eth0", "10.0.2.10/24")
+    try h2.setGateway("10.0.2.1")
+    return (sim, h1, h2, r1, r2)
+}
