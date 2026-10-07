@@ -55,6 +55,10 @@ class IpNode: Node {
         return { [weak self] in self?.icmpListeners.removeAll { $0.token == token } }
     }
 
+    override func reset() {
+        arp.reset()
+    }
+
     /// Originates a packet. Returns false when there is no route to `dst`.
     @discardableResult
     func sendPacket(_ dst: UInt32, _ payload: L4, ttl: UInt8? = nil) -> Bool {

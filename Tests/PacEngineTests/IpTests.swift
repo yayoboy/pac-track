@@ -126,4 +126,13 @@ import Testing
         sim.run(301 * S)
         #expect(a.arp.entries().isEmpty)
     }
+
+    @Test func powerResetForgetsTheArpCache() throws {
+        let (sim, _, a, _) = try lan()
+        a.sendUdp(try parseIp("10.0.0.2"), srcPort: 1, dstPort: 9, data: [])
+        sim.run(10 * MS)
+        #expect(a.arp.entries().count == 1)
+        a.reset()
+        #expect(a.arp.entries().isEmpty)
+    }
 }

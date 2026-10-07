@@ -62,4 +62,14 @@ import Testing
     @Test func stepReturnsFalseWhenIdle() {
         #expect(!Scheduler().step())
     }
+
+    @Test func runUntilStopsAtTheEventBudgetWithoutJumpingAhead() {
+        let s = Scheduler()
+        var fired = 0
+        for t in 1...10 { s.at(t) { fired += 1 } }
+        s.runUntil(100, maxEvents: 4)
+        #expect(fired == 4 && s.now == 4)
+        s.runUntil(100)
+        #expect(fired == 10 && s.now == 100)
+    }
 }

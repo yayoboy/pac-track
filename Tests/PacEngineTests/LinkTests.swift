@@ -18,6 +18,16 @@ private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: P
         #expect(log.all.map { $0.time } == [2, 3, 4])
         #expect(log.all.map { $0.seq } == [2, 3, 4])
     }
+
+    @Test func readsEventsBySequenceNumberAcrossTheRingWrap() {
+        let log = EventLog(capacity: 3)
+        for t in 0..<5 { log.push(SimEvent(time: t, kind: .tx, node: "A")) }
+        #expect(log.since(0).map(\.seq) == [2, 3, 4])
+        #expect(log.since(4).map(\.time) == [4])
+        #expect(log.since(5).isEmpty)
+        #expect(log.event(1) == nil)
+        #expect(log.event(3)?.time == 3)
+    }
 }
 
 @Suite struct LinkTests {
@@ -78,6 +88,18 @@ private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: P
             expectError("Invalid link options") { _ = try Link(sim: sim, try a.iface("eth0"), try b.iface("eth0"), opts) }
             #expect(try a.iface("eth0").link == nil)
         }
+    }
+
+    @Test func updatesOptionsForLaterFramesAndValidatesThem() throws {
+        let (sim, a, b, link) = try pair()
+        try link.update(LinkOptions(bandwidthBps: 1e6, propDelayNs: 1 * MS))
+        try a.sendRaw()
+        sim.run(10 * MS)
+        #expect(b.got.map(\.time) == [672_000 + 1 * MS]) // 84 wire bytes at 1 Mb/s + 1 ms
+        expectError("loss rate") { try link.update(LinkOptions(lossRate: 2)) }
+        expectError("propagation delay") { try link.update(LinkOptions(propDelayNs: 11 * S)) }
+        expectError("bandwidth") { try link.update(LinkOptions(bandwidthBps: .infinity * 0)) }
+        #expect(link.opts == LinkOptions(bandwidthBps: 1e6, propDelayNs: 1 * MS))
     }
 
     @Test func refusesSelfLinksAndDoubleConnections() throws {

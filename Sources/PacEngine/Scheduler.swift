@@ -46,9 +46,14 @@ final class Scheduler {
         return true
     }
 
-    func runUntil(_ time: Int) {
-        while let timer = peek(), timer.time <= time { step() }
-        if time > now { now = time }
+    /// Runs events up to `time`. With a budget, stops after `maxEvents` and leaves `now` at the last event run.
+    func runUntil(_ time: Int, maxEvents: Int = .max) {
+        var count = 0
+        while count < maxEvents, let timer = peek(), timer.time <= time {
+            step()
+            count += 1
+        }
+        if count < maxEvents, time > now { now = time }
     }
 
     private func peek() -> SimTimer? {

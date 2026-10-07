@@ -56,4 +56,7 @@ class Node {
     func receive(_ frame: EthernetFrame, on iface: Interface) {
         fatalError("\(type(of: self)) must override receive(_:on:)")
     }
+
+    /// Power cycle: forgets everything learned at run time (configuration stays).
+    func reset() {}
 }

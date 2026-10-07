@@ -45,6 +45,12 @@ final class Arp {
             .sorted { $0.ip < $1.ip }
     }
 
+    /// Empties the cache and abandons pending resolutions (their retry timers find nothing pending and stop).
+    func reset() {
+        cache = [:]
+        pending = [:]
+    }
+
     /// Sends `packet` to `nextHop` on `iface`, resolving its MAC first if needed.
     func send(_ iface: Interface, nextHop: UInt32, _ packet: Ipv4Packet) {
         if let mac = lookup(nextHop) {

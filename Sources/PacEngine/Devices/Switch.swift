@@ -25,7 +25,12 @@ final class Switch: Node {
         }
     }
 
+    override func reset() {
+        table = [:]
+    }
+
     override func receive(_ frame: EthernetFrame, on inIf: Interface) {
+        sim.noteL2(frame, at: id)
         if !isGroupMac(frame.src) { table[frame.src] = (inIf, sim.now) }
         if !isGroupMac(frame.dst), let out = lookup(frame.dst) {
             if out !== inIf { out.send(frame) }

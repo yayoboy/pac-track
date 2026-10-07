@@ -1,4 +1,4 @@
-enum EventKind: Sendable {
+public enum EventKind: String, Sendable {
     case tx, rx, drop
 }
 
@@ -48,6 +48,20 @@ final class EventLog {
             buffer[start] = e
             start = (start + 1) % capacity
         }
+    }
+
+    private var oldest: Int { total - buffer.count }
+
+    /// Entries with `seq >= from` still in the buffer, oldest first.
+    func since(_ from: Int) -> [SimEvent] {
+        let first = max(from, oldest)
+        guard first < total else { return [] }
+        return (first..<total).map { buffer[(start + $0 - oldest) % buffer.count] }
+    }
+
+    func event(_ seq: Int) -> SimEvent? {
+        guard seq >= oldest, seq < total else { return nil }
+        return buffer[(start + seq - oldest) % buffer.count]
     }
 
     var all: [SimEvent] { Array(buffer[start...]) + buffer[..<start] }

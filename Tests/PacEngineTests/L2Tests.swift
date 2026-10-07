@@ -68,4 +68,39 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         sim.run(301 * S)
         #expect(sw.macTable().isEmpty)
     }
+
+    @Test func warnsOncePerSwitchAboutALayer2Loop() throws {
+        let sim = Sim(logCapacity: 1000)
+        let sw1 = Switch(sim: sim, id: "SW1")
+        let sw2 = Switch(sim: sim, id: "SW2")
+        _ = try Link(sim: sim, try sw1.iface("Gi0/1"), try sw2.iface("Gi0/1"))
+        _ = try Link(sim: sim, try sw1.iface("Gi0/2"), try sw2.iface("Gi0/2"))
+        let a = Probe(sim: sim, id: "A")
+        _ = try Link(sim: sim, try a.iface("eth0"), try sw1.iface("Gi0/3"))
+        try a.sendRaw()
+        sim.run(10 * MS)
+        #expect(Set(sim.warnings.map(\.node)) == ["SW1", "SW2"])
+        #expect(sim.warnings.count == 2)
+        #expect(sim.warnings.map(\.id).sorted() == [1, 2])
+    }
+
+    @Test func aTreeNeverWarns() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW1")
+        let p = try star(sim, sw, ["A", "B", "C"])
+        try p[0].sendRaw()
+        try p[1].sendRaw()
+        sim.run(MS)
+        #expect(sim.warnings.isEmpty)
+    }
+
+    @Test func powerResetForgetsTheMacTable() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW1")
+        let p = try star(sim, sw, ["A", "B"])
+        try p[0].sendRaw()
+        sim.run(MS)
+        sw.reset()
+        #expect(sw.macTable().isEmpty)
+    }
 }

@@ -1,9 +1,29 @@
 /// Defaults: 1 Gb/s copper, ~100 m.
-struct LinkOptions: Sendable {
-    var bandwidthBps: Double = 1e9
-    var propDelayNs = 500
-    var lossRate = 0.0
-    var queueLimit = 1000
+public struct LinkOptions: Codable, Equatable, Sendable {
+    public var bandwidthBps: Double
+    public var propDelayNs: Int
+    public var lossRate: Double
+    public var queueLimit: Int
+
+    public init(bandwidthBps: Double = 1e9, propDelayNs: Int = 500, lossRate: Double = 0, queueLimit: Int = 1000) {
+        self.bandwidthBps = bandwidthBps
+        self.propDelayNs = propDelayNs
+        self.lossRate = lossRate
+        self.queueLimit = queueLimit
+    }
+}
+
+/// Upper bound keeps timer arithmetic far from overflow (a geostationary hop is ~0.25 s).
+private let MAX_PROP_DELAY_NS = 10 * S
+
+func validateLinkOptions(_ o: LinkOptions) throws {
+    let problem: String? =
+        !(o.bandwidthBps >= 1) ? "bandwidth must be at least 1 b/s"
+        : !(0...MAX_PROP_DELAY_NS).contains(o.propDelayNs) ? "propagation delay must be between 0 and 10 s"
+        : !(0...1).contains(o.lossRate) ? "loss rate must be between 0 and 100%"
+        : o.queueLimit < 0 ? "queue limit cannot be negative"
+        : nil
+    if let problem { throw EngineError("Invalid link options: \(problem)") }
 }
 
 private final class Direction {
@@ -14,7 +34,7 @@ private final class Direction {
 /// Full-duplex point-to-point link with a FIFO tail-drop queue per direction.
 final class Link {
     var up = true
-    let opts: LinkOptions
+    private(set) var opts: LinkOptions
     unowned let sim: Sim
     unowned let a: Interface
     unowned let b: Interface
@@ -24,9 +44,7 @@ final class Link {
     init(sim: Sim, _ a: Interface, _ b: Interface, _ opts: LinkOptions = LinkOptions()) throws {
         guard a.node !== b.node else { throw EngineError("Cannot connect a node to itself") }
         guard a.link == nil, b.link == nil else { throw EngineError("Interface already connected: \(a.link != nil ? a.id : b.id)") }
-        guard opts.bandwidthBps >= 1, opts.propDelayNs >= 0, (0...1).contains(opts.lossRate), opts.queueLimit >= 0 else {
-            throw EngineError("Invalid link options: \(opts)")
-        }
+        try validateLinkOptions(opts)
         self.sim = sim
         self.a = a
         self.b = b
@@ -36,6 +54,12 @@ final class Link {
     }
 
     func peer(_ i: Interface) -> Interface { i === a ? b : a }
+
+    /// New options apply to frames that start transmitting from now on; queued frames keep waiting.
+    func update(_ opts: LinkOptions) throws {
+        try validateLinkOptions(opts)
+        self.opts = opts
+    }
 
     /// Pulls the cable: both interfaces become free, frames in flight are lost.
     func disconnect() {

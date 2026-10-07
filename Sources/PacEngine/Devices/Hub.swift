@@ -6,6 +6,7 @@ final class Hub: Node {
     }
 
     override func receive(_ frame: EthernetFrame, on inIf: Interface) {
+        sim.noteL2(frame, at: id)
         for i in interfaces where i !== inIf && i.link != nil { i.send(frame) }
     }
 }
