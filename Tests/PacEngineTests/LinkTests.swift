@@ -1,0 +1,90 @@
+import Testing
+@testable import PacEngine
+
+private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: Probe, b: Probe, link: Link) {
+    let sim = Sim()
+    let a = Probe(sim: sim, id: "A")
+    let b = Probe(sim: sim, id: "B")
+    let link = try Link(sim: sim, try a.iface("eth0"), try b.iface("eth0"), opts)
+    return (sim, a, b, link)
+}
+
+@Suite struct EventLogTests {
+    @Test func keepsTheMostRecentEventsInOrderOnceFull() {
+        let log = EventLog(capacity: 3)
+        for t in 0..<5 { log.push(SimEvent(time: t, kind: .tx, node: "A")) }
+        #expect(log.size == 3)
+        #expect(log.total == 5)
+        #expect(log.all.map { $0.time } == [2, 3, 4])
+        #expect(log.all.map { $0.seq } == [2, 3, 4])
+    }
+}
+
+@Suite struct LinkTests {
+    @Test func firstFrameArrivesAfter672Plus500NsAndTheNextBackToBack() throws {
+        let (sim, a, b, _) = try pair()
+        try a.sendRaw()
+        try a.sendRaw()
+        sim.run(MS)
+        #expect(b.got.map { $0.time } == [1172, 1844])
+        let first = try #require(sim.log.all.first)
+        #expect(first.kind == .tx && first.node == "A" && first.iface == "eth0" && first.time == 0)
+    }
+
+    @Test func tailDropsWhenTheQueueIsFull() throws {
+        let (sim, a, b, _) = try pair(LinkOptions(queueLimit: 2))
+        for _ in 0..<5 { try a.sendRaw() }
+        sim.run(MS)
+        #expect(b.got.count == 3)
+        #expect(drops(sim, .queueFull) == 2)
+    }
+
+    @Test func dropsLostFramesAtTheReceiver() throws {
+        let (sim, a, b, _) = try pair(LinkOptions(lossRate: 1))
+        try a.sendRaw()
+        sim.run(MS)
+        #expect(b.got.isEmpty)
+        #expect(drops(sim, .loss) == 1)
+    }
+
+    @Test func dropsWhenTheLinkInterfaceOrCableIsMissingOrDown() throws {
+        let (sim, a, _, link) = try pair()
+        link.up = false
+        try a.sendRaw()
+        try a.iface("eth0").up = false
+        try a.sendRaw()
+        let lonely = Probe(sim: sim, id: "C")
+        try lonely.sendRaw()
+        sim.run(MS)
+        #expect(drops(sim, .linkDown) == 1)
+        #expect(drops(sim, .ifaceDown) == 1)
+        #expect(drops(sim, .noLink) == 1)
+    }
+
+    @Test func neverTransmitsAFrameInZeroTime() throws {
+        let (sim, a, b, _) = try pair(LinkOptions(bandwidthBps: 1e15, propDelayNs: 0))
+        try a.sendRaw()
+        sim.run(MS)
+        #expect(try #require(b.got.first).time > 0)
+    }
+
+    @Test func rejectsInvalidLinkOptions() throws {
+        let invalid = [LinkOptions(bandwidthBps: 0), LinkOptions(propDelayNs: -5), LinkOptions(lossRate: 1.5),
+                       LinkOptions(lossRate: -0.1), LinkOptions(queueLimit: -1), LinkOptions(bandwidthBps: .nan)]
+        for opts in invalid {
+            let sim = Sim()
+            let a = Probe(sim: sim, id: "A")
+            let b = Probe(sim: sim, id: "B")
+            expectError("Invalid link options") { _ = try Link(sim: sim, try a.iface("eth0"), try b.iface("eth0"), opts) }
+            #expect(try a.iface("eth0").link == nil)
+        }
+    }
+
+    @Test func refusesSelfLinksAndDoubleConnections() throws {
+        let (sim, a, b, _) = try pair()
+        let c = Probe(sim: sim, id: "C")
+        a.addInterface("eth1")
+        expectError("itself") { _ = try Link(sim: sim, try a.iface("eth1"), try a.iface("eth0")) }
+        expectError("already connected") { _ = try Link(sim: sim, try c.iface("eth0"), try b.iface("eth0")) }
+    }
+}
