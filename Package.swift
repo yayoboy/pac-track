@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     targets: [
         .target(name: "PacEngine"),
+        .target(name: "PacKit", dependencies: ["PacEngine"]),
         .testTarget(name: "PacEngineTests", dependencies: ["PacEngine"]),
+        .testTarget(name: "PacKitTests", dependencies: ["PacKit", "PacEngine"]),
     ]
 )
