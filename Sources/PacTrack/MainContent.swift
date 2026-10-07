@@ -12,10 +12,10 @@ struct MainContent: View {
             VStack(spacing: 0) {
                 CanvasView(editor: editor)
                 Divider()
-                Theme.panel.frame(height: 170)
+                OutputPanel(editor: editor).frame(height: 170)
             }
             Divider()
-            Theme.panel.frame(width: 290)
+            InspectorView(editor: editor).frame(width: 290)
         }
         .background(Theme.bg)
         .foregroundStyle(Theme.fg)

@@ -31,6 +31,13 @@ enum SelfTest {
         await editor.connect(id("SW1"), id("PC1"))
         await editor.connect(id("SW1"), id("PC2"))
         if editor.snapshot.links.count != 2 { failures.append("expected 2 cables, got \(editor.snapshot.links.count)") }
+        await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.edit(.setIp(node: id("PC2"), iface: "eth0", cidr: "10.0.0.2/24"))
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.2"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") { failures.append("ping output: \(lines)") }
+        editor.select(.node(id("PC1")))
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
     }
