@@ -22,6 +22,8 @@ enum Theme {
         case .arp: Color(hex: 0xF0A732)
         case .icmp: Color(hex: 0xE5507A)
         case .udp: Color(hex: 0x2FBFC4)
+        case .dhcp: Color(hex: 0x56A8F5)
+        case .dns: Color(hex: 0xB083F0)
         }
     }
 }

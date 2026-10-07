@@ -12,6 +12,11 @@ let UNREACH_HOST: UInt8 = 1
 let UNREACH_PORT: UInt8 = 3
 let UNREACH_FRAG_NEEDED: UInt8 = 4
 
+let PORT_DHCP_SERVER: UInt16 = 67
+let PORT_DHCP_CLIENT: UInt16 = 68
+let PORT_DNS: UInt16 = 53
+let DNS_NXDOMAIN: UInt8 = 3
+
 struct ArpPacket: Equatable, Sendable {
     var op: UInt16
     var senderMac: Mac
@@ -32,13 +37,98 @@ struct IcmpMessage: Equatable, Sendable {
     var size: Int { 8 + data.count }
 }
 
+/// DHCP message type, option 53 (RFC 2132 §9.6).
+enum DhcpType: UInt8, Sendable {
+    case discover = 1, offer, request, decline, ack, nak, release
+
+    var name: String {
+        switch self {
+        case .discover: "Discover"
+        case .offer: "Offer"
+        case .request: "Request"
+        case .decline: "Decline"
+        case .ack: "ACK"
+        case .nak: "NAK"
+        case .release: "Release"
+        }
+    }
+}
+
+/// BOOTP message with the DHCP options Pac-Track uses (53/50/51/54/1/3/6); absent options are not sent.
+/// giaddr is always 0 (no relay agents) and `secs` 0.
+struct DhcpMessage: Equatable, Sendable {
+    /// 1 BOOTREQUEST, 2 BOOTREPLY.
+    var op: UInt8
+    var xid: UInt32
+    var broadcast: Bool
+    var ciaddr: UInt32 = 0
+    var yiaddr: UInt32 = 0
+    var siaddr: UInt32 = 0
+    var chaddr: Mac
+    var type: DhcpType
+    var requestedIp: UInt32? = nil
+    var leaseS: UInt32? = nil
+    var serverId: UInt32? = nil
+    var subnetMask: UInt32? = nil
+    var router: UInt32? = nil
+    var dns: UInt32? = nil
+
+    /// Options after the magic cookie: 53 (3 B), each 4-byte option 6 B, end (1 B).
+    var optionsSize: Int {
+        3 + 6 * [requestedIp, leaseS, serverId, subnetMask, router, dns].filter { $0 != nil }.count + 1
+    }
+
+    /// Fixed BOOTP fields 236 B + magic cookie 4 B + options, padded to the 300-byte BOOTP minimum (RFC 1542) as real clients and servers do.
+    var size: Int { max(300, 240 + optionsSize) }
+}
+
+struct DnsAnswer: Equatable, Sendable {
+    var ttl: UInt32
+    var addr: UInt32
+}
+
+/// One-question DNS message for an A record (class IN); answers repeat the question name.
+struct DnsMessage: Equatable, Sendable {
+    var id: UInt16
+    var response: Bool
+    var authoritative = false
+    var recursionDesired = true
+    /// 0 NOERROR, 3 NXDOMAIN.
+    var rcode: UInt8 = 0
+    var name: String
+    var answers: [DnsAnswer] = []
+
+    var flags: UInt16 {
+        (response ? 0x8000 : 0) | (authoritative ? 0x0400 : 0) | (recursionDesired ? 0x0100 : 0) | UInt16(rcode)
+    }
+
+    /// Header 12 B + question (labels + type + class) + answers of 16 B (name as a 2-byte pointer, type, class, TTL, length, address).
+    var size: Int {
+        12 + name.split(separator: ".").reduce(1) { $0 + 1 + $1.utf8.count } + 4 + 16 * answers.count
+    }
+}
+
+enum UdpPayload: Equatable, Sendable {
+    case raw([UInt8])
+    case dhcp(DhcpMessage)
+    case dns(DnsMessage)
+
+    var size: Int {
+        switch self {
+        case .raw(let bytes): bytes.count
+        case .dhcp(let m): m.size
+        case .dns(let m): m.size
+        }
+    }
+}
+
 struct UdpDatagram: Equatable, Sendable {
     var srcPort: UInt16
     var dstPort: UInt16
     var checksum: UInt16
-    var data: [UInt8]
+    var payload: UdpPayload
 
-    var size: Int { 8 + data.count }
+    var size: Int { 8 + payload.size }
 }
 
 enum L4: Equatable, Sendable {
@@ -118,7 +208,9 @@ func serialize(_ u: UdpDatagram) -> [UInt8] {
     b += u16(u.dstPort)
     b += u16(UInt16(u.size))
     b += u16(u.checksum)
-    return b + u.data
+    // ponytail: DHCP and DNS bodies stay typed, not byte-encoded; only the 8-byte header is ever quoted (ICMP errors)
+    if case .raw(let data) = u.payload { b += data }
+    return b
 }
 
 func serializeHeader(_ p: Ipv4Packet) -> [UInt8] {
@@ -146,8 +238,12 @@ func makeIcmp(type: UInt8, code: UInt8, id: UInt16, seq: UInt16, data: [UInt8]) 
 }
 
 func makeUdp(srcPort: UInt16, dstPort: UInt16, data: [UInt8]) -> UdpDatagram {
+    makeUdp(srcPort: srcPort, dstPort: dstPort, payload: .raw(data))
+}
+
+func makeUdp(srcPort: UInt16, dstPort: UInt16, payload: UdpPayload) -> UdpDatagram {
     // ponytail: UDP checksum left 0 (optional over IPv4, RFC 768); add pseudo-header checksum if a lab needs it
-    UdpDatagram(srcPort: srcPort, dstPort: dstPort, checksum: 0, data: data)
+    UdpDatagram(srcPort: srcPort, dstPort: dstPort, checksum: 0, payload: payload)
 }
 
 private func withChecksum(_ p: Ipv4Packet) -> Ipv4Packet {

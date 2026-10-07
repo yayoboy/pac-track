@@ -1,5 +1,6 @@
 typealias IcmpListener = (Ipv4Packet, IcmpMessage) -> Void
-typealias UdpHandler = (Ipv4Packet, UdpDatagram) -> Void
+/// `iface` is where the datagram came in; nil when the node sent it to itself.
+typealias UdpHandler = (Ipv4Packet, UdpDatagram, Interface?) -> Void
 
 /// A node with an IPv4 stack: ARP, routing, ICMP and UDP.
 class IpNode: Node {
@@ -69,7 +70,18 @@ class IpNode: Node {
 
     @discardableResult
     func sendUdp(_ dst: UInt32, srcPort: UInt16, dstPort: UInt16, data: [UInt8], ttl: UInt8? = nil) -> Bool {
-        sendPacket(dst, .udp(makeUdp(srcPort: srcPort, dstPort: dstPort, data: data)), ttl: ttl)
+        sendUdp(dst, srcPort: srcPort, dstPort: dstPort, payload: .raw(data), ttl: ttl)
+    }
+
+    @discardableResult
+    func sendUdp(_ dst: UInt32, srcPort: UInt16, dstPort: UInt16, payload: UdpPayload, ttl: UInt8? = nil) -> Bool {
+        sendPacket(dst, .udp(makeUdp(srcPort: srcPort, dstPort: dstPort, payload: payload)), ttl: ttl)
+    }
+
+    /// Limited broadcast (255.255.255.255) straight out of one interface, without routing: DHCP before the node has an address.
+    func broadcast(on iface: Interface, src: UInt32, _ payload: L4) {
+        sendFrame(iface, to: BROADCAST_MAC, etherType: ETHERTYPE_IPV4,
+                  .ipv4(makeIpv4(src: src, dst: BROADCAST_IP, ttl: defaultTtl, id: nextIpId(), payload: payload)))
     }
 
     func sendFrame(_ iface: Interface, to dst: Mac, etherType: UInt16, _ payload: L3) {
@@ -96,7 +108,7 @@ class IpNode: Node {
 
     private func input(_ p: Ipv4Packet, on iface: Interface) {
         let subnetBroadcast = iface.ipv4.map { p.dst == broadcastOf($0.addr, $0.prefix) } ?? false
-        if ownsIp(p.dst) || p.dst == BROADCAST_IP || subnetBroadcast { return deliver(p) }
+        if ownsIp(p.dst) || p.dst == BROADCAST_IP || subnetBroadcast { return deliver(p, from: iface) }
         guard forwarding else { return }
         if p.ttl <= 1 {
             sim.emit(.drop, node: id, iface: iface.name, packet: p, reason: .ttlExpired)
@@ -107,7 +119,7 @@ class IpNode: Node {
 
     private func output(_ p: Ipv4Packet) {
         if ownsIp(p.dst) {
-            sim.sched.after(0) { [self] in deliver(p) }
+            sim.sched.after(0) { [self] in deliver(p, from: nil) }
             return
         }
         guard let hop = routes.lookup(p.dst) else {
@@ -123,7 +135,7 @@ class IpNode: Node {
         arp.send(hop.iface, nextHop: hop.nextHop, p)
     }
 
-    private func deliver(_ p: Ipv4Packet) {
+    private func deliver(_ p: Ipv4Packet, from iface: Interface?) {
         switch p.payload {
         case .icmp(let m):
             if m.type == ICMP_ECHO_REQUEST && p.dst != BROADCAST_IP {
@@ -134,7 +146,7 @@ class IpNode: Node {
             for entry in icmpListeners { entry.listener(p, m) }
         case .udp(let u):
             if let handler = udp[u.dstPort] {
-                handler(p, u)
+                handler(p, u, iface)
             } else if p.dst != BROADCAST_IP {
                 icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_PORT)
             }

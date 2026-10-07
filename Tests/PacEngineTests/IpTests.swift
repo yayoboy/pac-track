@@ -41,8 +41,8 @@ import Testing
     @Test func deliversUdpToBoundPorts() throws {
         let (sim, _, a, b) = try lan()
         var got: [Int] = []
-        try b.bindUdp(5000) { _, u in got.append(u.data.count) }
-        expectError("in use") { try b.bindUdp(5000) { _, _ in } }
+        try b.bindUdp(5000) { _, u, _ in got.append(u.payload.size) }
+        expectError("in use") { try b.bindUdp(5000) { _, _, _ in } }
         a.sendUdp(try parseIp("10.0.0.2"), srcPort: 40000, dstPort: 5000, data: [UInt8](repeating: 0, count: 10))
         sim.run(MS)
         #expect(got == [10])
@@ -134,5 +134,17 @@ import Testing
         #expect(a.arp.entries().count == 1)
         a.reset()
         #expect(a.arp.entries().isEmpty)
+    }
+
+    @Test func broadcastsFromAnAddresslessInterfaceAndTellsUdpHandlersTheIngressInterface() throws {
+        let (sim, _, a, b) = try lan()
+        var got: [String] = []
+        try b.bindUdp(67) { p, _, iface in got.append("\(formatIp(p.src)) → \(formatIp(p.dst)) on \(iface?.name ?? "-")") }
+        try a.iface("eth0").ipv4 = nil
+        a.broadcast(on: try a.iface("eth0"), src: 0, .udp(makeUdp(srcPort: 68, dstPort: 67, data: [])))
+        sim.run(1 * MS)
+        #expect(got == ["0.0.0.0 → 255.255.255.255 on eth0"])
+        // a limited broadcast to a closed port draws no ICMP error
+        #expect(!sim.log.all.contains { $0.kind == .tx && $0.node == "B" })
     }
 }

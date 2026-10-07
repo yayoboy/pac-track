@@ -28,7 +28,7 @@ public enum SimMode: String, Codable, Sendable {
 }
 
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, udp
+    case arp, icmp, dhcp, dns, udp
 }
 
 public enum Command: Sendable {

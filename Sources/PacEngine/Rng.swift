@@ -17,4 +17,8 @@ final class Rng {
     func int(_ maxExclusive: Int) -> Int {
         Int(next() * Double(maxExclusive))
     }
+
+    func uint32() -> UInt32 {
+        UInt32(next() * 4_294_967_296)
+    }
 }
