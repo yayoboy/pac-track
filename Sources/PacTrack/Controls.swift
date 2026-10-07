@@ -33,7 +33,8 @@ struct CommitField: View {
                 .onAppear { draft = value }
                 .onChange(of: value) { _, newValue in if !focused { draft = newValue } }
                 .onChange(of: focused) { _, isFocused in if !isFocused { submit() } }
-                .onSubmit(submit)
+                // Return ends editing: the focus-loss handler commits once, and Cmd+Z then reaches the network undo.
+                .onSubmit { focused = false }
                 .onExitCommand {
                     draft = value
                     focused = false

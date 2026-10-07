@@ -68,6 +68,9 @@ enum SelfTest {
         if PaletteView.groups(matching: "rou").map(\.1) != [[.router]] { failures.append("palette search") }
         if !PaletteView.groups(matching: "zzz").isEmpty { failures.append("palette search should find nothing") }
         editor.select(.link(cable))
+        // Pinch anchored at the pointer: the world point under the fingers stays put.
+        let o = CanvasView.zoomed(offset: CGSize(width: 10, height: 20), zoom: 1, to: 2, anchor: CGPoint(x: 110, y: 120))
+        if o != CGSize(width: -90, height: -80) { failures.append("anchored zoom offset \(o)") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
     }

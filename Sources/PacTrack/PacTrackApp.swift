@@ -25,7 +25,23 @@ struct PacTrackApp: App {
 
 struct MainView: View {
     @Binding var document: PacDocument
-    @State private var editor = Editor(client: Simulation())
+    /// Built once, on appear: a `@State` initial value would allocate a throwaway Editor + Simulation on every view init.
+    @State private var editor: Editor?
+
+    var body: some View {
+        if let editor {
+            DocumentWindow(document: $document, editor: editor)
+        } else {
+            Theme.bg
+                .frame(minWidth: 1000, minHeight: 640)
+                .onAppear { editor = Editor(client: Simulation()) }
+        }
+    }
+}
+
+private struct DocumentWindow: View {
+    @Binding var document: PacDocument
+    let editor: Editor
 
     var body: some View {
         MainContent(editor: editor)

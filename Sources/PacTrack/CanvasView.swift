@@ -1,3 +1,4 @@
+import AppKit
 import PacEngine
 import PacKit
 import SwiftUI
@@ -11,7 +12,11 @@ struct CanvasView: View {
     @State private var offset = CGSize.zero
     @State private var zoom: CGFloat = 1
     @State private var panStart: CGSize?
-    @State private var zoomStart: CGFloat?
+    @State private var zoomStart: (zoom: CGFloat, offset: CGSize)?
+    @State private var hovering = false
+    /// Pointer position when the last mouse button went down: where a context-menu action inserts.
+    @State private var menuPoint = CGPoint.zero
+    @State private var monitor: Any?
     @State private var wire: Wire?
     @State private var hover = CGPoint.zero
 
@@ -54,7 +59,30 @@ struct CanvasView: View {
             .coordinateSpace(.named(Self.space))
             .clipped()
             .onContinuousHover(coordinateSpace: .named(Self.space)) { phase in
-                if case .active(let p) = phase { hover = p }
+                switch phase {
+                case .active(let p):
+                    hover = p
+                    hovering = true
+                case .ended:
+                    hovering = false
+                }
+            }
+            .onAppear {
+                // SwiftUI has no scroll-wheel gesture: two-finger scroll pans the canvas under the pointer.
+                monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .rightMouseDown]) { event in
+                    guard hovering else { return event }
+                    if event.type != .scrollWheel {
+                        menuPoint = hover
+                        return event
+                    }
+                    let k: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+                    offset = CGSize(width: offset.width + event.scrollingDeltaX * k, height: offset.height + event.scrollingDeltaY * k)
+                    return nil
+                }
+            }
+            .onDisappear {
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
             }
             .dropDestination(for: String.self) { items, location in
                 guard let kind = items.first.flatMap(DeviceKind.init(rawValue:)) else { return false }
@@ -64,9 +92,11 @@ struct CanvasView: View {
             .simultaneousGesture(
                 MagnifyGesture()
                     .onChanged { value in
-                        let start = zoomStart ?? zoom
+                        let start = zoomStart ?? (zoom, offset)
                         zoomStart = start
-                        zoom = min(max(start * value.magnification, 0.3), 3)
+                        let z = min(max(start.zoom * value.magnification, 0.3), 3)
+                        offset = Self.zoomed(offset: start.offset, zoom: start.zoom, to: z, anchor: value.startLocation)
+                        zoom = z
                     }
                     .onEnded { _ in zoomStart = nil }
             )
@@ -87,6 +117,12 @@ struct CanvasView: View {
     }
 
     // MARK: geometry
+
+    /// Pan offset that keeps the world point under `anchor` fixed while the zoom changes.
+    static func zoomed(offset: CGSize, zoom: CGFloat, to newZoom: CGFloat, anchor: CGPoint) -> CGSize {
+        CGSize(width: anchor.x - (anchor.x - offset.width) / zoom * newZoom,
+               height: anchor.y - (anchor.y - offset.height) / zoom * newZoom)
+    }
 
     private func toScreen(_ p: Pos) -> CGPoint {
         CGPoint(x: p.x * zoom + offset.width, y: p.y * zoom + offset.height)
@@ -179,11 +215,14 @@ struct CanvasView: View {
     private func paneMenu(size: CGSize) -> some View {
         Menu("Aggiungi dispositivo") {
             ForEach(DeviceKind.allCases, id: \.self) { kind in
-                Button { Task { await editor.addDevice(kind, at: snap(toWorld(hover))) } } label: { Label(kind.label, systemImage: kind.symbol) }
+                Button {
+                    let at = snap(toWorld(menuPoint))
+                    Task { await editor.addDevice(kind, at: at) }
+                } label: { Label(kind.label, systemImage: kind.symbol) }
             }
         }
         Button("Incolla") {
-            let at = snap(toWorld(hover))
+            let at = snap(toWorld(menuPoint))
             Task { await editor.paste(at: at) }
         }
         Button("Adatta alla vista") { fit(size) }
