@@ -3,7 +3,7 @@ let LOOP_REPEATS = 3
 let LOOP_WINDOW_NS = 1 * S
 /// A device that warned stays quiet this long.
 let LOOP_QUIET_NS = 10 * S
-private let LOOP_MEMORY = 64
+private let LOOP_MEMORY = 1024
 private let MAX_WARNINGS = 20
 
 struct SimWarning: Equatable, Sendable {
@@ -23,7 +23,8 @@ final class Sim {
     /// Newest L2 loop warnings, oldest first.
     private(set) var warnings: [SimWarning] = []
     private var warningCount = 0
-    private var l2Seen: [String: [(frame: Int, time: Int)]] = [:]
+    /// Per L2 device: frame id → (times seen in the window, first sighting).
+    private var l2Seen: [String: [Int: (count: Int, first: Int)]] = [:]
     private var lastWarned: [String: Int] = [:]
 
     init(seed: UInt32 = 1, logCapacity: Int = 100_000) {
@@ -49,14 +50,13 @@ final class Sim {
     }
 
     /// Hubs and switches report every frame they receive.
-    // ponytail: last 64 frames per device, O(64) per frame; a hash of recent ids if storms get bigger
+    // ponytail: per-device memory of 1024 frame ids, wiped when full (a loop is re-detected within a few frames)
     func noteL2(_ frame: EthernetFrame, at node: String) {
-        var recent = l2Seen[node, default: []]
-        recent.append((frame.id, now))
-        if recent.count > LOOP_MEMORY { recent.removeFirst(recent.count - LOOP_MEMORY) }
-        l2Seen[node] = recent
-        let repeats = recent.reduce(0) { $0 + ($1.frame == frame.id && now - $1.time <= LOOP_WINDOW_NS ? 1 : 0) }
-        guard repeats >= LOOP_REPEATS, now - (lastWarned[node] ?? -LOOP_QUIET_NS) >= LOOP_QUIET_NS else { return }
+        let seen = l2Seen[node]?[frame.id]
+        let entry: (count: Int, first: Int) = seen.map { now - $0.first <= LOOP_WINDOW_NS ? ($0.count + 1, $0.first) : (1, now) } ?? (1, now)
+        if l2Seen[node, default: [:]].count >= LOOP_MEMORY { l2Seen[node] = [:] }
+        l2Seen[node, default: [:]][frame.id] = entry
+        guard entry.count >= LOOP_REPEATS, now - (lastWarned[node] ?? -LOOP_QUIET_NS) >= LOOP_QUIET_NS else { return }
         lastWarned[node] = now
         warningCount += 1
         warnings.append(SimWarning(id: warningCount, node: node, time: now))

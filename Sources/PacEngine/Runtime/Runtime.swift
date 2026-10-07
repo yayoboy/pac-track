@@ -3,6 +3,12 @@ import Foundation
 private let MAX_APPS = 20
 /// Longest wall-clock gap simulated in one call; longer gaps (sleep, hidden window) are dropped.
 private let MAX_STEP_MS = 100.0
+/// Simulation mode, play: one step per half second of wall time at 1×.
+private let SIM_STEP_MS = 500.0
+/// ponytail: fixed work budget per clock tick; a storm slows simulated time instead of freezing the app (spec §6 effective speed, not yet reported)
+private let MAX_EVENTS_PER_ADVANCE = 50_000
+/// A step whose events log nothing (only timers) gives up after this many.
+private let MAX_SILENT_EVENTS = 100_000
 
 private enum Program {
     case ping(Ping)
@@ -49,7 +55,11 @@ public final class Runtime {
     private var linkOrder: [String] = []
     private var apps: [App] = []
     private var appId = 0
-    private var version = 0
+    public private(set) var mode = SimMode.realtime
+    /// Bumped by `load`: a new Sim restarts event sequence numbers.
+    public private(set) var epoch = 0
+    private var stepCredit = 0.0
+    private var last: Snapshot?
 
     public init(seed: UInt32 = 1) {
         self.seed = seed
@@ -83,8 +93,7 @@ public final class Runtime {
             links[id] = try Link(sim: sim, try get(a.node).iface(a.iface), try get(b.node).iface(b.iface))
             linkOrder.append(id)
         case let .disconnect(id):
-            guard let link = links[id] else { throw EngineError("Unknown link \(id)") }
-            link.disconnect()
+            try link(id).disconnect()
             links[id] = nil
             linkOrder.removeAll { $0 == id }
         case let .setIp(node, iface, cidr):
@@ -100,10 +109,28 @@ public final class Runtime {
             try ipNode(node).routes.removeStatic(cidr)
         case let .ping(node, target):
             let t = target.trimmingCharacters(in: .whitespaces)
-            start(node, "ping \(t)", .ping(try Ping(node: try ipNode(node), target: t)))
+            start(node, "ping \(t)", .ping(try Ping(node: try liveIpNode(node), target: t)))
         case let .traceroute(node, target):
             let t = target.trimmingCharacters(in: .whitespaces)
-            start(node, "traceroute \(t)", .trace(try Traceroute(node: try ipNode(node), target: t)))
+            start(node, "traceroute \(t)", .trace(try Traceroute(node: try liveIpNode(node), target: t)))
+        case let .setMode(value):
+            mode = value
+            running = value == .realtime
+            stepCredit = 0
+        case .step:
+            step()
+        case let .setPower(id, on):
+            let node = try get(id)
+            guard node.powered != on else { return }
+            node.powered = on
+            if !on {
+                node.reset()
+                for app in apps where app.node == id { app.program.stop() }
+            }
+        case let .updateLink(id, options):
+            try link(id).update(options)
+        case let .setLinkUp(id, up):
+            try link(id).up = up
         case let .setRunning(value):
             running = value
         case let .setSpeed(value):
@@ -116,11 +143,46 @@ public final class Runtime {
 
     public func advance(wallMs: Double) {
         guard running else { return }
-        sim.run(Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded()))
+        switch mode {
+        case .realtime:
+            sim.sched.runUntil(sim.now + Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded()), maxEvents: MAX_EVENTS_PER_ADVANCE)
+        case .simulation:
+            stepCredit += min(wallMs, MAX_STEP_MS) * speed
+            while stepCredit >= SIM_STEP_MS {
+                stepCredit -= SIM_STEP_MS
+                step()
+            }
+        }
     }
 
+    /// Runs scheduled events until one is logged (a frame sent, received or dropped) or none are left.
+    private func step() {
+        let before = sim.log.total
+        var budget = MAX_SILENT_EVENTS
+        while sim.log.total == before, budget > 0, sim.sched.step() { budget -= 1 }
+    }
+
+    /// Log entries from `seq` on, at most the newest `limit` (the UI pulls only what it has not seen).
+    public func events(from seq: Int, limit: Int = 5000) -> [EventView] {
+        sim.log.since(max(seq, sim.log.total - limit)).map(eventView)
+    }
+
+    /// Header-by-header view of one logged frame; nil once the ring buffer dropped it.
+    public func pdu(_ seq: Int) -> [PduLayer]? {
+        sim.log.event(seq).map(pduLayers)
+    }
+
+    /// The version moves only when something visible changed, so a paused window does not redraw.
     public func snapshot() -> Snapshot {
-        version += 1
+        var s = build()
+        s.version = last?.version ?? 0
+        if s == last { return s }
+        s.version += 1
+        last = s
+        return s
+    }
+
+    private func build() -> Snapshot {
         let now = sim.now
         let nodeViews = nodeOrder.map { id -> NodeView in
             let (node, kind) = nodes[id]!
@@ -129,6 +191,7 @@ public final class Runtime {
                 id: id,
                 kind: kind,
                 name: node.name,
+                powered: node.powered,
                 ifaces: node.interfaces.map {
                     IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil)
                 },
@@ -143,10 +206,13 @@ public final class Runtime {
         }
         let linkViews = linkOrder.map { id in
             let l = links[id]!
-            return LinkView(id: id, a: IfaceRef(node: l.a.node.id, iface: l.a.name), b: IfaceRef(node: l.b.node.id, iface: l.b.name))
+            return LinkView(id: id, a: IfaceRef(node: l.a.node.id, iface: l.a.name), b: IfaceRef(node: l.b.node.id, iface: l.b.name),
+                            options: l.opts, up: l.up)
         }
         let appViews = apps.map { AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done) }
-        return Snapshot(version: version, seed: seed, timeNs: now, running: running, speed: speed, nodes: nodeViews, links: linkViews, apps: appViews)
+        return Snapshot(version: 0, seed: seed, timeNs: now, running: running, speed: speed, mode: mode, epoch: epoch,
+                        eventCount: sim.log.total, nodes: nodeViews, links: linkViews, apps: appViews,
+                        warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) })
     }
 
     private func create(_ id: String, _ kind: DeviceKind) -> Node {
@@ -169,6 +235,17 @@ public final class Runtime {
         return ip
     }
 
+    private func link(_ id: String) throws -> Link {
+        guard let link = links[id] else { throw EngineError("Unknown link \(id)") }
+        return link
+    }
+
+    private func liveIpNode(_ id: String) throws -> IpNode {
+        let ip = try ipNode(id)
+        guard ip.powered else { throw EngineError("\(ip.name) is powered off") }
+        return ip
+    }
+
     private func start(_ node: String, _ title: String, _ program: Program) {
         appId += 1
         apps.append(App(id: appId, node: node, title: title, program: program))
@@ -183,10 +260,15 @@ public final class Runtime {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }
         }
-        for l in t.links { try next.handle(.connect(id: l.id, a: l.a, b: l.b)) }
+        for l in t.links {
+            try next.handle(.connect(id: l.id, a: l.a, b: l.b))
+            try next.handle(.updateLink(id: l.id, options: l.options))
+            if !l.up { try next.handle(.setLinkUp(id: l.id, up: false)) }
+        }
         for n in t.nodes {
             for r in n.routes { try next.ipNode(n.id).routes.addStatic(r.cidr, r.nextHop, requireReachable: false) }
         }
+        for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }
         sim = next.sim
         seed = next.seed
@@ -195,5 +277,7 @@ public final class Runtime {
         links = next.links
         linkOrder = next.linkOrder
         apps = []
+        epoch += 1
+        stepCredit = 0
     }
 }
