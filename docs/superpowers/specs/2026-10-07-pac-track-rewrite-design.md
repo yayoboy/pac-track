@@ -2,6 +2,8 @@
 
 Data: 2026-10-07 · Branch: `rewrite/v3` (da `main`)
 
+> **Revisione 2 (2026-10-07): app nativa macOS in Swift.** L'utente usa solo Mac: la piattaforma passa da Electron a Swift/SwiftUI. Le sezioni 2, 4, 6, 8, 10 e 11 sono aggiornate; il comportamento del motore (§5), l'UX (§7) e la gestione errori (§9) restano validi. La M1 in TypeScript è il riferimento eseguibile per il porting.
+
 ## 1. Obiettivo
 
 App desktop che simula una rete in modo fedele ai protocolli e realistico nei tempi, utilizzabile per:
@@ -16,10 +18,10 @@ Criterio di successo: uno scenario da manuale (es. ping tra due subnet via route
 
 | Tema | Decisione |
 |---|---|
-| Piattaforma | Electron desktop (macOS/Win/Linux) |
+| Piattaforma | App nativa macOS (solo Mac), minimo macOS 15 |
 | Codice esistente | Riscrittura da zero; v1 (root) rimossa a fine MVP |
-| Stack | Electron + Vite + React + TypeScript, React Flow (xyflow) per il canvas, Zustand, Radix/shadcn, Vitest, Playwright |
-| Motore | TypeScript puro, simulatore a eventi discreti, in Web Worker |
+| Stack | Swift 6 + SwiftUI, Swift Package Manager (compilabile senza Xcode), Swift Testing |
+| Motore | Swift puro (porting 1:1 della M1 TypeScript), simulatore a eventi discreti, in un actor dedicato |
 | Interazione | Solo GUI (nessuna CLI per dispositivo) |
 | Tempo | Modalità Realtime (velocità 0.1×–100×) + modalità Simulation (pausa/step, lista eventi, ispettore PDU) |
 | Stile | "IDE scuro" (JetBrains/VS Code), monospace per dati tecnici, colore solo per stato e protocolli |
@@ -33,19 +35,17 @@ Criterio di successo: uno scenario da manuale (es. ping tra due subnet via route
 ## 4. Architettura
 
 ```
-Electron main ── IPC ── Renderer (React UI) ── postMessage ── Web Worker (motore)
- file I/O, menu,          canvas, pannelli,                    stato di rete,
- dialoghi nativi          store Zustand                        coda eventi, clock
+PacTrack (app SwiftUI, @MainActor) ── async ── SimulationActor ── PacEngine
+ finestre documento, canvas,                    possiede la Sim,     motore puro
+ ispettore, menu, UndoManager                   clock, snapshot
 ```
 
-- **Unica fonte di verità**: il motore possiede tutto lo stato di rete. La UI possiede solo presentazione (posizioni, zoom, selezione, pannelli) e uno specchio read-only dello stato ricevuto dal motore.
-- **Struttura repo**:
-  - `src/engine/` — motore puro; vietato importare DOM/React/Electron (regola ESLint `no-restricted-imports` + `lib` TS senza `dom`).
-  - `src/worker/` — adattatore postMessage ↔ motore.
-  - `src/ui/` — React.
-  - `src/shared/` — tipi del protocollo UI↔worker e del formato file.
-  - `electron/` — main + preload (contextIsolation on, nodeIntegration off; preload espone solo `openFile`, `saveFile`, `saveFileAs`, `recoveryWrite`, `recoveryRead`).
-- Il lockfile (`package-lock.json`) va versionato: la riga che lo ignora in `.gitignore` va rimossa.
+- **Unica fonte di verità**: il motore possiede tutto lo stato di rete. La UI possiede solo presentazione (posizioni, zoom, selezione, pannelli) e uno snapshot immutabile (`Sendable`) ricevuto dall'actor.
+- **Swift Package** con tre target:
+  - `PacEngine` — libreria, motore puro: solo Foundation, nessun import di SwiftUI/AppKit.
+  - `PacKit` — libreria: comandi, snapshot, formato file, `SimulationActor`, modello documento e logica di undo. Testabile senza UI.
+  - `PacTrack` — eseguibile SwiftUI. Uno script (`scripts/bundle.sh`) crea `PacTrack.app` con `Info.plist` (tipo documento `.ptk`) e firma ad-hoc.
+- Si compila con `swift build` e si testa con `swift test` usando i soli Command Line Tools; Xcode è opzionale.
 
 ## 5. Motore di simulazione
 
@@ -94,16 +94,16 @@ Header tipizzati con tutti i campi reali: Ethernet II, ARP, IPv4 (ver, ihl, tos,
 - **Generatore di traffico**: flusso UDP a bitrate costante oppure trasferimento TCP di N byte, tra due host. Produce metriche per flusso.
 - **Metriche**: per link (utilizzo %, occupazione coda, drop), per flusso (throughput, RTT/latenza, jitter, perdita). Campionate ogni 100 ms di tempo simulato.
 
-## 6. Protocollo UI ↔ worker
+## 6. Protocollo UI ↔ motore
 
-Unione discriminata TypeScript in `src/shared/protocol.ts`.
+`enum Command` e struct `Snapshot` in `PacKit`, tutti `Sendable`. La UI chiama `await simulation.apply(command)` (lancia l'errore tipizzato del motore) e osserva gli snapshot pubblicati ~20 volte al secondo. I nomi qui sotto sono indicativi del perimetro completo; ogni fase introduce solo i comandi che le servono.
 
 - **UI → motore**: `addNode`, `removeNode`, `updateNode`, `connect`, `disconnect`, `updateLink`, `configureInterface`, `configureService`, `setPower`, `runApp`, `stopApp`, `play`, `pause`, `step`, `setSpeed`, `setMode`, `load`, `serialize`.
 - **Motore → UI**: `ack {reqId}` / `error {reqId, code, message, field?}`, `stateDelta`, `events` (lotto per frame), `appOutput`, `metrics`, `clock {simTimeNs, effectiveSpeed}`, `warning`.
-- Ogni comando porta un `reqId`; la UI attende `ack`/`error` per aggiornare form e cronologia.
+- Ogni `apply` restituisce dopo aver aggiornato lo snapshot, così la UI non lavora mai su stato vecchio.
 
 ### Modalità di tempo
-- **Realtime**: tick ~16 ms; il worker avanza il tempo di `Δwall × speed` ed esegue gli eventi fino al target. Se un tick richiede troppo, la velocità effettiva cala e viene notificata (`clock.effectiveSpeed`), nessun blocco.
+- **Realtime**: tick ~16 ms; l'actor avanza il tempo di `Δwall × speed` ed esegue gli eventi fino al target. Se un tick richiede troppo, la velocità effettiva cala e viene notificata (`clock.effectiveSpeed`), nessun blocco.
 - **Simulation**: clock fermo; `step` esegue il prossimo evento; `play` avanza lentamente con animazione; la UI evidenzia la PDU corrente.
 - Log eventi: buffer circolare, default 100 000 voci, configurabile.
 
@@ -112,7 +112,7 @@ Unione discriminata TypeScript in `src/shared/protocol.ts`.
 ### 7.1 Layout (approvato in mockup)
 1. **Barra superiore**: menu (File/Modifica/Vista), strumento (Sposta/Collega), interruttore Realtime/Simulation, ⏮ ▶ ⏭, velocità, clock simulato.
 2. **Palette** a sinistra: dispositivi per categoria (Rete, Host) e cavi (Ethernet 1 Gb/s, Fibra 10 Gb/s, Personalizzato), con ricerca; drag sul canvas.
-3. **Canvas** React Flow: nodi con nome, IP, LED stato; link con banda/ritardo; pacchetti come etichette colorate per protocollo; pan, zoom, griglia con snap, minimappa, selezione multipla.
+3. **Canvas** (SwiftUI, disegnato su misura): nodi con nome, IP, LED stato; link con banda/ritardo; pacchetti come etichette colorate per protocollo; pan, zoom, griglia con snap, minimappa, selezione multipla.
 4. **Ispettore** a destra, schede: Interfacce · Tabelle (ARP, MAC, routing, NAT, lease DHCP, live) · Servizi (DHCP, DNS, NAT, firewall, server) · App (ping, traceroute, nslookup, generatore traffico). Per i link: banda, ritardo, perdita, coda, stato.
 5. **Pannello inferiore** ridimensionabile: Eventi (lista filtrabile per protocollo/nodo, clic ⇒ ispettore PDU ad albero header per header) · Output app · Metriche (grafici).
 
@@ -126,33 +126,35 @@ Unione discriminata TypeScript in `src/shared/protocol.ts`.
 Token colore scuri stile JetBrains (sfondo `#1e1f22`, pannelli `#2b2d30`, bordi `#393b40`, testo `#bcbec4`, accento `#3574f0`). Colori protocollo fissi: ARP `#f0a732`, ICMP `#e5507a`, DHCP `#56a8f5`, DNS `#b083f0`, TCP `#5fb865`, UDP `#2fbfc4`. Monospace per IP, MAC, tempi, tabelle, PDU.
 
 ### 7.4 Scorciatoie
-Gestite con un unico hook che legge lo stato corrente tramite store (niente closure stantie): V sposta, C collega, Canc elimina, Cmd+Z/Cmd+Shift+Z, Cmd+C/V/D, Cmd+S/O, Spazio play/pausa, `.` step.
+Comandi di menu nativi (`.commands`) con le scorciatoie macOS standard: V sposta, C collega, Canc elimina, Cmd+Z/Cmd+Shift+Z, Cmd+C/V/D, Cmd+S/O, Spazio play/pausa, `.` step.
 
 ## 8. Persistenza e cronologia
 - File progetto `.ptk` (JSON): `{ version, seed, nodes, links, services, layout, view }`. Versione esplicita per migrazioni.
-- Apertura/salvataggio via dialoghi nativi Electron. Export PNG/SVG del canvas dal renderer.
-- Autosave di recupero ogni 30 s in `userData/recovery.ptk`; all'avvio dopo crash si propone il ripristino.
-- Undo/redo: command pattern sui comandi di modifica topologia/configurazione (ogni comando conosce il proprio inverso); le azioni di simulazione non entrano in cronologia. Eliminare un nodo registra anche i link rimossi, così l'undo li ripristina.
+- Documento macOS nativo (`DocumentGroup` + `FileDocument`, tipo `.ptk`): apri, salva, recenti, salvataggio automatico, versioni e finestre multiple vengono dal sistema (sostituisce l'autosave/recovery manuale). Export PNG del canvas con `ImageRenderer`.
+- Undo/redo con l'`UndoManager` di sistema. Ogni modifica registra lo snapshot della topologia precedente (memento): annullare una modifica di rete ricarica la rete (clock, cache ARP/MAC e app ripartono); annullare uno spostamento ripristina solo le posizioni. Le azioni di simulazione non entrano in cronologia. Eliminare un nodo con i suoi cavi è un solo passo.
 
 ## 9. Gestione errori
 - **Configurazione**: validazione nel motore; risposta `error` tipizzata (IP malformato, IP duplicato nello stesso segmento, gateway fuori subnet, porta occupata, self-link, pool DHCP fuori subnet). La UI mostra l'errore sul campo; stato invariato.
 - **Errori di rete**: simulati come nella realtà (ARP senza risposta, ICMP unreachable, timeout TCP, broadcast storm), non bloccati. I loop L2 generano un avviso.
 - **File**: `.ptk` corrotto o versione non supportata ⇒ messaggio chiaro, progetto aperto intatto.
-- **Worker**: eccezione catturata ⇒ UI propone ricarica dall'ultimo stato salvato/recovery.
+- **Motore**: un errore inatteso in un comando viene riportato come errore del comando; lo stato resta quello precedente.
 
 ## 10. Test
-- **Motore (Vitest, deterministico)** — scenari:
+- **Motore (Swift Testing, deterministico)** — scenari:
   ARP request/reply e cache · switch learning/flooding/aging · ping tra due subnet via due router (TTL atteso) · traceroute con Time Exceeded per hop · DHCP DORA, rinnovo e scadenza lease · DNS risoluzione e NXDOMAIN · TCP handshake, ritrasmissione dopo perdita, fast retransmit · NAT PAT inside→outside e ritorno · firewall deny/allow e stateful · throughput TCP su link 10 Mb/s che converge al goodput teorico (±5%) · tail drop con coda piena.
 - **Valori noti**: ICMP echo = 98 B; ritardo singolo hop = serializzazione + propagazione calcolati a mano; checksum IPv4/ICMP confrontati con valori di riferimento.
-- **UI**: Playwright su Electron per i flussi principali (crea topologia → configura IP → ping → output corretto; DHCP da GUI; salva/riapri). Test di componente solo dove c'è logica.
+- **Logica dell'app** (`PacKit`, Swift Testing): comandi, undo/redo, formato file, validazioni, nomi e porte — l'equivalente dei test di `actions.ts`.
+- **UI** (senza Xcode): le viste restano sottili e tutta la logica sta in `PacKit`. A ogni fase: avvio reale dell'app con screenshot di controllo e una checklist manuale dei flussi. Con Xcode installato si aggiungono test XCUITest per gli stessi flussi.
 
 ## 11. Fasi di consegna
 
-1. **M1 — Motore L2/L3 headless**: clock, coda eventi, link/code, NIC, hub, switch, ARP, IPv4, ICMP, UDP (necessario a traceroute), ping/traceroute. Solo test.
-2. **M2 — Guscio Electron + UI base**: layout completo, palette, canvas, ispettore Interfacce/Tabelle/App, eventi + ispettore PDU, Realtime/Simulation, menu contestuali, salvataggio/apertura, undo/redo.
+1. **M1 — Motore L2/L3 headless (TypeScript)**: completata, fa da riferimento eseguibile.
+1. **M1s — Porting del motore in Swift** (`PacEngine`) con tutti i test della M1; poi rimozione del codice TypeScript.
+2. **M2a — App SwiftUI**: documento `.ptk`, layout (palette, canvas, ispettore, output), canvas con drag/zoom/cavi/selezione, ispettore Interfacce/Routing/Tabelle/App, menu contestuali, undo/redo.
+2. **M2b — Simulazione visiva**: Realtime/Simulation con step, lista eventi + ispettore PDU, animazione pacchetti, proprietà dei link, accensione/spegnimento, copia/incolla, ricerca nella palette, avviso loop.
 3. **M3 — DHCP e DNS** (motore + scheda Servizi).
 4. **M4 — TCP, generatore di traffico, Metriche**.
 5. **M5 — NAT e firewall**.
-6. **M6 — Rifinitura**: autosave/recovery, export immagini, packaging (electron-builder), rimozione v1 dalla root, README.
+6. **M6 — Rifinitura**: export immagini, icona e packaging `.app` firmato, rimozione v1 (`legacy/`), README.
 
 Ogni fase si chiude con test verdi e app avviabile.
