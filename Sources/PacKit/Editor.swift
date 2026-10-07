@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 import PacEngine
 
@@ -20,6 +21,16 @@ public final class Editor {
     public var positions: [String: Pos] = [:]
     public private(set) var selection: Selection?
     public private(set) var error: EditorError?
+    /// Newest log entries pulled from the engine (at most `eventLimit`), oldest first.
+    public private(set) var events: [EventView] = []
+    /// PDUs being drawn on cables.
+    public private(set) var flights: [Flight] = []
+    public private(set) var selectedEvent: Int?
+    /// Headers of `selectedEvent`; nil while loading or once the engine forgot it.
+    public private(set) var pdu: [PduLayer]?
+    private var dismissedWarning = 0
+    @ObservationIgnored private var eventCursor = 0
+    @ObservationIgnored private var eventEpoch = 0
     private var past: [Topology] = []
     private var future: [Topology] = []
     @ObservationIgnored private var pendingMove: Topology?
@@ -30,6 +41,10 @@ public final class Editor {
     @ObservationIgnored public var onChange: ((Topology) -> Void)?
 
     private static let historyLimit = 100
+    private static let eventLimit = 5000
+    /// Process-wide device clipboard.
+    // ponytail: in-memory, not NSPasteboard; enough to copy between windows of this app
+    private static var clipboard: TopologyNode?
 
     public init(client: any EngineClient) {
         self.client = client
@@ -38,10 +53,33 @@ public final class Editor {
     public var canUndo: Bool { !past.isEmpty }
     public var canRedo: Bool { !future.isEmpty }
     public var current: Topology { makeTopology(snapshot, positions) }
+    /// Newest L2 loop warning not dismissed yet.
+    public var warning: WarningView? { snapshot.warnings.last.flatMap { $0.id > dismissedWarning ? $0 : nil } }
 
     /// Accepts only snapshots newer than the one shown, so a late clock tick never rolls back an edit.
     func accept(_ s: Snapshot) {
         if s.version > snapshot.version { snapshot = s }
+    }
+
+    /// Pulls only log entries newer than those shown and starts their animations.
+    func syncEvents() async {
+        let s = snapshot
+        if s.epoch != eventEpoch {
+            eventEpoch = s.epoch
+            eventCursor = 0
+            events = []
+            flights = []
+            selectedEvent = nil
+            pdu = nil
+            dismissedWarning = 0
+        }
+        guard s.eventCount > eventCursor else { return }
+        let batch = await client.events(from: eventCursor, epoch: s.epoch)
+        let fresh = batch.filter { $0.id >= eventCursor }
+        guard eventEpoch == s.epoch, let last = fresh.last else { return }
+        eventCursor = last.id + 1
+        events = Array((events + fresh).suffix(Self.eventLimit))
+        flights = updateFlights(flights, with: fresh, links: snapshot.links, now: Date.timeIntervalSinceReferenceDate)
     }
 
     private func fail(_ key: String, _ error: any Error) {
@@ -73,6 +111,7 @@ public final class Editor {
     private func loadNow(_ t: Topology) async -> Bool {
         do {
             accept(try await client.send(.load(t)))
+            await syncEvents()
             positions = PacKit.positions(of: t)
             past = []
             future = []
@@ -94,6 +133,7 @@ public final class Editor {
     private func runNow(_ cmd: Command, key: String?) async -> Bool {
         do {
             accept(try await client.send(cmd))
+            await syncEvents()
             error = nil
             return true
         } catch {
@@ -202,6 +242,7 @@ public final class Editor {
                 fail("history", error)
                 return false
             }
+            await syncEvents()
         }
         positions = PacKit.positions(of: t)
         selection = nil
@@ -233,6 +274,83 @@ public final class Editor {
 
     public func tick(wallMs: Double) async {
         accept(await client.advance(wallMs: wallMs))
+        await syncEvents()
+        let kept = pruneFlights(flights, links: snapshot.links, now: Date.timeIntervalSinceReferenceDate)
+        if kept.count != flights.count { flights = kept }
+    }
+
+    /// Simulation mode: runs to the next logged event and opens its PDU (the "current PDU").
+    public func step() async {
+        await serialized {
+            let before = self.eventCursor
+            guard await self.runNow(.step, key: nil), self.eventCursor > before, let last = self.events.last else { return }
+            await self.selectEventNow(last.id)
+        }
+    }
+
+    public func selectEvent(_ id: Int?) async {
+        await serialized { await self.selectEventNow(id) }
+    }
+
+    private func selectEventNow(_ id: Int?) async {
+        selectedEvent = id
+        pdu = nil
+        guard let id else { return }
+        let layers = await client.pdu(id, epoch: eventEpoch)
+        if selectedEvent == id { pdu = layers }
+    }
+
+    public func dismissWarning() {
+        dismissedWarning = snapshot.warnings.last?.id ?? dismissedWarning
+    }
+
+    public func copy(_ id: String) {
+        Self.clipboard = current.nodes.first { $0.id == id }
+    }
+
+    /// Pastes the copied device at `pos`, or 28 pt below-right of the last copy.
+    public func paste(at pos: Pos?) async {
+        await serialized {
+            guard var src = Self.clipboard else { return }
+            src.pos = pos ?? Pos(x: src.pos.x + 28, y: src.pos.y + 28)
+            if pos == nil { Self.clipboard = src }
+            await self.insertCopy(of: src)
+        }
+    }
+
+    public func duplicate(_ id: String) async {
+        await serialized {
+            guard var src = self.current.nodes.first(where: { $0.id == id }) else { return }
+            src.pos = Pos(x: src.pos.x + 28, y: src.pos.y + 28)
+            await self.insertCopy(of: src)
+        }
+    }
+
+    /// Adds a device configured like `src` (addresses, static routes, power; no cables) in one undo step.
+    private func insertCopy(of src: TopologyNode) async {
+        let id = newId()
+        positions[id] = src.pos
+        var cmds: [Command] = [.addNode(id: id, kind: src.kind, name: defaultName(src.kind, existing: snapshot.nodes))]
+        cmds += src.ifaces.compactMap { i in i.cidr.map { Command.setIp(node: id, iface: i.name, cidr: $0) } }
+        cmds += src.routes.map { Command.addRoute(node: id, cidr: $0.cidr, nextHop: $0.nextHop) }
+        if !src.powered { cmds.append(.setPower(id: id, on: false)) }
+        if await editNow(cmds, key: "paste") { selection = .node(id) }
+    }
+
+    /// Applies one link property typed in the inspector; parse and range errors show on that field.
+    public func setLink(_ id: String, _ field: LinkField, _ text: String) async {
+        await serialized {
+            let key = "link:\(id):\(field.rawValue)"
+            guard let link = self.snapshot.links.first(where: { $0.id == id }) else { return }
+            let options: LinkOptions
+            do {
+                options = try field.apply(text, to: link.options)
+            } catch {
+                self.fail(key, error)
+                return
+            }
+            await self.editNow([.updateLink(id: id, options: options)], key: key)
+        }
     }
 
     /// Advances the simulation every 50 ms until the calling task is cancelled.

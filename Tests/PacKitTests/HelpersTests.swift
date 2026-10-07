@@ -45,4 +45,53 @@ import Testing
         #expect(snap(Pos(x: 20, y: 6)) == Pos(x: 14, y: 0))
         #expect(snap(Pos(x: 22, y: -8)) == Pos(x: 28, y: -14))
     }
+
+    @Test func formatsSimulatedTimeToTheNanosecond() {
+        #expect(formatSimTime(0) == "0.000000000 s")
+        #expect(formatSimTime(1_000_002_672) == "1.000002672 s")
+    }
+
+    @Test func filtersEventsByProtocolAndNode() {
+        let e = { (id: Int, node: String, p: Proto) in
+            EventView(id: id, timeNs: 0, kind: .tx, node: node, iface: "eth0", proto: p, frameId: id, bytes: 42, info: "", reason: nil)
+        }
+        let all = [e(0, "a", .arp), e(1, "b", .icmp), e(2, "a", .icmp)]
+        #expect(filterEvents(all, protos: [.icmp], node: nil).map(\.id) == [1, 2])
+        #expect(filterEvents(all, protos: Set(Proto.allCases), node: "a").map(\.id) == [0, 2])
+    }
+
+    @Test func animatesAFrameFromTxUntilItArrivesAndForAtLeastTheFlightTime() {
+        let links = [LinkView(id: "l", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "b", iface: "eth0"))]
+        let tx = EventView(id: 0, timeNs: 0, kind: .tx, node: "a", iface: "eth0", proto: .icmp, frameId: 7, bytes: 98, info: "", reason: nil)
+        let rx = EventView(id: 1, timeNs: 1172, kind: .rx, node: "b", iface: "eth0", proto: .icmp, frameId: 7, bytes: 98, info: "", reason: nil)
+        var f = updateFlights([], with: [tx], links: links, now: 0)
+        #expect(f.map(\.from) == ["a"] && !f[0].arrived)
+        #expect(flightProgress(f[0], now: 0.2) == 0.5)
+        #expect(flightProgress(f[0], now: 9) == 1)
+        #expect(pruneFlights(f, links: links, now: 99).count == 1) // still on the wire: waits for the next step
+        f = updateFlights(f, with: [rx], links: links, now: 0.1)
+        #expect(f.count == 1 && f[0].arrived)
+        #expect(pruneFlights(f, links: links, now: 0.5).isEmpty)
+        #expect(pruneFlights(f, links: [], now: 0.1).isEmpty) // cable removed
+    }
+
+    @Test func parsesAndFormatsLinkFields() throws {
+        let o = LinkOptions()
+        #expect(LinkField.allCases.map { $0.format(o) } == ["1000", "0.5", "0", "1000"])
+        #expect(try LinkField.bandwidth.apply(" 0,1 ", to: o).bandwidthBps == 100_000)
+        #expect(try LinkField.delay.apply("2.5", to: o).propDelayNs == 2_500)
+        #expect(abs(try LinkField.loss.apply("1.1", to: o).lossRate - 0.011) < 1e-12)
+        #expect(LinkField.loss.format(try LinkField.loss.apply("1.1", to: o)) == "1.1")
+        for bad in ["abc", "", "nan", "inf", "1e300"] {
+            expectError("Invalid number") { _ = try LinkField.delay.apply(bad, to: o) }
+        }
+        expectError("Invalid number") { _ = try LinkField.queue.apply("2.5", to: o) }
+    }
+
+    @Test func formatsBandwidthWithUnits() {
+        #expect(formatBandwidth(1e9) == "1 Gb/s")
+        #expect(formatBandwidth(10e6) == "10 Mb/s")
+        #expect(formatBandwidth(1_500) == "1.5 kb/s")
+        #expect(formatBandwidth(64) == "64 b/s")
+    }
 }

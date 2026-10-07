@@ -50,7 +50,8 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
     Topology(seed: s.seed, nodes: s.nodes.map { n in
         TopologyNode(id: n.id, kind: n.kind, name: n.name, pos: positions[n.id] ?? Pos(x: 0, y: 0),
                      ifaces: n.ifaces.map { TopologyIface(name: $0.name, cidr: $0.cidr) },
-                     routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") })
+                     routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
+                     powered: n.powered)
     }, links: s.links)
 }
 
@@ -74,4 +75,55 @@ public func newId() -> String {
 
 public func snap(_ p: Pos, grid: Double = 14) -> Pos {
     Pos(x: (p.x / grid).rounded() * grid, y: (p.y / grid).rounded() * grid)
+}
+
+private let posix = Locale(identifier: "en_US_POSIX")
+
+private func plain(_ v: Double) -> String {
+    v.formatted(.number.precision(.fractionLength(0...6)).grouping(.never).locale(posix))
+}
+
+/// One editable link property, in the units people type.
+public enum LinkField: String, CaseIterable, Sendable {
+    case bandwidth, delay, loss, queue
+
+    public var label: String {
+        switch self {
+        case .bandwidth: "Banda (Mb/s)"
+        case .delay: "Ritardo di propagazione (µs)"
+        case .loss: "Perdita (%)"
+        case .queue: "Coda (frame)"
+        }
+    }
+
+    public func format(_ o: LinkOptions) -> String {
+        switch self {
+        case .bandwidth: plain(o.bandwidthBps / 1e6)
+        case .delay: plain(Double(o.propDelayNs) / 1e3)
+        case .loss: plain(o.lossRate * 100)
+        case .queue: String(o.queueLimit)
+        }
+    }
+
+    /// Turns text into the option; the engine checks the ranges.
+    public func apply(_ text: String, to o: LinkOptions) throws -> LinkOptions {
+        let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        guard let v = Double(t), v.isFinite, abs(v) < 1e15, self != .queue || v == v.rounded() else {
+            throw EngineError("Invalid number: \"\(text)\"")
+        }
+        var n = o
+        switch self {
+        case .bandwidth: n.bandwidthBps = v * 1e6
+        case .delay: n.propDelayNs = Int((v * 1e3).rounded())
+        case .loss: n.lossRate = v / 100
+        case .queue: n.queueLimit = Int(v)
+        }
+        return n
+    }
+}
+
+public func formatBandwidth(_ bps: Double) -> String {
+    let units: [(Double, String)] = [(1e9, "Gb/s"), (1e6, "Mb/s"), (1e3, "kb/s")]
+    let (scale, unit) = units.first { bps >= $0.0 } ?? (1, "b/s")
+    return "\(plain(bps / scale)) \(unit)"
 }

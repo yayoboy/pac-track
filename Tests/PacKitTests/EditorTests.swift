@@ -16,7 +16,21 @@ actor Recording: EngineClient {
         await simulation.advance(wallMs: wallMs)
     }
 
-    func clear() { sent = [] }
+    private(set) var fetches: [Int] = []
+
+    func events(from seq: Int, epoch: Int) async -> [EventView] {
+        fetches.append(seq)
+        return await simulation.events(from: seq, epoch: epoch)
+    }
+
+    func pdu(_ seq: Int, epoch: Int) async -> [PduLayer]? {
+        await simulation.pdu(seq, epoch: epoch)
+    }
+
+    func clear() {
+        sent = []
+        fetches = []
+    }
 }
 
 @MainActor
@@ -163,5 +177,99 @@ actor Recording: EngineClient {
         #expect(names.isEmpty)
         await editor.redo()
         #expect(names == ["PC1"])
+    }
+
+    private func lan() async -> (String, String) {
+        await editor.addDevice(.switch, at: origin)
+        await editor.addDevice(.pc, at: origin)
+        await editor.addDevice(.pc, at: origin)
+        await editor.connect(node("SW1").id, node("PC1").id)
+        await editor.connect(node("SW1").id, node("PC2").id)
+        await editor.edit(.setIp(node: node("PC1").id, iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.edit(.setIp(node: node("PC2").id, iface: "eth0", cidr: "10.0.0.2/24"))
+        return (node("PC1").id, node("PC2").id)
+    }
+
+    @Test func stepsInSimulationModeAndShowsTheNewPduAndItsFlight() async {
+        let (pc1, _) = await lan()
+        await editor.run(.setMode(.simulation))
+        await editor.run(.ping(node: pc1, target: "10.0.0.2"))
+        await editor.step()
+        #expect(editor.events.map { "\($0.kind.rawValue) \($0.proto.rawValue)" } == ["tx arp"])
+        #expect(editor.selectedEvent == editor.events[0].id)
+        #expect(editor.pdu?.map(\.title) == ["Ethernet II", "ARP"])
+        #expect(editor.flights.map(\.from) == [pc1])
+    }
+
+    @Test func pullsOnlyNewEventsAndClearsThemWhenTheNetworkIsReloaded() async {
+        let (pc1, _) = await lan()
+        await editor.run(.ping(node: pc1, target: "10.0.0.2"))
+        for _ in 0..<5 { await editor.tick(wallMs: 100) }
+        let ids = editor.events.map(\.id)
+        #expect(!ids.isEmpty && ids == Array(0..<ids.count))
+        await client.clear()
+        for _ in 0..<10 { await editor.tick(wallMs: 100) } // the second echo goes out at 1 s
+        #expect(await client.fetches.first == ids.count)
+        await editor.run(.setRunning(false))
+        await client.clear()
+        await editor.tick(wallMs: 100)
+        #expect(await client.fetches.isEmpty)
+        await editor.undo() // reloads the network: a new epoch
+        #expect(editor.events.isEmpty && editor.flights.isEmpty && editor.selectedEvent == nil)
+    }
+
+    @Test func copiesPastesAndDuplicatesADeviceWithItsConfiguration() async {
+        await editor.addDevice(.pc, at: Pos(x: 14, y: 14))
+        let pc = node("PC1").id
+        await editor.edit(.setIp(node: pc, iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.edit(.addRoute(node: pc, cidr: "0.0.0.0/0", nextHop: "10.0.0.254"))
+        await editor.edit(.setPower(id: pc, on: false))
+        editor.copy(pc)
+        await editor.paste(at: nil)
+        #expect(names == ["PC1", "PC2"])
+        let copy = node("PC2")
+        #expect(copy.ifaces[0].cidr == "10.0.0.1/24" && gatewayOf(copy) == "10.0.0.254" && !copy.powered)
+        #expect(editor.positions[copy.id] == Pos(x: 42, y: 42))
+        #expect(editor.selection == .node(copy.id))
+        await editor.paste(at: Pos(x: 140, y: 0))
+        #expect(editor.positions[node("PC3").id] == Pos(x: 140, y: 0))
+        await editor.duplicate(copy.id)
+        #expect(names == ["PC1", "PC2", "PC3", "PC4"])
+        #expect(editor.positions[node("PC4").id] == Pos(x: 70, y: 70))
+        await editor.undo()
+        await editor.undo()
+        await editor.undo()
+        #expect(names == ["PC1"])
+    }
+
+    @Test func setsLinkPropertiesFromTextAndShowsParseErrorsOnTheField() async {
+        await editor.addDevice(.pc, at: origin)
+        await editor.addDevice(.pc, at: origin)
+        await editor.connect(node("PC1").id, node("PC2").id)
+        let link = editor.snapshot.links[0].id
+        await editor.setLink(link, .bandwidth, "10")
+        await editor.setLink(link, .loss, "2,5")
+        #expect(editor.snapshot.links[0].options == LinkOptions(bandwidthBps: 10e6, lossRate: 0.025))
+        await editor.setLink(link, .delay, "abc")
+        #expect(editor.error == EditorError(key: "link:\(link):delay", message: "Invalid number: \"abc\""))
+        await editor.setLink(link, .loss, "150")
+        #expect(editor.error?.key == "link:\(link):loss" && editor.error?.message.contains("loss rate") == true)
+        await editor.undo()
+        #expect(editor.snapshot.links[0].options == LinkOptions(bandwidthBps: 10e6))
+    }
+
+    @Test func showsAnL2LoopWarningUntilDismissed() async {
+        await editor.addDevice(.switch, at: origin)
+        await editor.addDevice(.switch, at: origin)
+        await editor.addDevice(.pc, at: origin)
+        await editor.connect(node("SW1").id, node("SW2").id)
+        await editor.connect(node("SW1").id, node("SW2").id)
+        await editor.connect(node("PC1").id, node("SW1").id)
+        await editor.edit(.setIp(node: node("PC1").id, iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.run(.ping(node: node("PC1").id, target: "10.0.0.9"))
+        await editor.tick(wallMs: 10)
+        #expect(editor.warning != nil)
+        editor.dismissWarning()
+        #expect(editor.warning == nil)
     }
 }
