@@ -1,0 +1,158 @@
+# Pac-Track v3 — Design spec (riscrittura)
+
+Data: 2026-10-07 · Branch: `rewrite/v3` (da `main`)
+
+## 1. Obiettivo
+
+App desktop che simula una rete in modo fedele ai protocolli e realistico nei tempi, utilizzabile per:
+
+- **didattica** (stile Packet Tracer): vedere ARP, MAC learning, routing, DHCP, DNS, TCP pacchetto per pacchetto, ispezionare ogni header;
+- **progettazione/validazione**: disegnare una rete e verificare raggiungibilità, subnet, NAT, firewall;
+- **prestazioni**: banda, latenza, code, congestione, perdita, throughput.
+
+Criterio di successo: uno scenario da manuale (es. ping tra due subnet via router, DHCP, traceroute, download TCP su link lento) produce in Pac-Track la stessa sequenza di pacchetti, gli stessi campi e tempi coerenti con il calcolo a mano.
+
+## 2. Decisioni prese
+
+| Tema | Decisione |
+|---|---|
+| Piattaforma | Electron desktop (macOS/Win/Linux) |
+| Codice esistente | Riscrittura da zero; v1 (root) rimossa a fine MVP |
+| Stack | Electron + Vite + React + TypeScript, React Flow (xyflow) per il canvas, Zustand, Radix/shadcn, Vitest, Playwright |
+| Motore | TypeScript puro, simulatore a eventi discreti, in Web Worker |
+| Interazione | Solo GUI (nessuna CLI per dispositivo) |
+| Tempo | Modalità Realtime (velocità 0.1×–100×) + modalità Simulation (pausa/step, lista eventi, ispettore PDU) |
+| Stile | "IDE scuro" (JetBrains/VS Code), monospace per dati tecnici, colore solo per stato e protocolli |
+
+## 3. Perimetro
+
+**MVP (tutto incluso):** L2 Ethernet, hub, switch con MAC learning, ARP · IPv4, routing statico, ICMP (ping, traceroute) · DHCP, DNS · UDP, TCP · NAT/PAT, firewall stateful · generatore di traffico e metriche.
+
+**Fuori dall'MVP (fasi successive):** Wi-Fi, VLAN 802.1Q, STP, routing dinamico (RIP/OSPF), IPv6, CLI per dispositivo, HTTP/applicazioni L7 oltre DNS/DHCP.
+
+## 4. Architettura
+
+```
+Electron main ── IPC ── Renderer (React UI) ── postMessage ── Web Worker (motore)
+ file I/O, menu,          canvas, pannelli,                    stato di rete,
+ dialoghi nativi          store Zustand                        coda eventi, clock
+```
+
+- **Unica fonte di verità**: il motore possiede tutto lo stato di rete. La UI possiede solo presentazione (posizioni, zoom, selezione, pannelli) e uno specchio read-only dello stato ricevuto dal motore.
+- **Struttura repo**:
+  - `src/engine/` — motore puro; vietato importare DOM/React/Electron (regola ESLint `no-restricted-imports` + `lib` TS senza `dom`).
+  - `src/worker/` — adattatore postMessage ↔ motore.
+  - `src/ui/` — React.
+  - `src/shared/` — tipi del protocollo UI↔worker e del formato file.
+  - `electron/` — main + preload (contextIsolation on, nodeIntegration off; preload espone solo `openFile`, `saveFile`, `saveFileAs`, `recoveryWrite`, `recoveryRead`).
+- Il lockfile (`package-lock.json`) va versionato: la riga che lo ignora in `.gitignore` va rimossa.
+
+## 5. Motore di simulazione
+
+### 5.1 Tempo e determinismo
+- Tempo simulato in **nanosecondi** (`number`, intero; sicuro fino a ~104 giorni simulati).
+- Coda eventi: min-heap ordinato per `(time, seq)`; `seq` crescente garantisce ordine stabile a parità di tempo.
+- Ogni casualità (perdita, jitter, MAC, ISN TCP, transaction id DHCP/DNS) usa un PRNG con seed (es. mulberry32) salvato nel progetto. Stesso seed + stessa topologia + stessi comandi ⇒ stessa simulazione.
+
+### 5.2 Modello fisico
+- `Node { id, kind, name, powered, interfaces[], modules }`
+- `Interface { id, name, mac, ipv4?: {addr, prefix}, mode: 'static'|'dhcp', up, mtu=1500 }`
+- `Link { id, a: IfaceRef, b: IfaceRef, bandwidthBps, propDelayNs, lossRate, queueLimit=1000, up }`
+- Ogni direzione del link ha una coda FIFO di trasmissione. Tempo di serializzazione = `wireBytes × 8 / bandwidth`, con `wireBytes` = frame + FCS 4 + preambolo/SFD 8 + IFG 12, e padding al minimo di 64 B. Coda piena ⇒ tail drop (evento `drop` con motivo).
+- La dimensione mostrata nell'ispettore segue la convenzione Wireshark (senza FCS/preambolo): un ICMP echo standard è 98 B.
+- Link down o nodo spento ⇒ frame scartati, evento `drop`.
+
+### 5.3 PDU
+Header tipizzati con tutti i campi reali: Ethernet II, ARP, IPv4 (ver, ihl, tos, totalLength, id, flags, fragOffset, ttl, protocol, checksum, src, dst), ICMP, UDP, TCP (porte, seq, ack, flags, window, MSS option), DHCP (BOOTP + options 53/50/51/54/1/3/6), DNS (header, question, answer A). La lunghezza è calcolata dai campi; i checksum vengono calcolati realmente. Frammentazione IPv4: fuori MVP; pacchetto > MTU con DF ⇒ ICMP "fragmentation needed", senza DF ⇒ drop con avviso.
+
+### 5.4 Moduli di protocollo e valori di default
+
+| Modulo | Comportamento |
+|---|---|
+| NIC | accetta frame per proprio MAC o broadcast, scarta il resto |
+| Hub | ripete il frame su tutte le porte tranne l'ingresso (stesso dominio di collisione semplificato: nessuna collisione simulata) |
+| Switch | MAC learning, aging 300 s, flooding per destinazioni sconosciute/broadcast; rilevamento loop (stesso frame visto > N volte in finestra breve) ⇒ avviso UI |
+| ARP | cache con timeout 300 s; richiesta ripetuta 3 volte a 1 s; pacchetti in attesa accodati (max 3 per IP) e scartati con ICMP host unreachable al timeout |
+| IPv4 | forwarding longest-prefix-match; route connesse automatiche; TTL iniziale 64 (host) / 255 (router); TTL=0 ⇒ ICMP Time Exceeded; nessuna route ⇒ ICMP Net Unreachable |
+| ICMP | echo request/reply, time exceeded, destination unreachable (net/host/port/fragmentation-needed) |
+| UDP | socket con porte; porta chiusa ⇒ ICMP port unreachable |
+| TCP | handshake a 3 vie, seq/ack, MSS 1460, finestra ricevente, RTO iniziale 1 s (RFC 6298) con backoff, fast retransmit su 3 dup-ACK, congestion control Reno (slow start, congestion avoidance), FIN/RST; ISN dal PRNG |
+| DHCP server | pool, esclusioni, gateway, DNS, lease default 86400 s; DORA completo; rinnovo T1/T2 lato client |
+| DNS | server con record A; resolver client con cache rispettosa del TTL; NXDOMAIN |
+| NAT/PAT | su router: interfacce inside/outside, traduzione sorgente con porte, tabella con timeout (TCP 7440 s, UDP 300 s, ICMP 60 s) |
+| Firewall | ACL ordinate per interfaccia/direzione (allow/deny su proto, IP/prefisso, porte), default policy, stateful (risposte a connessioni stabilite ammesse) |
+
+### 5.5 Tipi di dispositivo (composizione di moduli)
+- **PC, Laptop**: host stack (NIC, ARP, IPv4, ICMP, UDP, TCP, client DHCP, resolver DNS).
+- **Server**: host stack + servizi attivabili (DHCP, DNS, server TCP/UDP "sink/echo").
+- **Switch** (8/24/48 porte), **Hub** (8 porte).
+- **Router**: N interfacce L3 + DHCP server, NAT, firewall attivabili.
+- **Cloud/ISP**: router preconfigurato con un'uscita "Internet" simulata (risponde a ping, ospita DNS pubblico).
+
+### 5.6 Applicazioni
+- `ping` (count, intervallo, size, TTL), `traceroute` (UDP probe stile Linux, 3 probe per hop, max 30 hop), `nslookup`.
+- **Generatore di traffico**: flusso UDP a bitrate costante oppure trasferimento TCP di N byte, tra due host. Produce metriche per flusso.
+- **Metriche**: per link (utilizzo %, occupazione coda, drop), per flusso (throughput, RTT/latenza, jitter, perdita). Campionate ogni 100 ms di tempo simulato.
+
+## 6. Protocollo UI ↔ worker
+
+Unione discriminata TypeScript in `src/shared/protocol.ts`.
+
+- **UI → motore**: `addNode`, `removeNode`, `updateNode`, `connect`, `disconnect`, `updateLink`, `configureInterface`, `configureService`, `setPower`, `runApp`, `stopApp`, `play`, `pause`, `step`, `setSpeed`, `setMode`, `load`, `serialize`.
+- **Motore → UI**: `ack {reqId}` / `error {reqId, code, message, field?}`, `stateDelta`, `events` (lotto per frame), `appOutput`, `metrics`, `clock {simTimeNs, effectiveSpeed}`, `warning`.
+- Ogni comando porta un `reqId`; la UI attende `ack`/`error` per aggiornare form e cronologia.
+
+### Modalità di tempo
+- **Realtime**: tick ~16 ms; il worker avanza il tempo di `Δwall × speed` ed esegue gli eventi fino al target. Se un tick richiede troppo, la velocità effettiva cala e viene notificata (`clock.effectiveSpeed`), nessun blocco.
+- **Simulation**: clock fermo; `step` esegue il prossimo evento; `play` avanza lentamente con animazione; la UI evidenzia la PDU corrente.
+- Log eventi: buffer circolare, default 100 000 voci, configurabile.
+
+## 7. UI
+
+### 7.1 Layout (approvato in mockup)
+1. **Barra superiore**: menu (File/Modifica/Vista), strumento (Sposta/Collega), interruttore Realtime/Simulation, ⏮ ▶ ⏭, velocità, clock simulato.
+2. **Palette** a sinistra: dispositivi per categoria (Rete, Host) e cavi (Ethernet 1 Gb/s, Fibra 10 Gb/s, Personalizzato), con ricerca; drag sul canvas.
+3. **Canvas** React Flow: nodi con nome, IP, LED stato; link con banda/ritardo; pacchetti come etichette colorate per protocollo; pan, zoom, griglia con snap, minimappa, selezione multipla.
+4. **Ispettore** a destra, schede: Interfacce · Tabelle (ARP, MAC, routing, NAT, lease DHCP, live) · Servizi (DHCP, DNS, NAT, firewall, server) · App (ping, traceroute, nslookup, generatore traffico). Per i link: banda, ritardo, perdita, coda, stato.
+5. **Pannello inferiore** ridimensionabile: Eventi (lista filtrabile per protocollo/nodo, clic ⇒ ispettore PDU ad albero header per header) · Output app · Metriche (grafici).
+
+### 7.2 Menu contestuali
+- **Canvas vuoto**: Aggiungi dispositivo ▸ (categorie palette, inserito nel punto cliccato), Incolla, Seleziona tutto, Adatta alla vista, Griglia on/off.
+- **Nodo**: Apri ispettore, Ping verso ▸, Traceroute verso ▸ (altri nodi con IP), Mostra tabelle, Spegni/Accendi, Rinnova DHCP, Duplica, Copia, Elimina.
+- **Link**: Proprietà, Simula guasto / Ripristina, Mostra metriche, Scollega.
+- **Selezione multipla**: solo azioni valide per più nodi (Duplica, Copia, Spegni/Accendi, Elimina).
+
+### 7.3 Stile
+Token colore scuri stile JetBrains (sfondo `#1e1f22`, pannelli `#2b2d30`, bordi `#393b40`, testo `#bcbec4`, accento `#3574f0`). Colori protocollo fissi: ARP `#f0a732`, ICMP `#e5507a`, DHCP `#56a8f5`, DNS `#b083f0`, TCP `#5fb865`, UDP `#2fbfc4`. Monospace per IP, MAC, tempi, tabelle, PDU.
+
+### 7.4 Scorciatoie
+Gestite con un unico hook che legge lo stato corrente tramite store (niente closure stantie): V sposta, C collega, Canc elimina, Cmd+Z/Cmd+Shift+Z, Cmd+C/V/D, Cmd+S/O, Spazio play/pausa, `.` step.
+
+## 8. Persistenza e cronologia
+- File progetto `.ptk` (JSON): `{ version, seed, nodes, links, services, layout, view }`. Versione esplicita per migrazioni.
+- Apertura/salvataggio via dialoghi nativi Electron. Export PNG/SVG del canvas dal renderer.
+- Autosave di recupero ogni 30 s in `userData/recovery.ptk`; all'avvio dopo crash si propone il ripristino.
+- Undo/redo: command pattern sui comandi di modifica topologia/configurazione (ogni comando conosce il proprio inverso); le azioni di simulazione non entrano in cronologia. Eliminare un nodo registra anche i link rimossi, così l'undo li ripristina.
+
+## 9. Gestione errori
+- **Configurazione**: validazione nel motore; risposta `error` tipizzata (IP malformato, IP duplicato nello stesso segmento, gateway fuori subnet, porta occupata, self-link, pool DHCP fuori subnet). La UI mostra l'errore sul campo; stato invariato.
+- **Errori di rete**: simulati come nella realtà (ARP senza risposta, ICMP unreachable, timeout TCP, broadcast storm), non bloccati. I loop L2 generano un avviso.
+- **File**: `.ptk` corrotto o versione non supportata ⇒ messaggio chiaro, progetto aperto intatto.
+- **Worker**: eccezione catturata ⇒ UI propone ricarica dall'ultimo stato salvato/recovery.
+
+## 10. Test
+- **Motore (Vitest, deterministico)** — scenari:
+  ARP request/reply e cache · switch learning/flooding/aging · ping tra due subnet via due router (TTL atteso) · traceroute con Time Exceeded per hop · DHCP DORA, rinnovo e scadenza lease · DNS risoluzione e NXDOMAIN · TCP handshake, ritrasmissione dopo perdita, fast retransmit · NAT PAT inside→outside e ritorno · firewall deny/allow e stateful · throughput TCP su link 10 Mb/s che converge al goodput teorico (±5%) · tail drop con coda piena.
+- **Valori noti**: ICMP echo = 98 B; ritardo singolo hop = serializzazione + propagazione calcolati a mano; checksum IPv4/ICMP confrontati con valori di riferimento.
+- **UI**: Playwright su Electron per i flussi principali (crea topologia → configura IP → ping → output corretto; DHCP da GUI; salva/riapri). Test di componente solo dove c'è logica.
+
+## 11. Fasi di consegna
+
+1. **M1 — Motore L2/L3 headless**: clock, coda eventi, link/code, NIC, hub, switch, ARP, IPv4, ICMP, UDP (necessario a traceroute), ping/traceroute. Solo test.
+2. **M2 — Guscio Electron + UI base**: layout completo, palette, canvas, ispettore Interfacce/Tabelle/App, eventi + ispettore PDU, Realtime/Simulation, menu contestuali, salvataggio/apertura, undo/redo.
+3. **M3 — DHCP e DNS** (motore + scheda Servizi).
+4. **M4 — TCP, generatore di traffico, Metriche**.
+5. **M5 — NAT e firewall**.
+6. **M6 — Rifinitura**: autosave/recovery, export immagini, packaging (electron-builder), rimozione v1 dalla root, README.
+
+Ogni fase si chiude con test verdi e app avviabile.

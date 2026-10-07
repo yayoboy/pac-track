@@ -59,3 +59,6 @@ coverage/
 
 # Saved Topologies (Optional - comment out if you want to track them)
 # topology_*.json
+
+# Brainstorming companion
+.superpowers/
