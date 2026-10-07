@@ -61,3 +61,25 @@ export function routedPair(sim = new Sim()) {
   h2.setGateway('10.0.2.1')
   return { sim, h1, h2, r1 }
 }
+
+/** H1 10.0.1.10 — R1 (10.0.1.1 | 10.0.12.1/30) — R2 (10.0.12.2/30 | 10.0.2.1) — H2 10.0.2.10. */
+export function twoRouters(sim = new Sim()) {
+  const h1 = new Host(sim, 'H1')
+  const h2 = new Host(sim, 'H2')
+  const r1 = new Router(sim, 'R1', 2)
+  const r2 = new Router(sim, 'R2', 2)
+  new Link(sim, h1.iface('eth0'), r1.iface('Gi0/0'))
+  new Link(sim, r1.iface('Gi0/1'), r2.iface('Gi0/0'))
+  new Link(sim, r2.iface('Gi0/1'), h2.iface('eth0'))
+  r1.setIp('Gi0/0', '10.0.1.1/24')
+  r1.setIp('Gi0/1', '10.0.12.1/30')
+  r2.setIp('Gi0/0', '10.0.12.2/30')
+  r2.setIp('Gi0/1', '10.0.2.1/24')
+  r1.routes.addStatic('10.0.2.0/24', '10.0.12.2')
+  r2.routes.addStatic('10.0.1.0/24', '10.0.12.1')
+  h1.setIp('eth0', '10.0.1.10/24')
+  h1.setGateway('10.0.1.1')
+  h2.setIp('eth0', '10.0.2.10/24')
+  h2.setGateway('10.0.2.1')
+  return { sim, h1, h2, r1, r2 }
+}
