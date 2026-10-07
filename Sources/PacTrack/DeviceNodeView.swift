@@ -22,7 +22,7 @@ struct DeviceNodeView: View {
             HStack(spacing: 5) {
                 Image(systemName: node.kind.symbol).font(.system(size: 11))
                 Text(node.name).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.fgStrong)
-                Circle().fill(node.ifaces.contains(where: \.linked) ? Theme.ok : Theme.muted).frame(width: 6, height: 6)
+                Circle().fill(!node.powered ? Theme.err : node.ifaces.contains(where: \.linked) ? Theme.ok : Theme.muted).frame(width: 6, height: 6)
             }
             if let ip = firstIp(node) {
                 Text(ip).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
@@ -32,6 +32,7 @@ struct DeviceNodeView: View {
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Theme.accent : Theme.borderStrong, lineWidth: selected ? 1.5 : 1))
         .overlay(alignment: .bottom) { handle }
+        .opacity(node.powered ? 1 : 0.5)
         .scaleEffect(zoom)
         .position(center)
         .gesture(drag)
@@ -96,14 +97,18 @@ struct NodeMenu: View {
                     Button("\(t.name)  \(firstIp(t) ?? "")") { Task { await editor.run(.ping(node: node.id, target: firstIp(t) ?? ""), key: "app:\(node.id)") } }
                 }
             }
-            .disabled(targets.isEmpty)
+            .disabled(targets.isEmpty || !node.powered)
             Menu("Traceroute verso") {
                 ForEach(targets) { t in
                     Button("\(t.name)  \(firstIp(t) ?? "")") { Task { await editor.run(.traceroute(node: node.id, target: firstIp(t) ?? ""), key: "app:\(node.id)") } }
                 }
             }
-            .disabled(targets.isEmpty)
+            .disabled(targets.isEmpty || !node.powered)
         }
+        Button(node.powered ? "Spegni" : "Accendi") { Task { await editor.edit(.setPower(id: node.id, on: !node.powered)) } }
+        Divider()
+        Button("Duplica") { Task { await editor.duplicate(node.id) } }
+        Button("Copia") { editor.copy(node.id) }
         Divider()
         Button("Elimina", role: .destructive) { Task { await editor.remove(nodes: [node.id], links: []) } }
     }

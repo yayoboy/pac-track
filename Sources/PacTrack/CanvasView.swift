@@ -156,8 +156,8 @@ struct CanvasView: View {
             p.addLine(to: b)
         }
         return ZStack {
-            line.stroke(selected ? Theme.accent : Theme.muted, lineWidth: selected ? 2.5 : 1.5)
-            Text("\(link.a.iface) ↔ \(link.b.iface)")
+            line.stroke(selected ? Theme.accent : link.up ? Theme.muted : Theme.err, style: StrokeStyle(lineWidth: selected ? 2.5 : 1.5, dash: link.up ? [] : [5, 4]))
+            Text("\(link.a.iface) ↔ \(link.b.iface) · \(formatBandwidth(link.options.bandwidthBps))")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Theme.muted)
                 .padding(.horizontal, 3)
@@ -167,6 +167,9 @@ struct CanvasView: View {
         .contentShape(line.strokedPath(StrokeStyle(lineWidth: 12)))
         .onTapGesture { editor.select(.link(link.id)) }
         .contextMenu {
+            Button("Proprietà") { editor.select(.link(link.id)) }
+            Button(link.up ? "Simula guasto" : "Ripristina") { Task { await editor.edit(.setLinkUp(id: link.id, up: !link.up)) } }
+            Divider()
             Button("Scollega", role: .destructive) { Task { await editor.remove(nodes: [], links: [link.id]) } }
         }
         .accessibilityIdentifier("link-\(link.a.iface)-\(link.b.iface)")
@@ -178,6 +181,10 @@ struct CanvasView: View {
             ForEach(DeviceKind.allCases, id: \.self) { kind in
                 Button { Task { await editor.addDevice(kind, at: snap(toWorld(hover))) } } label: { Label(kind.label, systemImage: kind.symbol) }
             }
+        }
+        Button("Incolla") {
+            let at = snap(toWorld(hover))
+            Task { await editor.paste(at: at) }
         }
         Button("Adatta alla vista") { fit(size) }
     }

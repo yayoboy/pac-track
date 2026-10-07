@@ -77,7 +77,7 @@ struct TableSection: View {
 /// Errors with no field of their own (opening a file, cabling, apps launched from a menu, undo) show here.
 struct ErrorBanner: View {
     let editor: Editor
-    private static let fieldPrefixes = ["ip:", "gw:", "route:", "name:"]
+    private static let fieldPrefixes = ["ip:", "gw:", "route:", "name:", "link:"]
 
     var body: some View {
         if let error = editor.error, !Self.fieldPrefixes.contains(where: error.key.hasPrefix) {

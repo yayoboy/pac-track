@@ -42,6 +42,8 @@ public final class Editor {
 
     private static let historyLimit = 100
     private static let eventLimit = 5000
+    /// More than a node's height (46 pt), on the 14 pt grid: a copy never covers its original.
+    private static let copyOffset = 56.0
     /// Process-wide device clipboard.
     // ponytail: in-memory, not NSPasteboard; enough to copy between windows of this app
     private static var clipboard: TopologyNode?
@@ -308,11 +310,11 @@ public final class Editor {
         Self.clipboard = current.nodes.first { $0.id == id }
     }
 
-    /// Pastes the copied device at `pos`, or 28 pt below-right of the last copy.
+    /// Pastes the copied device at `pos`, or `copyOffset` below-right of the last copy.
     public func paste(at pos: Pos?) async {
         await serialized {
             guard var src = Self.clipboard else { return }
-            src.pos = pos ?? Pos(x: src.pos.x + 28, y: src.pos.y + 28)
+            src.pos = pos ?? Pos(x: src.pos.x + Self.copyOffset, y: src.pos.y + Self.copyOffset)
             if pos == nil { Self.clipboard = src }
             await self.insertCopy(of: src)
         }
@@ -321,7 +323,7 @@ public final class Editor {
     public func duplicate(_ id: String) async {
         await serialized {
             guard var src = self.current.nodes.first(where: { $0.id == id }) else { return }
-            src.pos = Pos(x: src.pos.x + 28, y: src.pos.y + 28)
+            src.pos = Pos(x: src.pos.x + Self.copyOffset, y: src.pos.y + Self.copyOffset)
             await self.insertCopy(of: src)
         }
     }

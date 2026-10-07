@@ -87,6 +87,14 @@ struct EditCommands: Commands {
 
     private var typing: Bool { NSApp.keyWindow?.firstResponder is NSText }
 
+    private func send(_ action: String) {
+        NSApp.sendAction(Selector((action)), to: nil, from: nil)
+    }
+
+    private var selectedNode: String? {
+        if case .node(let id)? = editor?.selection { id } else { nil }
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
             Button("Annulla") {
@@ -97,6 +105,25 @@ struct EditCommands: Commands {
                 if typing { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } else { Task { await editor?.redo() } }
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+        // Text fields keep the standard editing actions; elsewhere the shortcuts act on devices.
+        CommandGroup(replacing: .pasteboard) {
+            Button("Taglia") { if typing { send("cut:") } }
+                .keyboardShortcut("x")
+            Button("Copia") {
+                if typing { send("copy:") } else if let id = selectedNode { editor?.copy(id) }
+            }
+            .keyboardShortcut("c")
+            Button("Incolla") {
+                if typing { send("paste:") } else { Task { await editor?.paste(at: nil) } }
+            }
+            .keyboardShortcut("v")
+            Button("Duplica") {
+                if let id = selectedNode { Task { await editor?.duplicate(id) } }
+            }
+            .keyboardShortcut("d")
+            Button("Seleziona tutto") { if typing { send("selectAll:") } }
+                .keyboardShortcut("a")
         }
     }
 }

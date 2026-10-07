@@ -14,7 +14,7 @@ struct InspectorView: View {
                 }
             case .link(let id):
                 if let link = editor.snapshot.links.first(where: { $0.id == id }) {
-                    LinkInspector(link: link, editor: editor)
+                    LinkInspector(link: link, editor: editor).id(link.id)
                 }
             case nil:
                 Text("Seleziona un dispositivo o un collegamento.").foregroundStyle(Theme.muted).padding(12)
@@ -52,6 +52,12 @@ private struct NodeInspector: View {
                 CommitField(label: node.kind.label, value: node.name, errorKey: "name:\(node.id)", editor: editor) {
                     await editor.edit(.rename(id: node.id, name: $0), key: "name:\(node.id)")
                 }
+                Button { Task { await editor.edit(.setPower(id: node.id, on: !node.powered)) } } label: {
+                    Image(systemName: "power").foregroundStyle(node.powered ? Theme.ok : Theme.err)
+                }
+                .buttonStyle(.borderless)
+                .help(node.powered ? "Spegni" : "Accendi")
+                .accessibilityIdentifier("power")
             }
             Picker("", selection: $tab) { ForEach(tabs, id: \.self) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented)
@@ -193,7 +199,15 @@ private struct LinkInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Collegamento Ethernet").foregroundStyle(Theme.fgStrong)
             Text("\(name(link.a.node)) \(link.a.iface) ↔ \(name(link.b.node)) \(link.b.iface)").font(Theme.mono)
-            Text("1 Gb/s · 500 ns (modificabile nella prossima versione)").font(Theme.small).foregroundStyle(Theme.muted)
+            Toggle("Collegamento attivo", isOn: Binding(get: { link.up }, set: { up in Task { await editor.edit(.setLinkUp(id: link.id, up: up)) } }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityIdentifier("link-up")
+            ForEach(LinkField.allCases, id: \.self) { field in
+                CommitField(label: field.label, value: field.format(link.options), errorKey: "link:\(link.id):\(field.rawValue)", editor: editor) {
+                    await editor.setLink(link.id, field, $0)
+                }
+            }
             Button("Scollega", role: .destructive) { Task { await editor.remove(nodes: [], links: [link.id]) } }
         }
         .padding(12)
