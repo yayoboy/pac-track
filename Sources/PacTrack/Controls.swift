@@ -98,3 +98,29 @@ struct ErrorBanner: View {
         }
     }
 }
+
+/// Non-blocking L2 loop warning (spec §5.4, §9); stays until dismissed or a new loop is detected.
+struct WarningBanner: View {
+    let editor: Editor
+
+    var body: some View {
+        if let w = editor.warning {
+            let name = editor.snapshot.nodes.first { $0.id == w.node }?.name ?? w.node
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Theme.warn)
+                Text("Possibile loop L2 su \(name): lo stesso frame è tornato più volte (t = \(formatSimTime(w.timeNs))). Controlla i collegamenti ridondanti tra switch.")
+                    .foregroundStyle(Theme.fgStrong)
+                Button { editor.dismissWarning() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help("Chiudi")
+            }
+            .font(.system(size: 11))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.warn.opacity(0.7)))
+            .padding(10)
+            .accessibilityIdentifier("warning-banner")
+        }
+    }
+}

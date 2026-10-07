@@ -20,6 +20,25 @@ struct CanvasView: View {
             ZStack(alignment: .topLeading) {
                 background
                 ForEach(editor.snapshot.links) { link in cable(link) }
+                // Under the nodes: a PDU leaves from and disappears into its device.
+                if !editor.flights.isEmpty {
+                    TimelineView(.animation) { context in
+                        let now = context.date.timeIntervalSinceReferenceDate
+                        // An explicit ZStack: several children directly inside a TimelineView are stacked like a VStack.
+                        ZStack(alignment: .topLeading) {
+                            ForEach(editor.flights) { flight in
+                                if let link = editor.snapshot.links.first(where: { $0.id == flight.link }) {
+                                    let a = center(flight.from)
+                                    let b = center(link.a.node == flight.from ? link.b.node : link.a.node)
+                                    let t = flightProgress(flight, now: now)
+                                    PduTag(proto: flight.proto).position(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    .allowsHitTesting(false)
+                }
                 ForEach(editor.snapshot.nodes) { node in
                     DeviceNodeView(node: node, editor: editor, zoom: zoom, center: center(node.id), nodeAt: nodeAt, wire: $wire)
                 }
@@ -57,6 +76,11 @@ struct CanvasView: View {
             .onDeleteCommand { Task { await editor.deleteSelection() } }
             .onKeyPress(.space) {
                 Task { await editor.run(.setRunning(!editor.snapshot.running)) }
+                return .handled
+            }
+            .onKeyPress(KeyEquivalent(".")) {
+                guard editor.snapshot.mode == .simulation else { return .ignored }
+                Task { await editor.step() }
                 return .handled
             }
         }
@@ -156,5 +180,19 @@ struct CanvasView: View {
             }
         }
         Button("Adatta alla vista") { fit(size) }
+    }
+}
+
+/// A PDU on a cable: protocol name on its spec color.
+private struct PduTag: View {
+    let proto: Proto
+
+    var body: some View {
+        Text(proto.label)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .foregroundStyle(Theme.bg)
+            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.proto(proto)))
     }
 }

@@ -9,11 +9,17 @@ struct MainContent: View {
         HStack(spacing: 0) {
             PaletteView().frame(width: 170)
             Divider()
-            VStack(spacing: 0) {
+            VSplitView {
                 CanvasView(editor: editor)
-                    .overlay(alignment: .top) { ErrorBanner(editor: editor) }
-                Divider()
-                OutputPanel(editor: editor).frame(height: 170)
+                    .overlay(alignment: .top) {
+                        VStack(spacing: 0) {
+                            ErrorBanner(editor: editor)
+                            WarningBanner(editor: editor)
+                        }
+                    }
+                    .frame(minHeight: 220)
+                BottomPanel(editor: editor)
+                    .frame(minHeight: 110, idealHeight: 240)
             }
             Divider()
             InspectorView(editor: editor).frame(width: 290)

@@ -54,19 +54,29 @@ struct SimulationToolbar: ToolbarContent {
                 .disabled(!editor.canRedo)
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            let running = editor.snapshot.running
-            Button { Task { await editor.run(.setRunning(!running)) } } label: {
-                Label(running ? "Pausa" : "Avvia", systemImage: running ? "pause.fill" : "play.fill")
+            let s = editor.snapshot
+            Picker("Modalità", selection: Binding(get: { s.mode }, set: { m in Task { await editor.run(.setMode(m)) } })) {
+                Text("Realtime").tag(SimMode.realtime)
+                Text("Simulation").tag(SimMode.simulation)
             }
-            Picker("Velocità", selection: Binding(get: { editor.snapshot.speed }, set: { v in Task { await editor.run(.setSpeed(v)) } })) {
+            .pickerStyle(.segmented)
+            .help("Realtime: il tempo scorre. Simulation: orologio fermo, avanzi evento per evento.")
+            Button { Task { await editor.run(.setRunning(!s.running)) } } label: {
+                Label(s.running ? "Pausa" : "Avvia", systemImage: s.running ? "pause.fill" : "play.fill")
+            }
+            .help(s.mode == .simulation ? "Avanza da solo, un evento alla volta" : "Avvia o ferma il tempo (Spazio)")
+            Button { Task { await editor.step() } } label: { Label("Passo", systemImage: "forward.frame.fill") }
+                .disabled(s.mode != .simulation)
+                .help("Esegue il prossimo evento (tasto .)")
+            Picker("Velocità", selection: Binding(get: { s.speed }, set: { v in Task { await editor.run(.setSpeed(v)) } })) {
                 ForEach(SPEEDS, id: \.self) { Text("\($0.formatted())×").tag($0) }
             }
             .frame(width: 90)
-            Text(String(format: "t = %.3f s", Double(editor.snapshot.timeNs) / 1e9))
+            Text(s.mode == .simulation ? "t = " + formatSimTime(s.timeNs) : String(format: "t = %.3f s", Double(s.timeNs) / 1e9))
                 .font(Theme.mono)
                 .monospacedDigit()
                 .foregroundStyle(Theme.muted)
-                .frame(width: 110, alignment: .trailing)
+                .frame(width: 150, alignment: .trailing)
         }
     }
 }

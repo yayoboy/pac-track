@@ -8,8 +8,6 @@ struct OutputPanel: View {
         let apps = editor.snapshot.apps
         let name = { (id: String) in editor.snapshot.nodes.first { $0.id == id }?.name ?? "(rimosso)" }
         VStack(alignment: .leading, spacing: 0) {
-            Text("Output app").font(.system(size: 11)).foregroundStyle(Theme.fgStrong).padding(.horizontal, 10).padding(.vertical, 4)
-            Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {

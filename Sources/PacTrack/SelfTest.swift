@@ -42,8 +42,38 @@ enum SelfTest {
         if targets != ["PC2"] { failures.append("ping menu targets \(targets), expected [PC2]") }
         await editor.connect(id("PC1"), id("PC2")) // both ports taken: the error must be visible without opening a tab
         if editor.error?.key != "connect" { failures.append("no connect error, got \(String(describing: editor.error))") }
+        // M2b: Simulation mode, step, events, PDU, flights
+        await editor.run(.setMode(.simulation))
+        if editor.snapshot.running { failures.append("simulation mode must stop the clock") }
+        let paused = editor.snapshot.version
+        await editor.tick(wallMs: 100)
+        if editor.snapshot.version != paused { failures.append("a paused tick bumped the snapshot version") }
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.2"))
+        await editor.step()
+        if editor.events.last.map({ "\($0.kind.rawValue) \($0.proto.rawValue)" }) != "tx icmp" {
+            failures.append("step: last event \(String(describing: editor.events.last))")
+        }
+        if editor.pdu?.map(\.title) != ["Ethernet II", "IPv4", "ICMP"] { failures.append("PDU \(String(describing: editor.pdu))") }
+        if editor.flights.isEmpty { failures.append("no packet animated after a step") }
+        failures += await loopScenario()
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
+    }
+
+    /// Two switches cabled twice: the ARP broadcast circulates and the UI must warn.
+    private static func loopScenario() async -> [String] {
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 0, y: 0))
+        await editor.addDevice(.switch, at: Pos(x: 200, y: 0))
+        await editor.addDevice(.pc, at: Pos(x: 0, y: 200))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("SW1"), id("SW2"))
+        await editor.connect(id("SW1"), id("SW2"))
+        await editor.connect(id("PC1"), id("SW1"))
+        await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.9"))
+        for _ in 0..<3 { await editor.tick(wallMs: 100) }
+        return editor.warning == nil ? ["no L2 loop warning"] : []
     }
 
     static func render(_ editor: Editor, to path: String) -> Bool {

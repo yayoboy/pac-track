@@ -14,6 +14,16 @@ enum Theme {
     static let err = Color(hex: 0xE5507A)
     static let mono = Font.system(size: 11, design: .monospaced)
     static let small = Font.system(size: 10)
+    static let warn = Color(hex: 0xF0A732)
+
+    /// Spec §7.3 protocol colors.
+    static func proto(_ p: Proto) -> Color {
+        switch p {
+        case .arp: Color(hex: 0xF0A732)
+        case .icmp: Color(hex: 0xE5507A)
+        case .udp: Color(hex: 0x2FBFC4)
+        }
+    }
 }
 
 extension Color {
