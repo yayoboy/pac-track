@@ -4,6 +4,8 @@ final class Sim {
     let log: EventLog
     private var ids = 0
     private var macs = 0
+    /// The simulation owns its nodes (nodes refer back `unowned`), so a node lives exactly as long as its Sim.
+    private var nodes: [Node] = []
 
     init(seed: UInt32 = 1, logCapacity: Int = 100_000) {
         rng = Rng(seed: seed)
@@ -25,6 +27,10 @@ final class Sim {
     func emit(_ kind: EventKind, node: String, iface: String? = nil, frame: EthernetFrame? = nil,
               packet: Ipv4Packet? = nil, reason: DropReason? = nil) {
         log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason))
+    }
+
+    func adopt(_ node: Node) {
+        nodes.append(node)
     }
 
     func run(_ duration: Int) {

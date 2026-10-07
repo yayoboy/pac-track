@@ -12,7 +12,7 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
 @Suite struct L2Tests {
     @Test func hubRepeatsEveryFrameToAllOtherConnectedPorts() throws {
         let sim = Sim()
-        let hub = Hub(sim: sim, id: "HUB") // nodes are owned by the caller; links refer to them unowned
+        let hub = Hub(sim: sim, id: "HUB")
         let probes = try star(sim, hub, ["A", "B", "C"])
         try probes[0].sendRaw(try probes[1].iface("eth0").mac)
         sim.run(MS)

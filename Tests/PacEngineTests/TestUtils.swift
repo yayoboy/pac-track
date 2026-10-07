@@ -37,3 +37,52 @@ final class Probe: Node {
 func drops(_ sim: Sim, _ reason: DropReason) -> Int {
     sim.log.all.filter { $0.kind == .drop && $0.reason == reason }.count
 }
+
+struct Seen: Equatable {
+    let from: String
+    let type: UInt8
+    let code: UInt8
+    let ttl: UInt8
+}
+
+final class IcmpRecorder {
+    var seen: [Seen] = []
+}
+
+func icmpSeen(_ node: IpNode) -> IcmpRecorder {
+    let recorder = IcmpRecorder()
+    node.onIcmp { p, m in recorder.seen.append(Seen(from: formatIp(p.src), type: m.type, code: m.code, ttl: p.ttl)) }
+    return recorder
+}
+
+func echoRequest(_ length: Int = 56) -> L4 {
+    .icmp(makeIcmp(type: ICMP_ECHO_REQUEST, code: 0, id: 9, seq: 1, data: [UInt8](repeating: 0, count: length)))
+}
+
+/// A (10.0.0.1/24) and B (10.0.0.2/24) on one switch.
+func lan(_ sim: Sim = Sim()) throws -> (sim: Sim, sw: Switch, a: Host, b: Host) {
+    let sw = Switch(sim: sim, id: "SW1")
+    let a = Host(sim: sim, id: "A")
+    let b = Host(sim: sim, id: "B")
+    _ = try Link(sim: sim, try a.iface("eth0"), try sw.iface("Gi0/1"))
+    _ = try Link(sim: sim, try b.iface("eth0"), try sw.iface("Gi0/2"))
+    try a.setIp("eth0", "10.0.0.1/24")
+    try b.setIp("eth0", "10.0.0.2/24")
+    return (sim, sw, a, b)
+}
+
+/// H1 (10.0.1.10/24) — R1 (10.0.1.1 | 10.0.2.1) — H2 (10.0.2.10/24).
+func routedPair(_ sim: Sim = Sim()) throws -> (sim: Sim, h1: Host, h2: Host, r1: Router) {
+    let h1 = Host(sim: sim, id: "H1")
+    let h2 = Host(sim: sim, id: "H2")
+    let r1 = Router(sim: sim, id: "R1", ports: 2)
+    _ = try Link(sim: sim, try h1.iface("eth0"), try r1.iface("Gi0/0"))
+    _ = try Link(sim: sim, try r1.iface("Gi0/1"), try h2.iface("eth0"))
+    try r1.setIp("Gi0/0", "10.0.1.1/24")
+    try r1.setIp("Gi0/1", "10.0.2.1/24")
+    try h1.setIp("eth0", "10.0.1.10/24")
+    try h1.setGateway("10.0.1.1")
+    try h2.setIp("eth0", "10.0.2.10/24")
+    try h2.setGateway("10.0.2.1")
+    return (sim, h1, h2, r1)
+}

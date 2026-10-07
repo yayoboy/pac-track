@@ -38,6 +38,7 @@ class Node {
         self.sim = sim
         self.id = id
         name = id
+        sim.adopt(self)
     }
 
     @discardableResult
