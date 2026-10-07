@@ -57,4 +57,15 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         #expect(sim.log.size == 1000)
         #expect(sim.log.total > 1000)
     }
+
+    @Test func listsTheMacTableWithoutAgedEntries() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW1")
+        let p = try star(sim, sw, ["A", "B"])
+        try p[0].sendRaw()
+        sim.run(MS)
+        #expect(sw.macTable().map { "\($0.mac) \($0.iface)" } == ["\(try p[0].iface("eth0").mac) Gi0/1"])
+        sim.run(301 * S)
+        #expect(sw.macTable().isEmpty)
+    }
 }

@@ -65,4 +65,18 @@ private func hop(_ rt: RoutingTable, _ dst: String) throws -> String? {
         expectError("Invalid IPv4") { try rt.addStatic("10.0.2.0/24", "10.0.12") }
         #expect(try hop(rt, "10.0.2.1") == nil)
     }
+
+    @Test func listsAndRemovesStaticRoutes() throws {
+        let (_, _, rt) = try setup()
+        try rt.addStatic("10.0.2.0/24", "10.0.12.2")
+        let rows = { rt.view().map { "\($0.isStatic ? "static" : "connected") \(formatIp($0.network))/\($0.prefix) \($0.nextHop.map(formatIp) ?? "-") \($0.iface)" } }
+        #expect(rows() == [
+            "connected 10.0.1.0/24 - eth0",
+            "connected 10.0.12.0/30 - eth1",
+            "static 10.0.2.0/24 10.0.12.2 eth1",
+        ])
+        try rt.removeStatic("10.0.2.7/24")
+        #expect(try hop(rt, "10.0.2.1") == nil)
+        #expect(rows().count == 2)
+    }
 }

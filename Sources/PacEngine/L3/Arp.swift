@@ -3,6 +3,13 @@ let ARP_RETRY_NS = 1 * S
 let ARP_RETRIES = 3
 let ARP_PENDING_MAX = 3
 
+struct ArpEntry: Equatable {
+    let ip: UInt32
+    let mac: Mac
+    let iface: String
+    let expiresAt: Int
+}
+
 private final class Pending {
     let iface: Interface
     var packets: [Ipv4Packet]
@@ -30,6 +37,12 @@ final class Arp {
             return nil
         }
         return entry.mac
+    }
+
+    func entries() -> [ArpEntry] {
+        cache.filter { node.sim.now < $0.value.expiresAt }
+            .map { ArpEntry(ip: $0.key, mac: $0.value.mac, iface: $0.value.iface.name, expiresAt: $0.value.expiresAt) }
+            .sorted { $0.ip < $1.ip }
     }
 
     /// Sends `packet` to `nextHop` on `iface`, resolving its MAC first if needed.

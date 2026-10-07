@@ -37,6 +37,13 @@ final class Link {
 
     func peer(_ i: Interface) -> Interface { i === a ? b : a }
 
+    /// Pulls the cable: both interfaces become free, frames in flight are lost.
+    func disconnect() {
+        up = false
+        a.link = nil
+        b.link = nil
+    }
+
     private func direction(_ from: Interface) -> Direction { from === a ? dirA : dirB }
 
     func transmit(from: Interface, _ frame: EthernetFrame) {
@@ -56,10 +63,11 @@ final class Link {
             let to = peer(from)
             let lost = opts.lossRate > 0 && sim.rng.next() < opts.lossRate
             sim.sched.after(opts.propDelayNs) { [self] in arrive(to, frame, lost) }
-            if dir.queue.isEmpty {
-                dir.busy = false
-            } else {
+            if up, !dir.queue.isEmpty {
                 startTx(from, dir, dir.queue.removeFirst())
+            } else {
+                dir.busy = false
+                dir.queue.removeAll()
             }
         }
     }

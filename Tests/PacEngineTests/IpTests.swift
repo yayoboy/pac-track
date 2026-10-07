@@ -116,4 +116,14 @@ import Testing
         expectError("not in a connected subnet") { try h.setGateway("10.0.1.1") }
         #expect(h.routes.lookup(try parseIp("8.8.8.8")) == nil)
     }
+
+    @Test func listsLiveArpEntriesUntilTheyExpire() throws {
+        let (sim, _, a, b) = try lan()
+        a.sendPacket(try parseIp("10.0.0.2"), echoRequest())
+        sim.run(MS)
+        let entries = a.arp.entries()
+        #expect(entries.map { "\(formatIp($0.ip)) \($0.mac) \($0.iface)" } == ["10.0.0.2 \(try b.iface("eth0").mac) eth0"])
+        sim.run(301 * S)
+        #expect(a.arp.entries().isEmpty)
+    }
 }

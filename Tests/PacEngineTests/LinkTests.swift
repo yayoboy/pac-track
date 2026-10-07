@@ -87,4 +87,26 @@ private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: P
         expectError("itself") { _ = try Link(sim: sim, try a.iface("eth1"), try a.iface("eth0")) }
         expectError("already connected") { _ = try Link(sim: sim, try c.iface("eth0"), try b.iface("eth0")) }
     }
+
+    @Test func disconnectFreesBothInterfacesAndLaterFramesFindNoCable() throws {
+        let (sim, a, b, link) = try pair()
+        link.disconnect()
+        #expect(try a.iface("eth0").link == nil)
+        #expect(try b.iface("eth0").link == nil)
+        try a.sendRaw()
+        sim.run(MS)
+        #expect(drops(sim, .noLink) == 1)
+        let c = Probe(sim: sim, id: "C")
+        _ = try Link(sim: sim, try a.iface("eth0"), try c.iface("eth0"))
+    }
+
+    @Test func framesOnTheWireOrQueuedWhenTheCableIsPulledNeverArrive() throws {
+        let (sim, a, b, link) = try pair()
+        try a.sendRaw()
+        try a.sendRaw()
+        link.disconnect()
+        sim.run(MS)
+        #expect(b.got.isEmpty)
+        #expect(sim.log.all.filter { $0.kind == .tx }.count == 1)
+    }
 }

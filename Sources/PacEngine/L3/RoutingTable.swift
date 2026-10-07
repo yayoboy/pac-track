@@ -3,6 +3,14 @@ struct NextHop {
     let nextHop: UInt32
 }
 
+struct RouteView: Equatable {
+    let isStatic: Bool
+    let network: UInt32
+    let prefix: Int
+    let nextHop: UInt32?
+    let iface: String
+}
+
 private struct StaticRoute {
     let network: UInt32
     let prefix: Int
@@ -25,6 +33,23 @@ final class RoutingTable {
         }
         statics.removeAll { $0.network == route.network && $0.prefix == route.prefix }
         statics.append(route)
+    }
+
+    func removeStatic(_ cidr: String) throws {
+        let c = try parseCidr(cidr)
+        let network = networkOf(c.addr, c.prefix)
+        statics.removeAll { $0.network == network && $0.prefix == c.prefix }
+    }
+
+    func view() -> [RouteView] {
+        let connected = interfaces().compactMap { i -> RouteView? in
+            guard i.up, let c = i.ipv4 else { return nil }
+            return RouteView(isStatic: false, network: networkOf(c.addr, c.prefix), prefix: c.prefix, nextHop: nil, iface: i.name)
+        }
+        let statics = statics.map {
+            RouteView(isStatic: true, network: $0.network, prefix: $0.prefix, nextHop: $0.nextHop, iface: connectedFor($0.nextHop)?.iface.name ?? "-")
+        }
+        return connected + statics
     }
 
     /// Longest-prefix match; on equal length a connected route wins.

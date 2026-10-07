@@ -18,6 +18,13 @@ final class Switch: Node {
         return entry.iface
     }
 
+    func macTable() -> [(mac: Mac, iface: String, ageNs: Int)] {
+        table.keys.sorted().compactMap { mac in
+            guard let iface = lookup(mac), let seen = table[mac]?.seen else { return nil }
+            return (mac, iface.name, sim.now - seen)
+        }
+    }
+
     override func receive(_ frame: EthernetFrame, on inIf: Interface) {
         if !isGroupMac(frame.src) { table[frame.src] = (inIf, sim.now) }
         if !isGroupMac(frame.dst), let out = lookup(frame.dst) {
