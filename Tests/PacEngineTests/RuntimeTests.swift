@@ -150,6 +150,14 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(rt.snapshot().running)
     }
 
+    @Test func leavingSimulationModeRestoresThePausedState() throws {
+        let rt = Runtime()
+        try rt.handle(.setRunning(false))
+        try rt.handle(.setMode(.simulation))
+        try rt.handle(.setMode(.realtime))
+        #expect(!rt.snapshot().running)
+    }
+
     @Test func simulationPlayStepsTwicePerSecondOfWallTimeAtSpeedOne() throws {
         let played = try lanRuntime()
         let stepped = try lanRuntime()

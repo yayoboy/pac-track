@@ -59,6 +59,8 @@ public final class Runtime {
     /// Bumped by `load`: a new Sim restarts event sequence numbers.
     public private(set) var epoch = 0
     private var stepCredit = 0.0
+    /// Clock state to restore when leaving Simulation mode.
+    private var runningBeforeSimulation = true
     private var last: Snapshot?
 
     public init(seed: UInt32 = 1) {
@@ -114,8 +116,10 @@ public final class Runtime {
             let t = target.trimmingCharacters(in: .whitespaces)
             start(node, "traceroute \(t)", .trace(try Traceroute(node: try liveIpNode(node), target: t)))
         case let .setMode(value):
+            guard value != mode else { return }
+            if value == .simulation { runningBeforeSimulation = running }
             mode = value
-            running = value == .realtime
+            running = value == .realtime && runningBeforeSimulation
             stepCredit = 0
         case .step:
             step()

@@ -68,7 +68,8 @@ import Testing
         #expect(f.map(\.from) == ["a"] && !f[0].arrived)
         #expect(flightProgress(f[0], now: 0.2) == 0.5)
         #expect(flightProgress(f[0], now: 9) == 1)
-        #expect(pruneFlights(f, links: links, now: 99).count == 1) // still on the wire: waits for the next step
+        #expect(pruneFlights(f, links: links, now: 0.7).count == 1) // still on the wire: waits for the next step
+        #expect(pruneFlights(f, links: links, now: 0.8).isEmpty) // its rx never came (pull cap, evicted): do not animate forever
         f = updateFlights(f, with: [rx], links: links, now: 0.1)
         #expect(f.count == 1 && f[0].arrived)
         #expect(pruneFlights(f, links: links, now: 0.5).isEmpty)

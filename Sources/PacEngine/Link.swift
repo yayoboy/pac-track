@@ -87,10 +87,12 @@ final class Link {
             let to = peer(from)
             let lost = opts.lossRate > 0 && sim.rng.next() < opts.lossRate
             sim.sched.after(opts.propDelayNs) { [self] in arrive(to, frame, lost) }
-            if up, !dir.queue.isEmpty {
+            if up, from.node.powered, !dir.queue.isEmpty {
                 startTx(from, dir, dir.queue.removeFirst())
             } else {
                 dir.busy = false
+                // A fault or a powered-off sender loses what was waiting, and says so.
+                for queued in dir.queue { drop(at: from, queued, up ? .ifaceDown : .linkDown) }
                 dir.queue.removeAll()
             }
         }

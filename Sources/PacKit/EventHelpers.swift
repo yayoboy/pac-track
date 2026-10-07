@@ -54,9 +54,13 @@ public func updateFlights(_ flights: [Flight], with events: [EventView], links: 
     return pruneFlights(Array(out.suffix(MAX_FLIGHTS)), links: links, now: now)
 }
 
-/// Keeps flights still crossing the screen and whose cable still exists.
+/// Keeps flights still crossing the screen and whose cable still exists. A flight whose arrival never shows up
+/// (skipped by the pull cap or evicted from the log) leaves after twice the flight time instead of animating forever.
 public func pruneFlights(_ flights: [Flight], links: [LinkView], now: Double) -> [Flight] {
-    flights.filter { f in !(f.arrived && now - f.start >= FLIGHT_SECONDS) && links.contains { $0.id == f.link } }
+    flights.filter { f in
+        let age = now - f.start
+        return !(f.arrived && age >= FLIGHT_SECONDS) && age < 2 * FLIGHT_SECONDS && links.contains { $0.id == f.link }
+    }
 }
 
 /// Fraction of the cable covered, from the sender.

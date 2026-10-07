@@ -328,13 +328,12 @@ public final class Editor {
         }
     }
 
-    /// Adds a device configured like `src` (addresses, static routes, power; no cables) in one undo step.
+    /// Adds a device of the same kind and power state as `src` (no addresses, routes or cables: a copied IP would
+    /// silently conflict on the same segment, and static routes need an address) in one undo step.
     private func insertCopy(of src: TopologyNode) async {
         let id = newId()
         positions[id] = src.pos
         var cmds: [Command] = [.addNode(id: id, kind: src.kind, name: defaultName(src.kind, existing: snapshot.nodes))]
-        cmds += src.ifaces.compactMap { i in i.cidr.map { Command.setIp(node: id, iface: i.name, cidr: $0) } }
-        cmds += src.routes.map { Command.addRoute(node: id, cidr: $0.cidr, nextHop: $0.nextHop) }
         if !src.powered { cmds.append(.setPower(id: id, on: false)) }
         if await editNow(cmds, key: "paste") { selection = .node(id) }
     }

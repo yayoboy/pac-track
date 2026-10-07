@@ -228,7 +228,7 @@ actor Recording: EngineClient {
         await editor.paste(at: nil)
         #expect(names == ["PC1", "PC2"])
         let copy = node("PC2")
-        #expect(copy.ifaces[0].cidr == "10.0.0.1/24" && gatewayOf(copy) == "10.0.0.254" && !copy.powered)
+        #expect(copy.ifaces[0].cidr == nil && gatewayOf(copy) == nil && !copy.powered) // no duplicate IP on the segment
         #expect(editor.positions[copy.id] == Pos(x: 70, y: 70)) // one node height below: copies never overlap
         #expect(editor.selection == .node(copy.id))
         await editor.paste(at: Pos(x: 140, y: 0))

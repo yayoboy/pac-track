@@ -90,6 +90,28 @@ private func pair(_ opts: LinkOptions = LinkOptions()) throws -> (sim: Sim, a: P
         }
     }
 
+    @Test func aFaultDropsTheQueuedFramesWithAnEvent() throws {
+        let (sim, a, b, link) = try pair()
+        for _ in 0..<3 { try a.sendRaw() }
+        sim.run(100)
+        link.up = false
+        sim.run(MS)
+        #expect(sim.log.all.filter { $0.kind == .tx }.count == 1)
+        #expect(drops(sim, .linkDown) == 3) // the one on the wire and the two queued
+        #expect(b.got.isEmpty)
+    }
+
+    @Test func aPoweredOffSenderStopsDrainingItsQueue() throws {
+        let (sim, a, b, _) = try pair()
+        for _ in 0..<3 { try a.sendRaw() }
+        sim.run(100)
+        a.powered = false
+        sim.run(MS)
+        #expect(sim.log.all.filter { $0.kind == .tx }.count == 1)
+        #expect(drops(sim, .ifaceDown) == 2)
+        #expect(b.got.count == 1)
+    }
+
     @Test func updatesOptionsForLaterFramesAndValidatesThem() throws {
         let (sim, a, b, link) = try pair()
         try link.update(LinkOptions(bandwidthBps: 1e6, propDelayNs: 1 * MS))

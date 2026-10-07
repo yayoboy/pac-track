@@ -20,7 +20,7 @@ Build and open: `scripts/bundle.sh && open build/PacTrack.app`. Start from two P
 - [ ] Save, close, reopen: link values, faults and powered-off devices are as left.
 
 **Copy, paste, palette**
-- [ ] Select PC1, Cmd+C, Cmd+V twice: PC3, PC4 appear stepped below-right (56 pt, no overlap) with PC1's IP; Cmd+D duplicates the selection. Right-click empty canvas ▸ *Incolla*: the copy lands under the pointer.
+- [ ] Select PC1, Cmd+C, Cmd+V twice: PC3, PC4 appear stepped below-right (56 pt, no overlap), without IP addresses; Cmd+D duplicates the selection. Right-click empty canvas ▸ *Incolla*: the copy lands under the pointer.
 - [ ] In a text field Cmd+C/V/X/A edit text, not devices.
 - [ ] Type `rou` in the palette search: only Router remains; `zzz` shows "Nessun dispositivo".
 
