@@ -36,6 +36,7 @@ struct DeviceNodeView: View {
         .position(center)
         .gesture(drag)
         .onTapGesture { editor.select(.node(node.id)) }
+        .contextMenu { NodeMenu(node: node, editor: editor) }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("node-\(node.name)")
     }
@@ -74,5 +75,36 @@ struct DeviceNodeView: View {
                     }
             )
             .accessibilityIdentifier("handle-\(node.name)")
+    }
+}
+
+struct NodeMenu: View {
+    let node: NodeView
+    let editor: Editor
+
+    /// Other devices that have an address to aim an app at.
+    static func targets(for id: String, in nodes: [NodeView]) -> [NodeView] {
+        nodes.filter { $0.id != id && firstIp($0) != nil }
+    }
+
+    var body: some View {
+        Button("Apri ispettore") { editor.select(.node(node.id)) }
+        if node.kind.hasIp {
+            let targets = Self.targets(for: node.id, in: editor.snapshot.nodes)
+            Menu("Ping verso") {
+                ForEach(targets) { t in
+                    Button("\(t.name)  \(firstIp(t) ?? "")") { Task { await editor.run(.ping(node: node.id, target: firstIp(t) ?? ""), key: "app:\(node.id)") } }
+                }
+            }
+            .disabled(targets.isEmpty)
+            Menu("Traceroute verso") {
+                ForEach(targets) { t in
+                    Button("\(t.name)  \(firstIp(t) ?? "")") { Task { await editor.run(.traceroute(node: node.id, target: firstIp(t) ?? ""), key: "app:\(node.id)") } }
+                }
+            }
+            .disabled(targets.isEmpty)
+        }
+        Divider()
+        Button("Elimina", role: .destructive) { Task { await editor.remove(nodes: [node.id], links: []) } }
     }
 }

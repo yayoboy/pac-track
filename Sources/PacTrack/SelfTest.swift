@@ -38,6 +38,8 @@ enum SelfTest {
         let lines = editor.snapshot.apps.first?.lines ?? []
         if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") { failures.append("ping output: \(lines)") }
         editor.select(.node(id("PC1")))
+        let targets = NodeMenu.targets(for: id("PC1"), in: editor.snapshot.nodes).map(\.name)
+        if targets != ["PC2"] { failures.append("ping menu targets \(targets), expected [PC2]") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         return failures
     }

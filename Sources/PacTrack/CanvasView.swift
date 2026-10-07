@@ -142,6 +142,9 @@ struct CanvasView: View {
         }
         .contentShape(line.strokedPath(StrokeStyle(lineWidth: 12)))
         .onTapGesture { editor.select(.link(link.id)) }
+        .contextMenu {
+            Button("Scollega", role: .destructive) { Task { await editor.remove(nodes: [], links: [link.id]) } }
+        }
         .accessibilityIdentifier("link-\(link.a.iface)-\(link.b.iface)")
     }
 
