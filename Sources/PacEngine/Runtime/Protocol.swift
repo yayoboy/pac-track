@@ -56,6 +56,12 @@ public enum Command: Sendable {
     case setDnsServer(node: String, records: [DnsRecord]?)
     case renewDhcp(node: String)
     case nslookup(node: String, name: String)
+    /// Discard sink on TCP/UDP port 9 (servers only).
+    case setSink(node: String, on: Bool)
+    /// iperf3-style transfer of `bytes` to the target's sink.
+    case trafficTcp(node: String, target: String, bytes: Int)
+    /// iperf3-style constant-bitrate UDP stream to the target's sink.
+    case trafficUdp(node: String, target: String, bitsPerSecond: Double, seconds: Int)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -84,6 +90,9 @@ public enum Command: Sendable {
         case .setDnsServer: "setDnsServer"
         case .renewDhcp: "renewDhcp"
         case .nslookup: "nslookup"
+        case .setSink: "setSink"
+        case .trafficTcp: "trafficTcp"
+        case .trafficUdp: "trafficUdp"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -176,6 +185,42 @@ public struct FlowSample: Equatable, Sendable {
     }
 }
 
+/// One row of a node's TCP table, netstat style.
+public struct TcpRow: Equatable, Sendable {
+    public let local: String
+    public let remote: String
+    public let state: String
+}
+
+/// One direction of a cable over a 100 ms interval.
+public struct DirectionSample: Equatable, Sendable {
+    /// Share of the interval spent transmitting, 0…1.
+    public let utilization: Double
+    /// Frames waiting at the end of the interval.
+    public let queued: Int
+    /// Frames lost in the interval: full queue, random loss, fault.
+    public let drops: Int
+
+    public init(utilization: Double, queued: Int, drops: Int) {
+        self.utilization = utilization
+        self.queued = queued
+        self.drops = drops
+    }
+}
+
+public struct LinkSample: Equatable, Sendable {
+    public let timeNs: Int
+    /// From the link's `a` end to its `b` end, and back.
+    public let ab: DirectionSample
+    public let ba: DirectionSample
+
+    public init(timeNs: Int, ab: DirectionSample, ba: DirectionSample) {
+        self.timeNs = timeNs
+        self.ab = ab
+        self.ba = ba
+    }
+}
+
 public struct NodeView: Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: DeviceKind
@@ -197,6 +242,10 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     /// nil while the DNS server is off.
     public let dnsRecords: [DnsRecord]?
     public let dnsCache: [DnsCacheRow]
+    /// Discard sink on TCP/UDP port 9.
+    public let sink: Bool
+    /// Listening ports, then connections.
+    public let tcp: [TcpRow]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -232,6 +281,8 @@ public struct AppView: Equatable, Identifiable, Sendable {
     public let title: String
     public let lines: [String]
     public let done: Bool
+    /// One point per 100 ms for traffic flows; empty for the other apps.
+    public let samples: [FlowSample]
 }
 
 /// One logged frame event, light enough to list thousands.
@@ -299,9 +350,11 @@ public struct Snapshot: Equatable, Sendable {
     public let links: [LinkView]
     public let apps: [AppView]
     public let warnings: [WarningView]
+    /// Per cable id, one point per 100 ms of simulated time (the last minute).
+    public let linkSamples: [String: [LinkSample]]
 
     public static let empty = Snapshot(version: 0, seed: 1, timeNs: 0, running: true, speed: 1, mode: .realtime, epoch: 0,
-                                       eventCount: 0, nodes: [], links: [], apps: [], warnings: [])
+                                       eventCount: 0, nodes: [], links: [], apps: [], warnings: [], linkSamples: [:])
 }
 
 public struct TopologyIface: Codable, Equatable, Sendable {
@@ -378,8 +431,9 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var nameServer: String?
     public var dhcp: DhcpConfig?
     public var dns: [DnsRecord]?
+    public var sink: Bool
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
-                nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil) {
+                nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -390,9 +444,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.nameServer = nameServer
         self.dhcp = dhcp
         self.dns = dns
+        self.sink = sink
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -405,6 +460,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         nameServer = try c.decodeIfPresent(String.self, forKey: .nameServer)
         dhcp = try c.decodeIfPresent(DhcpConfig.self, forKey: .dhcp)
         dns = try c.decodeIfPresent([DnsRecord].self, forKey: .dns)
+        sink = try c.decodeIfPresent(Bool.self, forKey: .sink) ?? false
     }
 }
 

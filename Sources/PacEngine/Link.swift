@@ -26,9 +26,20 @@ func validateLinkOptions(_ o: LinkOptions) throws {
     if let problem { throw EngineError("Invalid link options: \(problem)") }
 }
 
+/// Totals for one direction of a cable since it was plugged; the runtime turns them into 100 ms points.
+struct LinkCounters {
+    var busyNs = 0
+    var drops = 0
+    var queued = 0
+}
+
 private final class Direction {
     var queue: [EthernetFrame] = []
     var busy = false
+    var busyNs = 0
+    var drops = 0
+
+    var counters: LinkCounters { LinkCounters(busyNs: busyNs, drops: drops, queued: queue.count) }
 }
 
 /// Full-duplex point-to-point link with a FIFO tail-drop queue per direction.
@@ -55,6 +66,11 @@ final class Link {
 
     func peer(_ i: Interface) -> Interface { i === a ? b : a }
 
+    /// From `a` to `b`, and back.
+    func counters() -> (ab: LinkCounters, ba: LinkCounters) {
+        (dirA.counters, dirB.counters)
+    }
+
     /// New options apply to frames that start transmitting from now on; queued frames keep waiting.
     func update(_ opts: LinkOptions) throws {
         try validateLinkOptions(opts)
@@ -71,10 +87,10 @@ final class Link {
     private func direction(_ from: Interface) -> Direction { from === a ? dirA : dirB }
 
     func transmit(from: Interface, _ frame: EthernetFrame) {
-        guard up else { return drop(at: from, frame, .linkDown) }
         let dir = direction(from)
+        guard up else { return drop(at: from, frame, .linkDown, dir) }
         if !dir.busy { return startTx(from, dir, frame) }
-        guard dir.queue.count < opts.queueLimit else { return drop(at: from, frame, .queueFull) }
+        guard dir.queue.count < opts.queueLimit else { return drop(at: from, frame, .queueFull, dir) }
         dir.queue.append(frame)
     }
 
@@ -83,29 +99,31 @@ final class Link {
         sim.emit(.tx, node: from.node.id, iface: from.name, frame: frame)
         // At least 1 ns, so time always advances (a zero-time loop would never end).
         let txNs = max(1, Int((Double(frame.wireBytes * 8) * Double(S) / opts.bandwidthBps).rounded()))
+        dir.busyNs += txNs
         sim.sched.after(txNs) { [self] in
             let to = peer(from)
             let lost = opts.lossRate > 0 && sim.rng.next() < opts.lossRate
-            sim.sched.after(opts.propDelayNs) { [self] in arrive(to, frame, lost) }
+            sim.sched.after(opts.propDelayNs) { [self] in arrive(to, frame, lost, dir) }
             if up, from.node.powered, !dir.queue.isEmpty {
                 startTx(from, dir, dir.queue.removeFirst())
             } else {
                 dir.busy = false
                 // A fault or a powered-off sender loses what was waiting, and says so.
-                for queued in dir.queue { drop(at: from, queued, up ? .ifaceDown : .linkDown) }
+                for queued in dir.queue { drop(at: from, queued, up ? .ifaceDown : .linkDown, dir) }
                 dir.queue.removeAll()
             }
         }
     }
 
-    private func arrive(_ to: Interface, _ frame: EthernetFrame, _ lost: Bool) {
-        if lost { return drop(at: to, frame, .loss) }
-        guard up, to.up, to.node.powered else { return drop(at: to, frame, .linkDown) }
+    private func arrive(_ to: Interface, _ frame: EthernetFrame, _ lost: Bool, _ dir: Direction) {
+        if lost { return drop(at: to, frame, .loss, dir) }
+        guard up, to.up, to.node.powered else { return drop(at: to, frame, .linkDown, dir) }
         sim.emit(.rx, node: to.node.id, iface: to.name, frame: frame)
         to.node.receive(frame, on: to)
     }
 
-    private func drop(at iface: Interface, _ frame: EthernetFrame, _ reason: DropReason) {
+    private func drop(at iface: Interface, _ frame: EthernetFrame, _ reason: DropReason, _ dir: Direction) {
+        dir.drops += 1
         sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: frame, reason: reason)
     }
 }

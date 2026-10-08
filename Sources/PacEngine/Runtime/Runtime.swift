@@ -15,16 +15,26 @@ private func secondsLeft(_ ns: Int) -> Int {
     (ns + S - 1) / S
 }
 
+/// Totals → one 100 ms point of a cable direction.
+// ponytail: a frame's serialisation counts whole in the interval it starts in (capped at 100%)
+private func directionSample(_ c: LinkCounters, since last: LinkCounters) -> DirectionSample {
+    DirectionSample(utilization: min(1, Double(c.busyNs - last.busyNs) / Double(SAMPLE_NS)), queued: c.queued, drops: c.drops - last.drops)
+}
+
 private enum Program {
     case ping(Ping)
     case trace(Traceroute)
     case nslookup(NsLookup)
+    case tcpFlow(TcpFlow)
+    case udpFlow(UdpFlow)
 
     var lines: [String] {
         switch self {
         case .ping(let p): p.result.lines
         case .trace(let t): t.result.lines
         case .nslookup(let n): n.result.lines
+        case .tcpFlow(let f): f.result.lines
+        case .udpFlow(let f): f.result.lines
         }
     }
 
@@ -33,6 +43,17 @@ private enum Program {
         case .ping(let p): p.result.done
         case .trace(let t): t.result.done
         case .nslookup(let n): n.result.done
+        case .tcpFlow(let f): f.result.done
+        case .udpFlow(let f): f.result.done
+        }
+    }
+
+    /// A traffic flow's metrics; empty for the other apps.
+    var samples: [FlowSample] {
+        switch self {
+        case .tcpFlow(let f): f.result.samples
+        case .udpFlow(let f): f.result.samples
+        case .ping, .trace, .nslookup: []
         }
     }
 
@@ -41,6 +62,16 @@ private enum Program {
         case .ping(let p): p.stop()
         case .trace(let t): t.stop()
         case .nslookup(let n): n.stop()
+        case .tcpFlow(let f): f.stop()
+        case .udpFlow(let f): f.stop()
+        }
+    }
+
+    func sample(at time: Int) {
+        switch self {
+        case .tcpFlow(let f): f.sample(at: time)
+        case .udpFlow(let f): f.sample(at: time)
+        case .ping, .trace, .nslookup: break
         }
     }
 }
@@ -71,6 +102,11 @@ public final class Runtime {
     /// Clock state to restore when leaving Simulation mode.
     private var runningBeforeSimulation = true
     private var last: Snapshot?
+    /// Next 100 ms boundary at which cables and flows are sampled.
+    private var nextSampleAt = SAMPLE_NS
+    private var linkSamples: [String: [LinkSample]] = [:]
+    /// Cable totals at the previous sample.
+    private var linkCounters: [String: (ab: LinkCounters, ba: LinkCounters)] = [:]
 
     public init(seed: UInt32 = 1) {
         self.seed = seed
@@ -90,6 +126,7 @@ public final class Runtime {
             for linkId in linkOrder where links[linkId]!.a.node === node || links[linkId]!.b.node === node {
                 links[linkId]!.disconnect()
                 links[linkId] = nil
+                forget(link: linkId)
             }
             linkOrder.removeAll { links[$0] == nil }
             for app in apps where app.node == id { app.program.stop() }
@@ -110,6 +147,7 @@ public final class Runtime {
             try link(id).disconnect()
             links[id] = nil
             linkOrder.removeAll { $0 == id }
+            forget(link: id)
         case let .setIp(node, iface, cidr):
             let ip = try ipNode(node)
             if let client = (ip as? Host)?.dhcp, client.iface.name == iface { throw EngineError("\(iface) is configured by DHCP") }
@@ -150,6 +188,19 @@ public final class Runtime {
         case let .nslookup(node, name):
             let t = name.trimmingCharacters(in: .whitespaces)
             start(node, "nslookup \(t)", .nslookup(try NsLookup(node: try liveIpNode(node), name: t)))
+        case let .setSink(node, on):
+            let n = try ipNode(node)
+            guard !on || nodes[node]?.kind == .server else { throw EngineError("\(n.name) cannot run a traffic sink") }
+            try n.configureSink(on)
+        case let .trafficTcp(node, target, bytes):
+            let t = target.trimmingCharacters(in: .whitespaces)
+            let flow = try TcpFlow(node: try liveIpNode(node), target: t, bytes: bytes)
+            start(node, "iperf3 -c \(t) -p \(PORT_DISCARD) -n \(bytes)", .tcpFlow(flow))
+        case let .trafficUdp(node, target, bitsPerSecond, seconds):
+            let t = target.trimmingCharacters(in: .whitespaces)
+            // Validated first: the title converts the rate to an integer.
+            let flow = try UdpFlow(node: try liveIpNode(node), target: t, bitsPerSecond: bitsPerSecond, seconds: seconds)
+            start(node, "iperf3 -u -c \(t) -p \(PORT_DISCARD) -b \(Int(bitsPerSecond)) -t \(seconds)", .udpFlow(flow))
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -186,7 +237,7 @@ public final class Runtime {
         guard running else { return }
         switch mode {
         case .realtime:
-            sim.sched.runUntil(sim.now + Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded()), maxEvents: MAX_EVENTS_PER_ADVANCE)
+            run(until: sim.now + Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded()), maxEvents: MAX_EVENTS_PER_ADVANCE)
         case .simulation:
             stepCredit += min(wallMs, MAX_STEP_MS) * speed
             while stepCredit >= SIM_STEP_MS {
@@ -196,11 +247,58 @@ public final class Runtime {
         }
     }
 
-    /// Runs scheduled events until one is logged (a frame sent, received or dropped) or none are left.
+    /// Runs scheduled events until one is logged (a frame sent, received or dropped) or none are left,
+    /// sampling every 100 ms boundary passed on the way.
     private func step() {
         let before = sim.log.total
         var budget = MAX_SILENT_EVENTS
-        while sim.log.total == before, budget > 0, sim.sched.step() { budget -= 1 }
+        while sim.log.total == before, budget > 0, let next = sim.sched.nextTime {
+            // An idle stretch longer than the kept history would only produce points that get thrown away.
+            nextSampleAt = max(nextSampleAt, (next - 1) / SAMPLE_NS * SAMPLE_NS - (METRICS_HISTORY - 1) * SAMPLE_NS)
+            while nextSampleAt < next { sample() }
+            sim.sched.step()
+            budget -= 1
+        }
+    }
+
+    /// Runs events up to `time` (at most `maxEvents`), stopping at every 100 ms boundary to sample cables and flows there.
+    private func run(until time: Int, maxEvents: Int) {
+        var budget = maxEvents
+        while budget > 0 {
+            let stop = min(time, nextSampleAt)
+            budget -= sim.sched.runUntil(stop, maxEvents: budget)
+            guard sim.now == stop else { return } // out of budget: the clock stays at the last event run
+            if stop == nextSampleAt { sample() }
+            if stop == time { return }
+        }
+    }
+
+    /// One point for every cable and running traffic flow, stamped at the boundary.
+    private func sample() {
+        let at = nextSampleAt
+        nextSampleAt += SAMPLE_NS
+        for id in linkOrder {
+            let now = links[id]!.counters()
+            let last = linkCounters[id] ?? (LinkCounters(), LinkCounters())
+            linkCounters[id] = now
+            linkSamples[id, default: []].append(LinkSample(timeNs: at, ab: directionSample(now.ab, since: last.ab),
+                                                           ba: directionSample(now.ba, since: last.ba)))
+            if linkSamples[id]!.count > METRICS_HISTORY { linkSamples[id]!.removeFirst() }
+        }
+        for app in apps where !app.program.done { app.program.sample(at: at) }
+    }
+
+    private func forget(link id: String) {
+        linkSamples[id] = nil
+        linkCounters[id] = nil
+    }
+
+    /// netstat -ant: listening ports, then connections in the order they were opened.
+    private func tcpRows(_ n: IpNode) -> [TcpRow] {
+        n.tcp.listening.map { TcpRow(local: "0.0.0.0:\($0)", remote: "0.0.0.0:*", state: "LISTEN") }
+            + n.tcp.connections.map {
+                TcpRow(local: "\(formatIp($0.localIp)):\($0.localPort)", remote: "\(formatIp($0.remoteIp)):\($0.remotePort)", state: $0.state.rawValue)
+            }
     }
 
     /// Log entries from `seq` on, at most the newest `limit` (the UI pulls only what it has not seen).
@@ -260,7 +358,9 @@ public final class Runtime {
                 dnsRecords: ip?.dnsServer?.records.map { DnsRecord(name: $0.name, ip: formatIp($0.addr), ttl: $0.ttl) },
                 dnsCache: ip?.resolver.entries().flatMap { e in
                     e.addrs.map { DnsCacheRow(name: e.name, ip: formatIp($0), ttlS: secondsLeft(e.expiresAt - now)) }
-                } ?? []
+                } ?? [],
+                sink: ip?.sink ?? false,
+                tcp: ip.map { tcpRows($0) } ?? []
             )
         }
         let linkViews = linkOrder.map { id in
@@ -268,10 +368,12 @@ public final class Runtime {
             return LinkView(id: id, a: IfaceRef(node: l.a.node.id, iface: l.a.name), b: IfaceRef(node: l.b.node.id, iface: l.b.name),
                             options: l.opts, up: l.up)
         }
-        let appViews = apps.map { AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done) }
+        let appViews = apps.map {
+            AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done, samples: $0.program.samples)
+        }
         return Snapshot(version: 0, seed: seed, timeNs: now, running: running, speed: speed, mode: mode, epoch: epoch,
                         eventCount: sim.log.total, nodes: nodeViews, links: linkViews, apps: appViews,
-                        warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) })
+                        warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) }, linkSamples: linkSamples)
     }
 
     private func create(_ id: String, _ kind: DeviceKind) -> Node {
@@ -340,6 +442,7 @@ public final class Runtime {
             if let server = n.nameServer { try next.handle(.setNameServer(node: n.id, ip: server)) }
             if let config = n.dhcp { try next.setDhcpServer(n.id, config, requireInSubnet: false) }
             if let records = n.dns { try next.handle(.setDnsServer(node: n.id, records: records)) }
+            if n.sink { try next.handle(.setSink(node: n.id, on: true)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }
@@ -352,5 +455,8 @@ public final class Runtime {
         apps = []
         epoch += 1
         stepCredit = 0
+        nextSampleAt = SAMPLE_NS
+        linkSamples = [:]
+        linkCounters = [:]
     }
 }

@@ -46,15 +46,20 @@ final class Scheduler {
         return true
     }
 
-    /// Runs events up to `time`. With a budget, stops after `maxEvents` and leaves `now` at the last event run.
-    func runUntil(_ time: Int, maxEvents: Int = .max) {
+    /// Runs events up to `time`. With a budget, stops after `maxEvents` and leaves `now` at the last event run. Returns the events run.
+    @discardableResult
+    func runUntil(_ time: Int, maxEvents: Int = .max) -> Int {
         var count = 0
         while count < maxEvents, let timer = peek(), timer.time <= time {
             step()
             count += 1
         }
         if count < maxEvents, time > now { now = time }
+        return count
     }
+
+    /// Time of the next live event, if any.
+    var nextTime: Int? { peek()?.time }
 
     private func peek() -> SimTimer? {
         while let first = heap.first, first.cancelled { pop() }
