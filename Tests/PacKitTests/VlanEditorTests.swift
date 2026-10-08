@@ -35,4 +35,33 @@ import Testing
         #expect(node("SW2")?.ifaces.map { $0.switchport } == node("SW1")?.ifaces.map { $0.switchport })
         #expect(node("R2")?.ifaces.map { "\($0.name) \($0.cidr ?? "-")" } == ["Gi0/0 -", "Gi0/0.10 -", "Gi0/1 -", "Gi0/2 -", "Gi0/3 -"])
     }
+
+    @Test func portFieldsApplyTypedVlansAndShowErrorsOnTheirField() async {
+        await editor.addDevice(.switch, at: origin)
+        let sw = node("SW1")?.id ?? ""
+        await editor.setPort(sw, iface: "Gi0/1", .vlan, "dieci")
+        #expect(editor.error == EditorError(key: "port:\(sw):Gi0/1:vlan", message: "Invalid number: \"dieci\""))
+        await editor.setPort(sw, iface: "Gi0/1", .vlan, " 10 ")
+        #expect(node("SW1")?.ifaces[0].switchport == PortConfig(vlan: 10) && editor.error == nil)
+        await editor.edit(.setSwitchport(node: sw, iface: "Gi0/2", config: PortConfig(mode: .trunk)))
+        await editor.setPort(sw, iface: "Gi0/2", .allowed, "10,20")
+        #expect(editor.error == EditorError(key: "port:\(sw):Gi0/2:allowed", message: "Native VLAN 1 is not allowed on the trunk"))
+        await editor.setPort(sw, iface: "Gi0/2", .native, "10")
+        await editor.setPort(sw, iface: "Gi0/2", .allowed, " 10,20 ")
+        let trunk = PortConfig(mode: .trunk, allowed: "10,20", native: 10)
+        #expect(node("SW1")?.ifaces[1].switchport == trunk)
+        #expect([PortField.vlan, .allowed, .native].map { $0.format(trunk) } == ["1", "10,20", "10"])
+        await editor.undo()
+        #expect(node("SW1")?.ifaces[1].switchport?.allowed == "all")
+    }
+
+    @Test func aCableToATrunkPortIsLabelledTrunk() async {
+        await editor.addDevice(.switch, at: origin)
+        await editor.addDevice(.switch, at: Pos(x: 200, y: 0))
+        let sw2 = node("SW2")?.id ?? ""
+        await editor.connect(node("SW1")?.id ?? "", sw2) // Gi0/1 ↔ Gi0/1
+        #expect(!isTrunk(editor.snapshot.links[0], in: editor.snapshot.nodes))
+        await editor.edit(.setSwitchport(node: sw2, iface: "Gi0/1", config: PortConfig(mode: .trunk)))
+        #expect(isTrunk(editor.snapshot.links[0], in: editor.snapshot.nodes))
+    }
 }

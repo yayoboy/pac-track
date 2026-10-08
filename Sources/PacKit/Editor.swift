@@ -478,6 +478,22 @@ public final class Editor {
         }
     }
 
+    /// Applies one switch-port VLAN setting typed in the Porte tab; errors show under that field.
+    public func setPort(_ id: String, iface: String, _ field: PortField, _ text: String) async {
+        await serialized {
+            let key = "port:\(id):\(iface):\(field.rawValue)"
+            guard let config = self.snapshot.nodes.first(where: { $0.id == id })?.ifaces.first(where: { $0.name == iface })?.switchport else { return }
+            let next: PortConfig
+            do {
+                next = try field.apply(text, to: config)
+            } catch {
+                self.fail(key, error)
+                return
+            }
+            await self.editNow([.setSwitchport(node: id, iface: iface, config: next)], key: key)
+        }
+    }
+
     public func enableDns(_ id: String, _ on: Bool) async {
         await edit(.setDnsServer(node: id, records: on ? [] : nil), key: "dnsrec:\(id)")
     }

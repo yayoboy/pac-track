@@ -119,7 +119,7 @@ private struct NodeInspector: View {
     }
 
     private var ports: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: node.kind == .switch ? 10 : 2) {
             if node.kind == .switch {
                 let key = "ports:\(node.id)"
                 Picker("Porte", selection: Binding(get: { node.ifaces.count }, set: { n in
@@ -133,12 +133,15 @@ private struct NodeInspector: View {
                 ErrorLine(editor: editor, key: key)
             }
             ForEach(node.ifaces, id: \.name) { iface in
-                HStack {
-                    Text(iface.name)
-                    Spacer()
-                    Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(iface.name)
+                        Spacer()
+                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                    }
+                    .font(Theme.mono)
+                    if let port = iface.switchport { SwitchportFields(node: node.id, iface: iface.name, port: port, editor: editor) }
                 }
-                .font(Theme.mono)
             }
         }
     }
@@ -146,7 +149,8 @@ private struct NodeInspector: View {
     private var tables: some View {
         VStack(alignment: .leading, spacing: 14) {
             if node.kind == .switch {
-                TableSection(title: "Tabella MAC", head: ["MAC", "Porta", "Età"], rows: node.mac.map { [$0.mac, $0.iface, "\($0.ageS)s"] })
+                TableSection(title: "Tabella MAC", head: ["VLAN", "MAC", "Porta", "Età"],
+                             rows: node.mac.map { ["\($0.vlan)", $0.mac, $0.iface, "\($0.ageS)s"] })
             } else {
                 TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
                              rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
@@ -164,6 +168,40 @@ private struct NodeInspector: View {
                 }
                 if node.dhcpServer != nil {
                     TableSection(title: "Lease DHCP", head: ["IP", "MAC", "Scade", "Stato"], rows: leaseRows(node.leases))
+                }
+            }
+        }
+    }
+}
+
+/// A switch port's VLAN role (spec M7 §5): Access with its VLAN, or Trunk with the allowed VLANs and the native one; errors under the field.
+private struct SwitchportFields: View {
+    let node: String
+    let iface: String
+    let port: PortConfig
+    @Bindable var editor: Editor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Picker("", selection: Binding(get: { port.mode }, set: { mode in
+                var c = port
+                c.mode = mode
+                Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
+            })) {
+                Text("Access").tag(PortMode.access)
+                Text("Trunk").tag(PortMode.trunk)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            .accessibilityIdentifier("port-mode-\(iface)")
+            HStack(alignment: .top) {
+                ForEach(port.mode == .access ? [PortField.vlan] : [.allowed, .native], id: \.self) { field in
+                    CommitField(label: field.label, value: field.format(port), errorKey: "port:\(node):\(iface):\(field.rawValue)", editor: editor) {
+                        await editor.setPort(node, iface: iface, field, $0)
+                    }
+                    .frame(maxWidth: field == .allowed ? .infinity : 80)
                 }
             }
         }

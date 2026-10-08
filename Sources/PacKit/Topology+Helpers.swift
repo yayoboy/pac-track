@@ -279,6 +279,47 @@ public func dhcpStatus(_ c: DhcpClientView) -> String {
     }
 }
 
+/// One switch-port VLAN setting typed in the Porte tab.
+public enum PortField: String, Sendable {
+    case vlan, allowed, native
+
+    public var label: String {
+        switch self {
+        case .vlan: "VLAN"
+        case .allowed: "VLAN ammesse"
+        case .native: "Nativa"
+        }
+    }
+
+    public func format(_ c: PortConfig) -> String {
+        switch self {
+        case .vlan: String(c.vlan)
+        case .allowed: c.allowed
+        case .native: String(c.native)
+        }
+    }
+
+    /// Puts the typed text into the settings; the engine checks the ranges, the list and the native VLAN.
+    public func apply(_ text: String, to c: PortConfig) throws -> PortConfig {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        var n = c
+        if self == .allowed {
+            n.allowed = t
+            return n
+        }
+        guard let v = Int(t) else { throw EngineError("Invalid number: \"\(text)\"") }
+        if self == .vlan { n.vlan = v } else { n.native = v }
+        return n
+    }
+}
+
+/// True when either end of the cable is a switch port in trunk mode: its label says "trunk".
+public func isTrunk(_ link: LinkView, in nodes: [NodeView]) -> Bool {
+    [link.a, link.b].contains { end in
+        nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.switchport?.mode == .trunk
+    }
+}
+
 public func leaseRows(_ leases: [LeaseRow]) -> [[String]] {
     leases.map { [$0.ip, $0.mac, "\($0.expiresS)s", $0.bound ? "attivo" : "offerto"] }
 }

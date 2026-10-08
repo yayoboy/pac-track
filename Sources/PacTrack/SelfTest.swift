@@ -81,6 +81,7 @@ enum SelfTest {
         failures += await cloudScenario(output: output)
         failures += await pingScenario(output: output)
         failures += await exportScenario(output: output)
+        failures += await vlanScenario(output: output)
         return failures
     }
 
@@ -322,6 +323,47 @@ enum SelfTest {
         // Boxes span x −52…332 and y 47…233; with the margin 464 × 266 pt, at 2×.
         var failures = rep.pixelsWide == 928 && rep.pixelsHigh == 532 ? [] : ["export size \(rep.pixelsWide)×\(rep.pixelsHigh)"]
         if (try? data.write(to: URL(fileURLWithPath: sibling(output, "m6-export")))) == nil { failures.append("could not write the export") }
+        return failures
+    }
+
+    /// M7a: VLAN 10 on two switches joined by a trunk, PC3 in VLAN 20 on the same subnet; SW1's Porte tab with a field error, then its MAC table.
+    private static func vlanScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 460, y: 160))
+        await editor.addDevice(.switch, at: Pos(x: 760, y: 160))
+        await editor.addDevice(.pc, at: Pos(x: 460, y: 360))
+        await editor.addDevice(.pc, at: Pos(x: 680, y: 360))
+        await editor.addDevice(.pc, at: Pos(x: 860, y: 360))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("SW1"), id("PC1")) // SW1 Gi0/1
+        await editor.connect(id("SW1"), id("SW2")) // SW1 Gi0/2 — SW2 Gi0/1
+        await editor.connect(id("SW2"), id("PC2")) // SW2 Gi0/2
+        await editor.connect(id("SW2"), id("PC3")) // SW2 Gi0/3
+        for (sw, port) in [("SW1", "Gi0/2"), ("SW2", "Gi0/1")] {
+            await editor.edit(.setSwitchport(node: id(sw), iface: port, config: PortConfig(mode: .trunk)))
+        }
+        for (sw, port, vlan) in [("SW1", "Gi0/1", "10"), ("SW2", "Gi0/2", "10"), ("SW2", "Gi0/3", "20")] {
+            await editor.setPort(id(sw), iface: port, .vlan, vlan)
+        }
+        for (name, cidr) in [("PC1", "10.0.0.1/24"), ("PC2", "10.0.0.2/24"), ("PC3", "10.0.0.3/24")] {
+            await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
+        }
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.2"))
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.3"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let apps = editor.snapshot.apps
+        if !(apps.first?.lines.contains("4 packets transmitted, 4 received, 0% packet loss") ?? false) { failures.append("same-VLAN ping \(apps.first?.lines ?? [])") }
+        if apps.count != 2 || apps[1].lines.contains(where: { $0.contains("bytes from") }) { failures.append("PC3 (VLAN 20) answered: \(apps.map(\.lines))") }
+        let sw2 = editor.snapshot.nodes.first { $0.name == "SW2" }
+        if !(sw2?.mac.contains { $0.vlan == 10 && $0.iface == "Gi0/1" } ?? false) { failures.append("SW2 MAC table \(sw2?.mac ?? [])") }
+        if !isTrunk(editor.snapshot.links[1], in: editor.snapshot.nodes) { failures.append("SW1–SW2 is not a trunk") }
+        await editor.setPort(id("SW1"), iface: "Gi0/2", .allowed, "10,5000")
+        if editor.error?.key != "port:\(id("SW1")):Gi0/2:allowed" { failures.append("port field error \(String(describing: editor.error))") }
+        editor.select(.node(id("SW1")))
+        if !render(editor, to: sibling(output, "m7a-ports")) { failures.append("could not write the M7a ports image") }
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m7a-mac")) { failures.append("could not write the M7a MAC table image") }
         return failures
     }
 
