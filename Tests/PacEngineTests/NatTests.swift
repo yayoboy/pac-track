@@ -88,7 +88,7 @@ private func checksumsHold(_ sim: Sim) -> Bool {
         let translated = rewritten(echo, src: g, srcPort: 77)
         let error = makeIcmp(type: ICMP_TIME_EXCEEDED, code: 0, id: 0, seq: 0, data: serializeHeader(translated) + serializeL4(translated).prefix(8))
         #expect(quotedEndpoints(error) == Endpoints(proto: IPPROTO_ICMP, src: g, srcPort: 77, dst: b, dstPort: 0))
-        let back = withQuotedSource(error, a, 9)
+        let back = withQuotedEndpoint(error, a, 9)
         #expect(quotedEndpoints(back) == Endpoints(proto: IPPROTO_ICMP, src: a, srcPort: 9, dst: b, dstPort: 0))
         #expect(internetChecksum(Array(back.data[0..<20])) == 0) // quoted IPv4 header
         #expect(internetChecksum(Array(back.data[20..<28])) == 0) // quoted echo header (its 56 data bytes are zeros)
@@ -201,6 +201,21 @@ private func checksumsHold(_ sim: Sim) -> Bool {
         r1.reset()
         #expect(r1.nat?.view().isEmpty == true)
         #expect(r1.nat?.config == NatConfig(inside: ["Gi0/0", "Gi0/2"], outside: "Gi0/1"))
+    }
+
+    @Test func anIcmpErrorFromInsideAboutATranslatedFlowLeavesTranslated() throws {
+        let (sim, h1, _, _, srv) = try natLab()
+        _ = try listen(srv, 7, echo: true) // H1 has nothing on port 5000: the echo gets a port unreachable
+        var errors: [(src: UInt32, quote: [UInt8])] = []
+        srv.onIcmp { p, m in if m.type == ICMP_DEST_UNREACH { errors.append((p.src, m.data)) } }
+        h1.sendUdp(try parseIp("203.0.113.10"), srcPort: 5000, dstPort: 7, data: [0])
+        sim.run(10 * MS)
+        // RFC 5508 §4.2 / RFC 3022 §4.3: the outer source and the quoted destination are the translated ones, as SRV sent them.
+        let e = try #require(errors.first)
+        #expect(errors.count == 1 && formatIp(e.src) == "203.0.113.1")
+        #expect(Array(e.quote[16..<20]) == [203, 0, 113, 1] && Array(e.quote[22..<24]) == [0x13, 0x88]) // 5000
+        #expect(internetChecksum(Array(e.quote[0..<20])) == 0)
+        #expect(checksumsHold(sim))
     }
 
     @Test func aNewOutsideAddressClearsTheTranslationsBoundToTheOldOne() throws {

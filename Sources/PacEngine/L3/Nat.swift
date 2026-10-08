@@ -68,11 +68,21 @@ final class Nat {
 
     /// Inside → outside, after routing (RFC 3022 §2.2).
     func outbound(_ p: Ipv4Packet, from inIface: Interface, to outIface: Interface) -> Ipv4Packet {
-        guard config.inside.contains(inIface.name), outIface.name == config.outside, let global = outIface.ipv4?.addr,
-              let e = endpoints(p) else { return p }
-        // ponytail: echo replies and ICMP errors from inside hosts leave untranslated (they only answer traffic routed in untranslated)
-        if case .icmp(let m) = p.payload, m.type != ICMP_ECHO_REQUEST { return p }
+        guard config.inside.contains(inIface.name), outIface.name == config.outside, let global = outIface.ipv4?.addr else { return p }
         expire()
+        if case .icmp(let m) = p.payload, let q = quotedEndpoints(m), q.proto != IPPROTO_ICMP {
+            // An inside host's error about a translated reply, quoted as it was delivered (remote → local), leaves with the
+            // global endpoint in both headers (RFC 5508 §4.2). An error never refreshes the entry.
+            guard let e = entries.first(where: {
+                $0.proto == q.proto && $0.remote == q.src && $0.remotePort == q.srcPort && $0.local == q.dst && $0.localPort == q.dstPort
+            }) else { return p }
+            var fixed = p
+            fixed.payload = .icmp(withQuotedEndpoint(m, e.global, e.globalPort, destination: true))
+            return rewritten(fixed, src: e.global)
+        }
+        // ponytail: echo replies from inside hosts leave untranslated (they only answer echo requests routed in untranslated)
+        guard let e = endpoints(p) else { return p }
+        if case .icmp(let m) = p.payload, m.type == ICMP_ECHO_REPLY { return p }
         let i = entries.firstIndex {
             $0.proto == e.proto && $0.local == e.src && $0.localPort == e.srcPort && $0.remote == e.dst && $0.remotePort == e.dstPort
         } ?? add(e, global: global)
@@ -91,7 +101,7 @@ final class Nat {
                 $0.proto == q.proto && $0.global == q.src && $0.globalPort == q.srcPort && $0.remote == q.dst && $0.remotePort == q.dstPort
             }), p.dst == e.global else { return nil }
             var fixed = p
-            fixed.payload = .icmp(withQuotedSource(m, e.local, e.localPort))
+            fixed.payload = .icmp(withQuotedEndpoint(m, e.local, e.localPort))
             return rewritten(fixed, dst: e.local)
         }
         guard let e = endpoints(p), let i = entries.firstIndex(where: {

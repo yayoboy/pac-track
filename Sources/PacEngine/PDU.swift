@@ -410,15 +410,17 @@ private func adjusted(_ checksum: UInt16, _ old: UInt16, _ new: UInt16) -> UInt1
 }
 
 /// An ICMP error whose quoted packet gets a new source address and port (echo: identifier), as NAT hands it back inside
-/// (RFC 5508 §4): the quoted IPv4 checksum is recomputed and a quoted echo's adjusted (RFC 1624); a quoted UDP checksum is 0
+/// (RFC 5508 §4), or with `destination` a new destination address and port, as NAT sends an inside host's error out (TCP and UDP
+/// quotes only): the quoted IPv4 checksum is recomputed and a quoted echo's adjusted (RFC 1624); a quoted UDP checksum is 0
 /// and TCP's lies beyond the 8 quoted bytes. `m` must quote a flow (`quotedEndpoints(m) != nil`).
-func withQuotedSource(_ m: IcmpMessage, _ addr: UInt32, _ port: UInt16) -> IcmpMessage {
+func withQuotedEndpoint(_ m: IcmpMessage, _ addr: UInt32, _ port: UInt16, destination: Bool = false) -> IcmpMessage {
     var q = m.data
     let echo = q[9] == IPPROTO_ICMP
-    let at = echo ? 24 : 20
+    let at = destination ? 22 : echo ? 24 : 20
     if echo { q.replaceSubrange(22..<24, with: u16(adjusted(word16(q, 22), word16(q, at), port))) }
     q.replaceSubrange(at..<at + 2, with: u16(port))
-    q.replaceSubrange(12..<16, with: u32(addr))
+    let a = destination ? 16 : 12
+    q.replaceSubrange(a..<a + 4, with: u32(addr))
     q.replaceSubrange(10..<12, with: [0, 0])
     q.replaceSubrange(10..<12, with: u16(internetChecksum(Array(q[0..<20]))))
     return makeIcmp(type: m.type, code: m.code, id: m.id, seq: m.seq, data: q)
