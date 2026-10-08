@@ -5,12 +5,16 @@ func checkVlan(_ vlan: Int) throws {
     guard VLAN_IDS.contains(vlan) else { throw EngineError("VLAN must be between 1 and 4094") }
 }
 
-/// IOS `switchport trunk allowed vlan` syntax: "all" or "10,20,30-35" (spaces ignored).
+/// IOS `switchport trunk allowed vlan` syntax: "all" or "10,20,30-35" (spaces allowed around commas and dashes, not inside a number:
+/// "10 20" is refused, not read as 1020).
 func parseVlanList(_ text: String) throws -> [ClosedRange<Int>] {
-    let t = String(text.filter { !$0.isWhitespace })
-    if t.lowercased() == "all" { return [VLAN_IDS] }
-    return try t.split(separator: ",", omittingEmptySubsequences: false).map { item in
-        let ends = item.split(separator: "-", omittingEmptySubsequences: false).map { Int($0) }
+    if text.lowercased().split(whereSeparator: \.isWhitespace) == ["all"] { return [VLAN_IDS] }
+    return try text.split(separator: ",", omittingEmptySubsequences: false).map { item in
+        let ends = item.split(separator: "-", omittingEmptySubsequences: false).map { end in
+            // One word of digits only: no inner space, no sign.
+            let words = end.split(whereSeparator: \.isWhitespace)
+            return words.count == 1 && words[0].allSatisfy({ ("0"..."9").contains($0) }) ? Int(words[0]) : nil
+        }
         guard (1...2).contains(ends.count), let lo = ends[0], let hi = ends[ends.count - 1], lo <= hi else {
             throw EngineError("Invalid VLAN list: \"\(text)\"")
         }

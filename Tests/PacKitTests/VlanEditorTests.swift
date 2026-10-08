@@ -47,6 +47,8 @@ import Testing
         await editor.setPort(sw, iface: "Gi0/2", .allowed, "10,20")
         #expect(editor.error == EditorError(key: "port:\(sw):Gi0/2:allowed", message: "Native VLAN 1 is not allowed on the trunk"))
         await editor.setPort(sw, iface: "Gi0/2", .native, "10")
+        await editor.setPort(sw, iface: "Gi0/2", .allowed, "10 20") // a typo, not VLAN 1020
+        #expect(editor.error == EditorError(key: "port:\(sw):Gi0/2:allowed", message: "Invalid VLAN list: \"10 20\""))
         await editor.setPort(sw, iface: "Gi0/2", .allowed, " 10,20 ")
         let trunk = PortConfig(mode: .trunk, allowed: "10,20", native: 10)
         #expect(node("SW1")?.ifaces[1].switchport == trunk)

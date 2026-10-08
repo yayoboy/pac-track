@@ -88,12 +88,18 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         expectError("Invalid VLAN list: \"10,abc\"") { try set(PortConfig(mode: .trunk, allowed: "10,abc")) }
         expectError("Invalid VLAN list: \"30-20\"") { try set(PortConfig(mode: .trunk, allowed: "30-20")) }
         expectError("Invalid VLAN list: \"\"") { try set(PortConfig(mode: .trunk, allowed: "")) }
+        // IOS rejects a space inside a number (not VLAN 1020) and signs.
+        for bad in ["1, 10 20", "1 0", "+1", "1,-5", "1-+5"] {
+            expectError("Invalid VLAN list: \"\(bad)\"") { try set(PortConfig(mode: .trunk, allowed: bad)) }
+        }
         expectError("Native VLAN 1 is not allowed on the trunk") { try set(PortConfig(mode: .trunk, allowed: "10,20")) }
         expectError("PC1 has no switch ports") { try rt.handle(.setSwitchport(node: "a", iface: "eth0", config: PortConfig())) }
         #expect(rt.snapshot().nodes[0].ifaces[0].switchport == PortConfig())
         let trunk = PortConfig(mode: .trunk, allowed: "10, 20,30-35", native: 20)
         try set(trunk)
         #expect(rt.snapshot().nodes[0].ifaces[0].switchport == trunk)
+        #expect(try parseVlanList(" 10 , 20,30 - 35 ") == [10...10, 20...20, 30...35])
+        #expect(try parseVlanList(" ALL ") == [VLAN_IDS])
         #expect(rt.snapshot().nodes[1].ifaces[0].switchport == nil)
     }
 
