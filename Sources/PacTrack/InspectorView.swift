@@ -137,10 +137,10 @@ private struct NodeInspector: View {
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
                 TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
                 if node.nat != nil {
-                    // Five wide columns: scroll sideways rather than squeeze addresses into the 300 pt column.
+                    // Two lines per entry, so all five fields fit the 300 pt column; the scroll only catches the longest addresses.
                     ScrollView(.horizontal) {
-                        TableSection(title: "Traduzioni NAT", head: ["Proto", "Inside locale", "Inside globale", "Outside", "TTL"],
-                                     rows: node.natTable.map { [$0.proto, $0.insideLocal, $0.insideGlobal, $0.outside, "\($0.ttlS)s"] })
+                        TableSection(title: "Traduzioni NAT", head: ["Proto", "Inside locale\nInside globale", "Outside\nTTL"],
+                                     rows: node.natTable.map { [$0.proto, "\($0.insideLocal)\n\($0.insideGlobal)", "\($0.outside)\n\($0.ttlS)s"] })
                     }
                 }
                 if node.kind.isHost {
