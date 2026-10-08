@@ -16,6 +16,11 @@ class IpNode: Node {
     var learnedNameServer: UInt32?
     var dhcpServer: DhcpServer?
     var dnsServer: DnsServer?
+    /// Turns the discard sink off again; nil while it is off.
+    private var sinkStop: (() -> Void)?
+
+    /// Discard service on TCP and UDP port 9: accepts connections and datagrams and drops the data.
+    var sink: Bool { sinkStop != nil }
 
     var effectiveNameServer: UInt32? { nameServer ?? learnedNameServer }
     private var ipId: UInt16 = 0
@@ -64,6 +69,29 @@ class IpNode: Node {
         let token = nextToken
         icmpListeners.append((token, listener))
         return { [weak self] in self?.icmpListeners.removeAll { $0.token == token } }
+    }
+
+    func configureSink(_ on: Bool) throws {
+        guard on != sink else { return }
+        guard on else {
+            sinkStop?()
+            sinkStop = nil
+            return
+        }
+        try tcp.listen(PORT_DISCARD)
+        let unbind: () -> Void
+        do {
+            unbind = try bindUdp(PORT_DISCARD) { [unowned self] _, u, _ in
+                if case .traffic(let d) = u.payload { self.sim.flows[d.flow]?(d) }
+            }
+        } catch {
+            tcp.unlisten(PORT_DISCARD)
+            throw error
+        }
+        sinkStop = { [unowned self] in
+            unbind()
+            self.tcp.unlisten(PORT_DISCARD)
+        }
     }
 
     override func reset() {

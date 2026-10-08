@@ -16,6 +16,8 @@ let UNREACH_FRAG_NEEDED: UInt8 = 4
 let PORT_DHCP_SERVER: UInt16 = 67
 let PORT_DHCP_CLIENT: UInt16 = 68
 let PORT_DNS: UInt16 = 53
+/// Discard service (RFC 863): the traffic generator's receiver, TCP and UDP.
+let PORT_DISCARD: UInt16 = 9
 let DNS_NXDOMAIN: UInt8 = 3
 /// iperf3's default UDP payload: with UDP, IPv4 and Ethernet headers the frame stays within a 1500-byte MTU.
 let TRAFFIC_DATAGRAM = 1470

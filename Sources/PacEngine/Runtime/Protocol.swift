@@ -155,6 +155,27 @@ public struct DhcpClientView: Equatable, Sendable {
     }
 }
 
+/// One 100 ms point of a traffic flow (spec §5.6).
+public struct FlowSample: Equatable, Sendable {
+    public let timeNs: Int
+    /// Goodput over the interval: bytes acknowledged (TCP) or received by the sink (UDP).
+    public let bitsPerSecond: Double
+    /// Smoothed RTT (TCP) or mean one-way latency of the interval's datagrams (UDP); nil until measured.
+    public let delayNs: Int?
+    /// RFC 3550 interarrival jitter; nil for TCP.
+    public let jitterNs: Int?
+    /// Retransmitted share of the segments sent (TCP) or lost share of the datagrams (UDP), in percent.
+    public let lossPct: Double
+
+    public init(timeNs: Int, bitsPerSecond: Double, delayNs: Int?, jitterNs: Int?, lossPct: Double) {
+        self.timeNs = timeNs
+        self.bitsPerSecond = bitsPerSecond
+        self.delayNs = delayNs
+        self.jitterNs = jitterNs
+        self.lossPct = lossPct
+    }
+}
+
 public struct NodeView: Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: DeviceKind

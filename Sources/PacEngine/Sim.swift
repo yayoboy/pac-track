@@ -16,6 +16,8 @@ final class Sim {
     let sched = Scheduler()
     let rng: Rng
     let log: EventLog
+    /// Traffic generator flows by id: the sink that receives one of a flow's datagrams hands it back here.
+    var flows: [Int: (TrafficData) -> Void] = [:]
     private var ids = 0
     private var macs = 0
     /// The simulation owns its nodes (nodes refer back `unowned`), so a node lives exactly as long as its Sim.
