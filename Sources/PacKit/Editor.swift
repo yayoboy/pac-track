@@ -425,6 +425,56 @@ public final class Editor {
         }
     }
 
+    /// Gives a router interface a NAT role; a new outside replaces the old one and no roles left turn NAT off. Errors show under NAT.
+    public func setNatRole(_ id: String, iface: String, _ role: NatRole) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }) else { return }
+            var c = node.nat ?? NatConfig()
+            c.inside.removeAll { $0 == iface }
+            if c.outside == iface { c.outside = nil }
+            switch role {
+            case .off: break
+            case .inside:
+                let kept = c.inside
+                c.inside = node.ifaces.map(\.name).filter { kept.contains($0) || $0 == iface }
+            case .outside: c.outside = iface
+            }
+            await self.editNow([.setNat(node: id, config: c.inside.isEmpty && c.outside == nil ? nil : c)], key: "nat:\(id)")
+        }
+    }
+
+    /// Appends a rule typed in the Servizi tab (blank addresses: any; blank port: any port). Returns false, with the error under
+    /// the rule form, if refused.
+    @discardableResult
+    public func addFirewallRule(_ id: String, _ rule: FirewallRule, port: String) async -> Bool {
+        await serialized {
+            let key = "fw:\(id)"
+            guard var config = self.snapshot.nodes.first(where: { $0.id == id })?.firewall else { return false }
+            let anyIfBlank = { (s: String) in s.trimmingCharacters(in: .whitespaces).isEmpty ? "any" : s.trimmingCharacters(in: .whitespaces) }
+            var r = rule
+            r.src = anyIfBlank(r.src)
+            r.dst = anyIfBlank(r.dst)
+            let p = port.trimmingCharacters(in: .whitespaces)
+            if !p.isEmpty {
+                guard let n = Int(p) else {
+                    self.error = EditorError(key: key, message: "Invalid number: \"\(port)\"")
+                    return false
+                }
+                r.port = n
+            }
+            config.rules.append(r)
+            return await self.editNow([.setFirewall(node: id, config: config)], key: key)
+        }
+    }
+
+    public func removeFirewallRule(_ id: String, at index: Int) async {
+        await serialized {
+            guard var config = self.snapshot.nodes.first(where: { $0.id == id })?.firewall, config.rules.indices.contains(index) else { return }
+            config.rules.remove(at: index)
+            await self.editNow([.setFirewall(node: id, config: config)], key: "fw:\(id)")
+        }
+    }
+
     /// Starts the App tab's generator: TCP sends `amount` bytes; UDP sends `amount` Mb/s for `seconds`. Errors show under the App tab.
     public func startTraffic(_ id: String, target: String, kind: TrafficKind, amount: String, seconds: String) async {
         await serialized {

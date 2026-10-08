@@ -54,6 +54,30 @@ public enum TrafficKind: String, CaseIterable, Sendable {
     case tcp = "TCP", udp = "UDP"
 }
 
+/// A router interface's NAT role (Servizi tab): IOS `ip nat inside` / `ip nat outside`.
+public enum NatRole: String, CaseIterable, Sendable {
+    case off = "—", inside, outside
+}
+
+public func natRole(_ config: NatConfig?, _ iface: String) -> NatRole {
+    if config?.outside == iface { return .outside }
+    return config?.inside.contains(iface) == true ? .inside : .off
+}
+
+extension FirewallAction {
+    public var label: String {
+        switch self {
+        case .allow: "consenti"
+        case .deny: "nega"
+        }
+    }
+}
+
+/// One rule as listed: "in Gi0/1 · nega tcp any → 203.0.113.1 porta 80".
+public func ruleSummary(_ r: FirewallRule) -> String {
+    "\(r.direction.rawValue) \(r.iface) · \(r.action.label) \(r.proto.rawValue) \(r.src) → \(r.dst)" + (r.port.map { " porta \($0)" } ?? "")
+}
+
 public func defaultName(_ kind: DeviceKind, existing nodes: [NodeView]) -> String {
     let taken = Set(nodes.map(\.name))
     var i = 1
@@ -79,7 +103,7 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
                      // A leased address (and the DHCP default route) belongs to the server, not to the design: only the mode is saved.
                      ifaces: n.ifaces.map { TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode) },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
-                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink)
+                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall)
     }, links: s.links)
 }
 
