@@ -480,6 +480,11 @@ public final class Runtime {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
             // The saved size is the interface count; a file listing no valid size (hand-written, abbreviated) keeps 8.
             if n.kind == .switch, SWITCH_PORTS.contains(n.ifaces.count) { try next.handle(.setPorts(id: n.id, count: n.ifaces.count)) }
+            for i in n.ifaces {
+                // Subinterfaces ("Gi0/0.10") before the addresses below; port VLANs before any cable.
+                if i.name.contains(".") { try next.handle(.addSubinterface(node: n.id, iface: i.name)) }
+                if let c = i.switchport { try next.handle(.setSwitchport(node: n.id, iface: i.name, config: c)) }
+            }
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }
         }
         for l in t.links {

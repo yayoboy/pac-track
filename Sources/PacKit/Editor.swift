@@ -396,7 +396,7 @@ public final class Editor {
         }
     }
 
-    /// Adds devices of the same kind, power state, interface modes and name server as `srcs` (no addresses, routes or cables: a copied IP
+    /// Adds devices of the same kind, power state, interface modes, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
     /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
     /// and selects them.
     private func insertCopies(of srcs: [TopologyNode]) async {
@@ -412,6 +412,11 @@ public final class Editor {
             positions[id] = src.pos
             cmds.append(.addNode(id: id, kind: src.kind, name: name))
             if src.kind == .switch { cmds.append(.setPorts(id: id, count: src.ifaces.count)) }
+            // Port VLANs and subinterfaces are structure, like the size; their addresses stay behind.
+            for i in src.ifaces {
+                if let c = i.switchport { cmds.append(.setSwitchport(node: id, iface: i.name, config: c)) }
+                if i.name.contains(".") { cmds.append(.addSubinterface(node: id, iface: i.name)) }
+            }
             // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
             for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
             if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }

@@ -424,18 +424,22 @@ public struct TopologyIface: Codable, Equatable, Sendable {
     /// Always nil in DHCP mode: a leased address is never saved.
     public var cidr: String?
     public var mode: IfaceMode
-    public init(name: String, cidr: String?, mode: IfaceMode = .`static`) {
+    /// Switch ports whose VLAN role is not the default (access, VLAN 1); nil otherwise.
+    public var switchport: PortConfig?
+    public init(name: String, cidr: String?, mode: IfaceMode = .`static`, switchport: PortConfig? = nil) {
         self.name = name
         self.cidr = cidr
         self.mode = mode
+        self.switchport = switchport
     }
 
-    /// Files written before M3 have no `mode`.
+    /// Files written before M3 have no `mode`, before M7 no `switchport`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         cidr = try c.decodeIfPresent(String.self, forKey: .cidr)
         mode = try c.decodeIfPresent(IfaceMode.self, forKey: .mode) ?? .`static`
+        switchport = try c.decodeIfPresent(PortConfig.self, forKey: .switchport)
     }
 }
 

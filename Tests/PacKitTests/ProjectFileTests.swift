@@ -25,6 +25,15 @@ import Testing
         ])
         #expect(try ProjectFile.decode(try ProjectFile.encode(t)) == t)
     }
+
+    @Test func anM6FileOpensWithEverySwitchPortInVlan1() throws {
+        let json = #"{"version":1,"seed":1,"links":[],"nodes":[{"id":"s","kind":"switch","name":"SW1","pos":{"x":0,"y":0},"routes":[],"ifaces":[{"name":"Gi0/1","mode":"static"},{"name":"Gi0/2"}]}]}"#
+        let t = try ProjectFile.decode(Data(json.utf8))
+        #expect(t.nodes[0].ifaces.allSatisfy { $0.switchport == nil })
+        let rt = Runtime()
+        try rt.handle(.load(t))
+        #expect(rt.snapshot().nodes[0].ifaces.allSatisfy { $0.switchport == PortConfig() })
+    }
 }
 
 func expectError(_ fragment: String, sourceLocation: SourceLocation = #_sourceLocation, _ body: () throws -> Void) {

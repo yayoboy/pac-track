@@ -126,7 +126,10 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
     Topology(seed: s.seed, nodes: s.nodes.map { n in
         TopologyNode(id: n.id, kind: n.kind, name: n.name, pos: positions[n.id] ?? Pos(x: 0, y: 0),
                      // A leased address (and the DHCP default route) belongs to the server, not to the design: only the mode is saved.
-                     ifaces: n.ifaces.map { TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode) },
+                     ifaces: n.ifaces.map {
+                         TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode,
+                                       switchport: $0.switchport == PortConfig() ? nil : $0.switchport)
+                     },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
                      powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall)
     }, links: s.links)
