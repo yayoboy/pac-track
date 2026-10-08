@@ -43,12 +43,13 @@ struct PaletteView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("CAVI").font(.system(size: 9)).foregroundStyle(Theme.muted).padding(.horizontal, 6)
                     ForEach(cables, id: \.self) { cable in
-                        let on = editor.tool == .connect && editor.cable == cable
+                        // Marked under Sposta too (lighter): the port dot draws this cable as well.
+                        let on = editor.cable == cable
                         Label(cable.rawValue, systemImage: cable == .fiber ? "fibrechannel" : cable == .custom ? "slider.horizontal.3" : "cable.connector")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 4)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(on ? Theme.accent.opacity(0.35) : Color.clear))
+                            .background(RoundedRectangle(cornerRadius: 4).fill(on ? Theme.accent.opacity(editor.tool == .connect ? 0.35 : 0.18) : Color.clear))
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 editor.cable = cable

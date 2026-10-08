@@ -223,7 +223,8 @@ enum SelfTest {
         return failures
     }
 
-    /// M6: a fibre cable drawn with the Collega tool, the grid hidden, the minimap in the corner.
+    /// M6: a fibre cable drawn with the Collega tool, back to Sposta (the palette still marks Fibra, which the port dot also draws),
+    /// the grid hidden, the minimap in the corner.
     private static func toolsScenario(output: String) async -> [String] {
         var failures: [String] = []
         let editor = Editor(client: Simulation())
@@ -234,6 +235,7 @@ enum SelfTest {
         let ids = editor.snapshot.nodes.map(\.id)
         await editor.connect(ids[0], ids[1])
         if editor.snapshot.links.first?.options.bandwidthBps != 10e9 { failures.append("fibre cable \(String(describing: editor.snapshot.links.first))") }
+        editor.tool = .move
         editor.grid = false
         if !render(editor, to: sibling(output, "m6-tools")) { failures.append("could not write the M6 tools image") }
         return failures
