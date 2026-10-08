@@ -162,9 +162,9 @@ public final class Runtime {
             try ipNode(node).routes.addStatic(cidr.trimmingCharacters(in: .whitespaces), nextHop.trimmingCharacters(in: .whitespaces))
         case let .removeRoute(node, cidr):
             try ipNode(node).routes.removeStatic(cidr)
-        case let .ping(node, target):
+        case let .ping(node, target, options):
             let t = target.trimmingCharacters(in: .whitespaces)
-            start(node, "ping \(t)", .ping(try Ping(node: try liveIpNode(node), target: t)))
+            start(node, "ping \(t)", .ping(try Ping(node: try liveIpNode(node), target: t, options: options)))
         case let .traceroute(node, target):
             let t = target.trimmingCharacters(in: .whitespaces)
             start(node, "traceroute \(t)", .trace(try Traceroute(node: try liveIpNode(node), target: t)))

@@ -544,6 +544,21 @@ public final class Editor {
         }
     }
 
+    /// The App tab's ping (spec §5.6): count, interval in seconds, payload bytes, TTL (blank: the device's default). Errors show under the App tab.
+    public func ping(_ id: String, target: String, count: String, interval: String, size: String, ttl: String) async {
+        await serialized {
+            let key = "app:\(id)"
+            let text = { (s: String) in s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".") }
+            guard let c = Int(text(count)) else { return self.fail(key, EngineError("Invalid number: \"\(count)\"")) }
+            guard let i = Double(text(interval)), i.isFinite, abs(i) < 1e6 else { return self.fail(key, EngineError("Invalid number: \"\(interval)\"")) }
+            guard let s = Int(text(size)) else { return self.fail(key, EngineError("Invalid number: \"\(size)\"")) }
+            let t = text(ttl)
+            guard t.isEmpty || Int(t) != nil else { return self.fail(key, EngineError("Invalid number: \"\(ttl)\"")) }
+            let options = PingOptions(count: c, intervalNs: Int((i * 1e9).rounded()), size: s, ttl: Int(t))
+            _ = await self.runNow(.ping(node: id, target: target, options: options), key: key)
+        }
+    }
+
     /// Starts the App tab's generator: TCP sends `amount` bytes; UDP sends `amount` Mb/s for `seconds`. Errors show under the App tab.
     public func startTraffic(_ id: String, target: String, kind: TrafficKind, amount: String, seconds: String) async {
         await serialized {

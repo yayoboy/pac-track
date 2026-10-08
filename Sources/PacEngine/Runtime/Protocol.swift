@@ -46,7 +46,7 @@ public enum Command: Sendable {
     case setIp(node: String, iface: String, cidr: String?)
     case addRoute(node: String, cidr: String, nextHop: String)
     case removeRoute(node: String, cidr: String)
-    case ping(node: String, target: String)
+    case ping(node: String, target: String, options: PingOptions = PingOptions())
     case traceroute(node: String, target: String)
     case setIfaceMode(node: String, iface: String, mode: IfaceMode)
     /// Name server address typed by hand; nil or empty clears it.

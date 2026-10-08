@@ -1,10 +1,19 @@
-struct PingOptions: Sendable {
-    var count = 4
-    var intervalNs = 1 * S
+/// iputils options (spec §5.6): -c count, -i interval, -W timeout, -s size, -t ttl (nil: the node's default).
+public struct PingOptions: Equatable, Sendable {
+    public var count: Int
+    public var intervalNs: Int
     /// How long to wait after the last request before giving up.
-    var timeoutNs = 10 * S
-    var size = 56
-    var ttl: Int? = nil
+    public var timeoutNs: Int
+    public var size: Int
+    public var ttl: Int?
+
+    public init(count: Int = 4, intervalNs: Int = 1_000_000_000, timeoutNs: Int = 10_000_000_000, size: Int = 56, ttl: Int? = nil) {
+        self.count = count
+        self.intervalNs = intervalNs
+        self.timeoutNs = timeoutNs
+        self.size = size
+        self.ttl = ttl
+    }
 }
 
 struct PingReply: Equatable, Sendable {
@@ -61,11 +70,14 @@ final class Ping {
     init(node: IpNode, target: String, options: PingOptions = PingOptions()) throws {
         let o = options
         // Upper bounds keep timer arithmetic far from overflow and the timer list small.
-        guard (1...10_000).contains(o.count), (1...3600 * S).contains(o.intervalNs), (1...3600 * S).contains(o.timeoutNs),
-              (0...65507).contains(o.size),
-              o.ttl.map({ (1...255).contains($0) }) ?? true else {
-            throw EngineError("Invalid ping option: \(options)")
-        }
+        let problem: String? =
+            !(1...10_000).contains(o.count) ? "count must be between 1 and 10000"
+            : !(1...3600 * S).contains(o.intervalNs) ? "interval must be above 0 and at most 3600 s"
+            : !(1...3600 * S).contains(o.timeoutNs) ? "timeout must be above 0 and at most 3600 s"
+            : !(0...65507).contains(o.size) ? "size must be between 0 and 65507 bytes"
+            : o.ttl.map({ !(1...255).contains($0) }) ?? false ? "TTL must be between 1 and 255"
+            : nil
+        if let problem { throw EngineError("Invalid ping option: \(problem)") }
         self.node = node
         self.target = target
         opts = o

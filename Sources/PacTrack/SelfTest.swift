@@ -79,6 +79,7 @@ enum SelfTest {
         failures += await toolsScenario(output: output)
         failures += await portsScenario(output: output)
         failures += await cloudScenario(output: output)
+        failures += await pingScenario(output: output)
         return failures
     }
 
@@ -278,6 +279,29 @@ enum SelfTest {
         editor.inspectorTab = .services
         editor.bottomTab = .output
         if !render(editor, to: sibling(output, "m6-cloud")) { failures.append("could not write the M6 cloud image") }
+        return failures
+    }
+
+    /// M6: ping with count, interval, size and TTL typed in the App tab.
+    private static func pingScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.pc, at: Pos(x: 460, y: 300))
+        await editor.addDevice(.pc, at: Pos(x: 660, y: 300))
+        let ids = editor.snapshot.nodes.map(\.id)
+        await editor.connect(ids[0], ids[1])
+        await editor.edit(.setIp(node: ids[0], iface: "eth0", cidr: "10.0.0.1/24"))
+        await editor.edit(.setIp(node: ids[1], iface: "eth0", cidr: "10.0.0.2/24"))
+        await editor.ping(ids[0], target: "10.0.0.2", count: "3", interval: "0.5", size: "1472", ttl: "1")
+        for _ in 0..<20 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if lines.first != "PING 10.0.0.2 (10.0.0.2) 1472(1500) bytes of data." || !lines.contains("3 packets transmitted, 3 received, 0% packet loss") {
+            failures.append("ping options \(lines)")
+        }
+        editor.select(.node(ids[0]))
+        editor.inspectorTab = .app
+        editor.bottomTab = .output
+        if !render(editor, to: sibling(output, "m6-ping")) { failures.append("could not write the M6 ping image") }
         return failures
     }
 

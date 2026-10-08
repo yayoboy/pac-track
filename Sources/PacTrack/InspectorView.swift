@@ -227,14 +227,26 @@ private struct AppTab: View {
     @State private var kind = TrafficKind.tcp
     @State private var amount = "1000000"
     @State private var seconds = "10"
+    @State private var count = "4"
+    @State private var interval = "1"
+    @State private var size = "56"
+    @State private var ttl = ""
 
     var body: some View {
         let key = "app:\(node.id)"
         VStack(alignment: .leading, spacing: 8) {
             Text("Destinazione").font(Theme.small).foregroundStyle(Theme.muted)
             TextField("10.0.0.2 o nome host", text: $target).textFieldStyle(.roundedBorder).font(Theme.mono).accessibilityIdentifier("app-target")
+            HStack(spacing: 6) {
+                field("Pacchetti", $count)
+                field("Intervallo s", $interval)
+                field("Byte", $size)
+                field("TTL", $ttl, placeholder: "auto")
+            }
             HStack {
-                Button("Ping") { Task { await editor.run(.ping(node: node.id, target: target), key: key) } }
+                Button("Ping") {
+                    Task { await editor.ping(node.id, target: target, count: count, interval: interval, size: size, ttl: ttl) }
+                }
                 Button("Traceroute") { Task { await editor.run(.traceroute(node: node.id, target: target), key: key) } }
                 Button("nslookup") { Task { await editor.run(.nslookup(node: node.id, name: target), key: key) } }
             }
@@ -266,6 +278,13 @@ private struct AppTab: View {
             Text("Destinazione: un server con il sink attivo (Servizi). Risultati in Output app e Metriche.")
                 .font(Theme.small)
                 .foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func field(_ label: String, _ text: Binding<String>, placeholder: String = "") -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(Theme.small).foregroundStyle(Theme.muted).lineLimit(1)
+            TextField(placeholder, text: text).textFieldStyle(.roundedBorder).font(Theme.mono)
         }
     }
 }
