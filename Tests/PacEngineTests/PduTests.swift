@@ -49,7 +49,7 @@ private func echo(_ length: Int = 56) -> IcmpMessage {
         #expect(f.wireBytes == 84)
     }
 
-    @Test func an8021QTagAddsFourBytesAndTheMinimumFrameStays64() {
+    @Test func an8021QTagAddsFourBytesEvenToAMinimumFrame() {
         let p = makeIpv4(src: 1, dst: 2, ttl: 64, id: 1, payload: .icmp(echo()))
         let f = EthernetFrame(id: 1, src: "02:00:00:00:00:01", dst: "02:00:00:00:00:02", etherType: ETHERTYPE_IPV4, payload: .ipv4(p), vlan: 10)
         #expect(f.size == 102)
@@ -58,7 +58,7 @@ private func echo(_ length: Int = 56) -> IcmpMessage {
                                 payload: .arp(ArpPacket(op: 1, senderMac: "02:00:00:00:00:01", senderIp: 1, targetMac: "00:00:00:00:00:00", targetIp: 2)),
                                 vlan: 10)
         #expect(arp.size == 46)
-        #expect(arp.wireBytes == 84)
+        #expect(arp.wireBytes == 88) // padded to 64 untagged, then 68 with the tag
     }
 
     @Test func theInspectorShowsThe8021QHeaderBetweenEthernetAndIpv4() {

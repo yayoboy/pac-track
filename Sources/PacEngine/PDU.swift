@@ -221,9 +221,12 @@ struct EthernetFrame: Equatable, Sendable {
         }
     }
 
-    /// Bytes occupying the wire: frame + FCS padded to 64, plus preamble/SFD (8) and inter-frame gap (12). A tag does not raise
-    /// the 64-byte minimum (frames are padded untagged and bridges tag them as they are).
-    var wireBytes: Int { max(size + 4, 64) + 20 }
+    /// Bytes occupying the wire: frame + FCS padded to 64, plus preamble/SFD (8) and inter-frame gap (12). Frames are padded
+    /// untagged and bridges tag them as they are, so a tag adds 4 bytes even to a minimum frame (64 → 68).
+    var wireBytes: Int {
+        let tag = vlan == nil ? 0 : 4
+        return max(size - tag + 4, 64) + tag + 20
+    }
 }
 
 func internetChecksum(_ bytes: [UInt8]) -> UInt16 {
