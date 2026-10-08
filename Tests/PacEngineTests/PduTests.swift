@@ -48,4 +48,28 @@ private func echo(_ length: Int = 56) -> IcmpMessage {
         #expect(f.size == 42)
         #expect(f.wireBytes == 84)
     }
+
+    @Test func an8021QTagAddsFourBytesAndTheMinimumFrameStays64() {
+        let p = makeIpv4(src: 1, dst: 2, ttl: 64, id: 1, payload: .icmp(echo()))
+        let f = EthernetFrame(id: 1, src: "02:00:00:00:00:01", dst: "02:00:00:00:00:02", etherType: ETHERTYPE_IPV4, payload: .ipv4(p), vlan: 10)
+        #expect(f.size == 102)
+        #expect(f.wireBytes == 126)
+        let arp = EthernetFrame(id: 2, src: "02:00:00:00:00:01", dst: BROADCAST_MAC, etherType: ETHERTYPE_ARP,
+                                payload: .arp(ArpPacket(op: 1, senderMac: "02:00:00:00:00:01", senderIp: 1, targetMac: "00:00:00:00:00:00", targetIp: 2)),
+                                vlan: 10)
+        #expect(arp.size == 46)
+        #expect(arp.wireBytes == 84)
+    }
+
+    @Test func theInspectorShowsThe8021QHeaderBetweenEthernetAndIpv4() {
+        let p = makeIpv4(src: 1, dst: 2, ttl: 64, id: 1, payload: .icmp(echo()))
+        let f = EthernetFrame(id: 1, src: "02:00:00:00:00:01", dst: "02:00:00:00:00:02", etherType: ETHERTYPE_IPV4, payload: .ipv4(p), vlan: 20)
+        let e = SimEvent(time: 0, kind: .tx, node: "R1", iface: "Gi0/0", frame: f)
+        let layers = pduLayers(e)
+        #expect(layers.map(\.title) == ["Ethernet II", "802.1Q", "IPv4", "ICMP"])
+        #expect(layers.map(\.bytes) == [102, 4, 84, 64])
+        #expect(layers[0].fields.last == PduField(name: "EtherType", value: "0x8100 (802.1Q)"))
+        #expect(layers[1].fields.map { "\($0.name): \($0.value)" } == ["Priorità (PCP): 0", "DEI: 0", "VLAN ID: 20", "EtherType: 0x0800 (IPv4)"])
+        #expect(eventView(e).bytes == 102)
+    }
 }

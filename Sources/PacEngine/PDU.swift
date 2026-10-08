@@ -209,16 +209,20 @@ struct EthernetFrame: Equatable, Sendable {
     var dst: Mac
     var etherType: UInt16
     var payload: L3
+    /// 802.1Q tag (TPID 0x8100, PCP and DEI 0): the VLAN ID; nil while the frame travels untagged.
+    var vlan: Int? = nil
 
-    /// Size as shown by Wireshark: Ethernet header + payload, no FCS.
+    /// Size as shown by Wireshark: Ethernet header (+ 4 B with a tag) + payload, no FCS.
     var size: Int {
+        let header = vlan == nil ? 14 : 18
         switch payload {
-        case .arp: 14 + 28
-        case .ipv4(let p): 14 + p.size
+        case .arp: return header + 28
+        case .ipv4(let p): return header + p.size
         }
     }
 
-    /// Bytes occupying the wire: frame + FCS padded to 64, plus preamble/SFD (8) and inter-frame gap (12).
+    /// Bytes occupying the wire: frame + FCS padded to 64, plus preamble/SFD (8) and inter-frame gap (12). A tag does not raise
+    /// the 64-byte minimum (frames are padded untagged and bridges tag them as they are).
     var wireBytes: Int { max(size + 4, 64) + 20 }
 }
 

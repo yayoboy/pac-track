@@ -224,11 +224,21 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
 func pduLayers(_ e: SimEvent) -> [PduLayer] {
     var layers: [PduLayer] = []
     if let f = e.frame {
+        let type = hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : " (IPv4)")
         layers.append(PduLayer(title: "Ethernet II", bytes: f.size, fields: [
             field("Destinazione", f.dst),
             field("Sorgente", f.src),
-            field("EtherType", hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : " (IPv4)")),
+            field("EtherType", f.vlan == nil ? type : "0x8100 (802.1Q)"),
         ]))
+        // Wireshark's layout: the tag (TCI) is its own 4-byte header, which carries the payload's EtherType.
+        if let vid = f.vlan {
+            layers.append(PduLayer(title: "802.1Q", bytes: 4, fields: [
+                field("Priorità (PCP)", "0"),
+                field("DEI", "0"),
+                field("VLAN ID", "\(vid)"),
+                field("EtherType", type),
+            ]))
+        }
     }
     switch l3(e) {
     case .arp(let a)?: layers.append(arpLayer(a))
