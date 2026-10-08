@@ -26,12 +26,12 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         try p[0].sendRaw()
         sim.run(MS)
         #expect(p[1].got.count == 1 && p[2].got.count == 1)
-        #expect(sw.lookup(try p[0].iface("eth0").mac) === (try sw.iface("Gi0/1")))
+        #expect(sw.lookup(try p[0].iface("eth0").mac, vlan: 1) === (try sw.iface("Gi0/1")))
         try p[1].sendRaw(try p[0].iface("eth0").mac)
         sim.run(MS)
         #expect(p[0].got.count == 1)
         #expect(p[2].got.count == 1)
-        #expect(sw.lookup(try p[1].iface("eth0").mac) === (try sw.iface("Gi0/2")))
+        #expect(sw.lookup(try p[1].iface("eth0").mac, vlan: 1) === (try sw.iface("Gi0/2")))
     }
 
     @Test func switchAgesOutMacEntriesAfter300Seconds() throws {
@@ -41,7 +41,7 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         try p[0].sendRaw()
         sim.run(MS)
         sim.run(301 * S)
-        #expect(sw.lookup(try p[0].iface("eth0").mac) == nil)
+        #expect(sw.lookup(try p[0].iface("eth0").mac, vlan: 1) == nil)
     }
 
     @Test func staysBoundedInALayer2Loop() throws {

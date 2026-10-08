@@ -233,6 +233,10 @@ public final class Runtime {
             let node = try get(id)
             guard let sw = node as? Switch else { throw EngineError("\(node.name) cannot change its ports") }
             try sw.setPorts(count)
+        case let .setSwitchport(node, iface, config):
+            let n = try get(node)
+            guard let sw = n as? Switch else { throw EngineError("\(n.name) has no switch ports") }
+            try sw.setSwitchport(iface, config)
         case let .updateLink(id, options):
             try link(id).update(options)
         case let .setLinkUp(id, up):
@@ -362,7 +366,7 @@ public final class Runtime {
                 powered: node.powered,
                 ifaces: node.interfaces.map {
                     IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil,
-                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`)
+                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil)
                 },
                 routes: ip?.routes.view().map {
                     RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
@@ -371,7 +375,7 @@ public final class Runtime {
                 arp: ip?.arp.entries().map {
                     ArpRow(ip: formatIp($0.ip), mac: $0.mac, iface: $0.iface, ttlS: ($0.expiresAt - now + S - 1) / S)
                 } ?? [],
-                mac: (node as? Switch)?.macTable().map { MacRow(mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
+                mac: (node as? Switch)?.macTable().map { MacRow(vlan: $0.vlan, mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
                 nameServer: ip?.nameServer.map(formatIp),
                 learnedNameServer: ip?.learnedNameServer.map(formatIp),
                 dhcpClient: host?.dhcp.map { c in

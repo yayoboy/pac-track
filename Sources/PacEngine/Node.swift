@@ -7,6 +7,8 @@ final class Interface {
     var up = true
     var mtu = 1500
     var ipv4: Cidr?
+    /// Switch ports only: access or trunk and the VLANs (IOS `switchport`).
+    var switchport = Switchport()
 
     init(node: Node, name: String, mac: Mac) {
         self.node = node

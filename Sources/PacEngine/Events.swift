@@ -17,6 +17,8 @@ enum DropReason: String, Sendable {
     case firewallRule = "firewall-rule"
     /// No firewall rule matched and the default policy denies.
     case firewallDefault = "firewall-default"
+    /// A switch port refused a frame: tagged on an access port, or with a VLAN the trunk does not carry.
+    case vlanNotAllowed = "vlan-not-allowed"
 }
 
 struct SimEvent: Sendable {

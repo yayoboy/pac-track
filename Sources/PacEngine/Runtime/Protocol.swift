@@ -33,6 +33,27 @@ public enum IfaceMode: String, Codable, Sendable {
     case `static`, dhcp
 }
 
+/// A switch port's 802.1Q role, IOS `switchport mode`.
+public enum PortMode: String, Codable, CaseIterable, Sendable {
+    case access, trunk
+}
+
+/// A switch port's VLAN settings as typed and saved (spec M7 §2): the access VLAN, or the trunk's allowed VLANs
+/// ("all" or "10,20,30-35") and native VLAN. Every field is kept whatever the mode.
+public struct PortConfig: Codable, Equatable, Sendable {
+    public var mode: PortMode
+    public var vlan: Int
+    public var allowed: String
+    public var native: Int
+
+    public init(mode: PortMode = .access, vlan: Int = 1, allowed: String = "all", native: Int = 1) {
+        self.mode = mode
+        self.vlan = vlan
+        self.allowed = allowed
+        self.native = native
+    }
+}
+
 public enum Proto: String, CaseIterable, Sendable {
     case arp, icmp, dhcp, dns, udp, tcp
 }
@@ -72,6 +93,8 @@ public enum Command: Sendable {
     case setPower(id: String, on: Bool)
     /// Switch size: 8, 24 or 48 ports; only free ports can go.
     case setPorts(id: String, count: Int)
+    /// A switch port's 802.1Q role and VLANs (switches only); the addresses the port learned are flushed.
+    case setSwitchport(node: String, iface: String, config: PortConfig)
     case updateLink(id: String, options: LinkOptions)
     case setLinkUp(id: String, up: Bool)
     case setRunning(Bool)
@@ -106,6 +129,7 @@ public enum Command: Sendable {
         case .step: "step"
         case .setPower: "setPower"
         case .setPorts: "setPorts"
+        case .setSwitchport: "setSwitchport"
         case .updateLink: "updateLink"
         case .setLinkUp: "setLinkUp"
         case .setRunning: "setRunning"
@@ -121,6 +145,8 @@ public struct IfaceView: Equatable, Sendable {
     public let cidr: String?
     public let linked: Bool
     public let mode: IfaceMode
+    /// Switch ports only: the 802.1Q role.
+    public let switchport: PortConfig?
 }
 
 public struct RouteRow: Equatable, Sendable {
@@ -140,6 +166,7 @@ public struct ArpRow: Equatable, Sendable {
 }
 
 public struct MacRow: Equatable, Sendable {
+    public let vlan: Int
     public let mac: String
     public let iface: String
     public let ageS: Int

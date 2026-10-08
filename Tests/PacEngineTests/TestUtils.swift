@@ -25,10 +25,11 @@ final class Probe: Node {
     }
 
     @discardableResult
-    func sendRaw(_ dst: Mac = BROADCAST_MAC) throws -> EthernetFrame {
+    func sendRaw(_ dst: Mac = BROADCAST_MAC, vlan: Int? = nil) throws -> EthernetFrame {
         let i = try iface("eth0")
         let frame = EthernetFrame(id: sim.nextId(), src: i.mac, dst: dst, etherType: ETHERTYPE_ARP,
-                                  payload: .arp(ArpPacket(op: 1, senderMac: i.mac, senderIp: 0, targetMac: "00:00:00:00:00:00", targetIp: 0)))
+                                  payload: .arp(ArpPacket(op: 1, senderMac: i.mac, senderIp: 0, targetMac: "00:00:00:00:00:00", targetIp: 0)),
+                                  vlan: vlan)
         i.send(frame)
         return frame
     }
