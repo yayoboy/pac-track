@@ -95,4 +95,13 @@ import Testing
         #expect(formatBandwidth(1_500) == "1.5 kb/s")
         #expect(formatBandwidth(64) == "64 b/s")
     }
+
+    @Test func formatsTheLatestFlowAndCableMetrics() {
+        #expect(flowSummary(FlowSample(timeNs: 0, bitsPerSecond: 9_492_848, delayNs: 1_234_567, jitterNs: nil, lossPct: 1.5))
+            == "9.49 Mb/s · RTT 1.235 ms · perdita 1.5%")
+        #expect(flowSummary(FlowSample(timeNs: 0, bitsPerSecond: 1_011_360, delayNs: 1_229_300, jitterNs: 2_600, lossPct: 0))
+            == "1.01 Mb/s · latenza 1.229 ms · jitter 0.003 ms · perdita 0.0%")
+        #expect(flowSummary(FlowSample(timeNs: 0, bitsPerSecond: 0, delayNs: nil, jitterNs: nil, lossPct: 0)) == "0.00 Mb/s · perdita 0.0%")
+        #expect(directionSummary(DirectionSample(utilization: 0.946, queued: 12, drops: 3)) == "95% · coda 12 · drop 3")
+    }
 }

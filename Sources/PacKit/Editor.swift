@@ -30,6 +30,8 @@ public final class Editor {
     public private(set) var pdu: [PduLayer]?
     /// Tab last picked in the node inspector; kept while moving between devices that have it.
     public var inspectorTab: InspectorTab?
+    /// Bottom panel tab; "Mostra metriche" on a cable switches it to Metriche.
+    public var bottomTab = BottomTab.events
     private var dismissedWarning = 0
     @ObservationIgnored private var eventCursor = 0
     @ObservationIgnored private var eventEpoch = 0
@@ -420,6 +422,27 @@ public final class Editor {
             guard var records = self.snapshot.nodes.first(where: { $0.id == id })?.dnsRecords, records.indices.contains(index) else { return }
             records.remove(at: index)
             await self.editNow([.setDnsServer(node: id, records: records)], key: "dnsrec:\(id)")
+        }
+    }
+
+    /// Starts the App tab's generator: TCP sends `amount` bytes; UDP sends `amount` Mb/s for `seconds`. Errors show under the App tab.
+    public func startTraffic(_ id: String, target: String, kind: TrafficKind, amount: String, seconds: String) async {
+        await serialized {
+            let key = "app:\(id)"
+            let number = amount.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+            let cmd: Command
+            switch kind {
+            case .tcp:
+                guard let bytes = Int(number) else { return self.fail(key, EngineError("Invalid number: \"\(amount)\"")) }
+                cmd = .trafficTcp(node: id, target: target, bytes: bytes)
+            case .udp:
+                guard let mbps = Double(number), mbps.isFinite else { return self.fail(key, EngineError("Invalid number: \"\(amount)\"")) }
+                guard let s = Int(seconds.trimmingCharacters(in: .whitespaces)) else {
+                    return self.fail(key, EngineError("Invalid number: \"\(seconds)\""))
+                }
+                cmd = .trafficUdp(node: id, target: target, bitsPerSecond: mbps * 1e6, seconds: s)
+            }
+            _ = await self.runNow(cmd, key: key)
         }
     }
 

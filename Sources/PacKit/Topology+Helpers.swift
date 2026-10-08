@@ -44,6 +44,16 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     }
 }
 
+/// Bottom panel tabs (spec §7.1 ⑤).
+public enum BottomTab: String, CaseIterable, Sendable {
+    case events = "Eventi", output = "Output app", metrics = "Metriche"
+}
+
+/// The App tab's traffic generator modes.
+public enum TrafficKind: String, CaseIterable, Sendable {
+    case tcp = "TCP", udp = "UDP"
+}
+
 public func defaultName(_ kind: DeviceKind, existing nodes: [NodeView]) -> String {
     let taken = Set(nodes.map(\.name))
     var i = 1
@@ -69,7 +79,7 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
                      // A leased address (and the DHCP default route) belongs to the server, not to the design: only the mode is saved.
                      ifaces: n.ifaces.map { TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode) },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
-                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords)
+                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink)
     }, links: s.links)
 }
 
@@ -211,4 +221,22 @@ public func dhcpStatus(_ c: DhcpClientView) -> String {
 
 public func leaseRows(_ leases: [LeaseRow]) -> [[String]] {
     leases.map { [$0.ip, $0.mac, "\($0.expiresS)s", $0.bound ? "attivo" : "offerto"] }
+}
+
+private func milliseconds(_ ns: Int) -> String {
+    String(format: "%.3f ms", Double(ns) / 1e6)
+}
+
+/// A flow's latest point: "9.49 Mb/s · RTT 1.235 ms · perdita 1.5%" (TCP) or with one-way latency and jitter (UDP).
+public func flowSummary(_ s: FlowSample) -> String {
+    var parts = [String(format: "%.2f Mb/s", s.bitsPerSecond / 1e6)]
+    if let d = s.delayNs { parts.append((s.jitterNs == nil ? "RTT " : "latenza ") + milliseconds(d)) }
+    if let j = s.jitterNs { parts.append("jitter " + milliseconds(j)) }
+    parts.append(String(format: "perdita %.1f%%", s.lossPct))
+    return parts.joined(separator: " · ")
+}
+
+/// One direction of a cable: "95% · coda 12 · drop 3".
+public func directionSummary(_ d: DirectionSample) -> String {
+    "\(Int((d.utilization * 100).rounded()))% · coda \(d.queued) · drop \(d.drops)"
 }
