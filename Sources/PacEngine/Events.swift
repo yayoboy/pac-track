@@ -13,6 +13,10 @@ enum DropReason: String, Sendable {
     case noRoute = "no-route"
     case ttlExpired = "ttl-expired"
     case mtuExceeded = "mtu-exceeded"
+    /// A firewall deny rule matched.
+    case firewallRule = "firewall-rule"
+    /// No firewall rule matched and the default policy denies.
+    case firewallDefault = "firewall-default"
 }
 
 struct SimEvent: Sendable {

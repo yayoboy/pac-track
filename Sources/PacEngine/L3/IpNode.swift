@@ -18,6 +18,8 @@ class IpNode: Node {
     var dnsServer: DnsServer?
     /// NAT/PAT (routers): translates between the inside interfaces and the outside one.
     var nat: Nat?
+    /// Stateful firewall (routers).
+    var firewall: Firewall?
     /// Turns the discard sink off again; nil while it is off.
     private var sinkStop: (() -> Void)?
 
@@ -102,6 +104,7 @@ class IpNode: Node {
         dhcpServer?.reset()
         tcp.reset()
         nat?.reset()
+        firewall?.reset()
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
@@ -151,10 +154,14 @@ class IpNode: Node {
     }
 
     private func input(_ p: Ipv4Packet, on iface: Interface) {
-        // NAT outside → inside comes before routing; inside → outside after it (`output`).
+        // Netfilter order: NAT outside → inside, then routing and filtering (here for the router itself, in `output` for forwarded
+        // packets), then NAT inside → outside.
         let packet = nat?.inbound(p, on: iface) ?? p
         let subnetBroadcast = iface.ipv4.map { packet.dst == broadcastOf($0.addr, $0.prefix) } ?? false
-        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast { return deliver(packet, from: iface) }
+        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast {
+            guard firewall?.admits(packet, from: iface, to: nil) ?? true else { return }
+            return deliver(packet, from: iface)
+        }
         guard forwarding else { return }
         if packet.ttl <= 1 {
             sim.emit(.drop, node: id, iface: iface.name, packet: packet, reason: .ttlExpired)
@@ -173,6 +180,7 @@ class IpNode: Node {
             sim.emit(.drop, node: id, packet: p, reason: .noRoute)
             return icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_NET)
         }
+        if let inIface, let firewall, !firewall.admits(p, from: inIface, to: hop.iface) { return }
         // Checked before NAT, so "fragmentation needed" goes back to the inside host, not to our own outside address.
         if p.size > hop.iface.mtu {
             // ponytail: no IPv4 fragmentation; non-DF oversize packets are dropped

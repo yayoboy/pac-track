@@ -431,6 +431,53 @@ public struct NatConfig: Codable, Equatable, Sendable {
     }
 }
 
+public enum FirewallAction: String, Codable, CaseIterable, Sendable {
+    case allow, deny
+}
+
+public enum FirewallDirection: String, Codable, CaseIterable, Sendable {
+    case inbound = "in", outbound = "out"
+}
+
+public enum FirewallProto: String, Codable, CaseIterable, Sendable {
+    case any, icmp, tcp, udp
+}
+
+/// One firewall rule, bound to an interface and a direction.
+public struct FirewallRule: Codable, Equatable, Sendable {
+    public var iface: String
+    public var direction: FirewallDirection
+    public var action: FirewallAction
+    public var proto: FirewallProto
+    /// "any", an address or a prefix ("10.0.0.0/24").
+    public var src: String
+    public var dst: String
+    /// Destination port, TCP and UDP only; nil matches any.
+    public var port: Int?
+
+    public init(iface: String, direction: FirewallDirection, action: FirewallAction, proto: FirewallProto, src: String, dst: String,
+                port: Int? = nil) {
+        self.iface = iface
+        self.direction = direction
+        self.action = action
+        self.proto = proto
+        self.src = src
+        self.dst = dst
+        self.port = port
+    }
+}
+
+/// Ordered rules (the first match decides) and the policy for packets no rule matches.
+public struct FirewallConfig: Codable, Equatable, Sendable {
+    public var rules: [FirewallRule]
+    public var defaultAction: FirewallAction
+
+    public init(rules: [FirewallRule] = [], defaultAction: FirewallAction = .allow) {
+        self.rules = rules
+        self.defaultAction = defaultAction
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind
