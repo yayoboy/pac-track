@@ -111,6 +111,16 @@ final class Nat {
         return rewritten(p, dst: entries[i].local, dstPort: entries[i].localPort)
     }
 
+    /// A packet this router already translated outbound, with its inside source back (Linux conntrack), so an error the router
+    /// itself raises about it (an ARP timeout on the outside) reaches the inside host. nil when no translation matches.
+    func untranslated(_ p: Ipv4Packet) -> Ipv4Packet? {
+        expire()
+        guard let e = endpoints(p), let entry = entries.first(where: {
+            $0.proto == e.proto && $0.global == e.src && $0.globalPort == e.srcPort && $0.remote == e.dst && $0.remotePort == e.dstPort
+        }) else { return nil }
+        return rewritten(p, src: entry.local, srcPort: entry.localPort)
+    }
+
     /// RFC 4787 REQ-1: a mapped inside endpoint keeps its global port for every remote; a new one keeps its own port if free
     /// (IOS, Linux), else takes the next free one above it, wrapping to 1024.
     private func add(_ e: Endpoints, global: UInt32) -> Int {

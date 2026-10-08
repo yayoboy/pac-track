@@ -142,6 +142,8 @@ class IpNode: Node {
 
     /// Sends an ICMP error about `orig` back to its source (never about ICMP errors).
     func icmpError(_ orig: Ipv4Packet, type: UInt8, code: UInt8) {
+        // About a packet NAT already translated: quote it, and answer, as the inside host sent it.
+        let orig = nat?.untranslated(orig) ?? orig
         if case .icmp(let m) = orig.payload, m.type != ICMP_ECHO_REQUEST && m.type != ICMP_ECHO_REPLY { return }
         if orig.dst == BROADCAST_IP || orig.src == 0 { return }
         // About a packet for this node: from the address it hit (Linux; traceroute's last hop); otherwise from the way back.

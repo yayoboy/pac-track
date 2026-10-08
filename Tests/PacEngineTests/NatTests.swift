@@ -241,6 +241,21 @@ private func checksumsHold(_ sim: Sim) -> Bool {
         #expect(r1.nat?.view().isEmpty == true) // the dropped request opened no translation
     }
 
+    @Test func hostUnreachableAboutATranslatedPacketReachesTheInsideHostDeNatted() throws {
+        let (sim, h1, _, r1, srv) = try natLab()
+        srv.powered = false
+        let errors = Errors()
+        h1.onIcmp { _, m in if m.type == ICMP_DEST_UNREACH { errors.quotes.append(m.data) } }
+        let ping = try Ping(node: h1, target: "203.0.113.10", options: PingOptions(count: 1))
+        sim.run(5 * S)
+        // R1's ARP for SRV timed out after NAT had translated the request; the error comes from R1's inside address (Linux conntrack).
+        #expect(ping.result.lines.contains("From 192.168.1.1 icmp_seq=1 Destination Host Unreachable"), "\(ping.result.lines)")
+        let q = try #require(errors.quotes.first)
+        let echo = try #require(r1.nat?.view().first { $0.proto == IPPROTO_ICMP })
+        #expect(Array(q[12..<16]) == [192, 168, 1, 10] && Array(q[24..<26]) == [UInt8(echo.localPort >> 8), UInt8(echo.localPort & 0xFF)])
+        #expect(checksumsHold(sim))
+    }
+
     @Test func rejectsUnknownInterfacesAndAnInterfaceBothInsideAndOutside() throws {
         let (_, _, _, r1, _) = try natLab()
         expectError("R1 has no interface Gi0/9") { _ = try Nat(node: r1, config: NatConfig(inside: ["Gi0/9"], outside: "Gi0/1")) }
