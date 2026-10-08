@@ -17,9 +17,10 @@ private func twoDecimals(_ v: Double) -> String {
     String(format: "%.2f", v)
 }
 
-private func keep(_ s: FlowSample, in samples: inout [FlowSample]) {
+/// Appends `s`, dropping the oldest points a history at a time (amortized O(1)): read only its last METRICS_HISTORY.
+func keep<T>(_ s: T, in samples: inout [T]) {
     samples.append(s)
-    if samples.count > METRICS_HISTORY { samples.removeFirst() }
+    if samples.count == 2 * METRICS_HISTORY { samples.removeFirst(METRICS_HISTORY) }
 }
 
 private func bitsPerSecond(_ bytes: Int) -> Double {

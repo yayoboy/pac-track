@@ -281,9 +281,8 @@ public final class Runtime {
             let now = links[id]!.counters()
             let last = linkCounters[id] ?? (LinkCounters(), LinkCounters())
             linkCounters[id] = now
-            linkSamples[id, default: []].append(LinkSample(timeNs: at, ab: directionSample(now.ab, since: last.ab),
-                                                           ba: directionSample(now.ba, since: last.ba)))
-            if linkSamples[id]!.count > METRICS_HISTORY { linkSamples[id]!.removeFirst() }
+            keep(LinkSample(timeNs: at, ab: directionSample(now.ab, since: last.ab), ba: directionSample(now.ba, since: last.ba)),
+                 in: &linkSamples[id, default: []])
         }
         for app in apps { app.program.sample(at: at) }
     }
@@ -369,11 +368,13 @@ public final class Runtime {
                             options: l.opts, up: l.up)
         }
         let appViews = apps.map {
-            AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done, samples: $0.program.samples)
+            AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done,
+                    samples: Array($0.program.samples.suffix(METRICS_HISTORY)))
         }
         return Snapshot(version: 0, seed: seed, timeNs: now, running: running, speed: speed, mode: mode, epoch: epoch,
                         eventCount: sim.log.total, nodes: nodeViews, links: linkViews, apps: appViews,
-                        warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) }, linkSamples: linkSamples)
+                        warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) },
+                        linkSamples: linkSamples.mapValues { Array($0.suffix(METRICS_HISTORY)) })
     }
 
     private func create(_ id: String, _ kind: DeviceKind) -> Node {

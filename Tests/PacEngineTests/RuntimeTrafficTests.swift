@@ -56,6 +56,17 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(app.samples.map(\.timeNs) == [100 * MS] && app.samples[0].bitsPerSecond == 80e6) // 1 MB in one 100 ms interval
     }
 
+    @Test func cablesAndFlowsShowExactlyTheLast600Points() throws {
+        let rt = try trafficRuntime()
+        try rt.handle(.trafficUdp(node: "a", target: "10.0.0.2", bitsPerSecond: 1e5, seconds: 300))
+        try rt.handle(.setSpeed(1000))
+        runFor(rt, wallMs: 200) // 200 s: 2000 boundaries
+        let s = rt.snapshot()
+        for series in [s.linkSamples["l1"]!.map(\.timeNs), s.apps[0].samples.map(\.timeNs)] {
+            #expect(series == (1401...2000).map { $0 * 100 * MS })
+        }
+    }
+
     @Test func udpAboveTheCableRateFillsTheQueueAndTailDrops() throws {
         let rt = try trafficRuntime()
         try rt.handle(.updateLink(id: "l1", options: LinkOptions(bandwidthBps: 10e6, queueLimit: 10)))
