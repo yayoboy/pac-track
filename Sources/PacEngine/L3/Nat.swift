@@ -50,9 +50,15 @@ final class Nat {
 
     private var now: Int { node.sim.now }
 
+    /// Translations are bound to this address: a new one clears them, like IOS does when the interface address changes.
+    private var outsideAddr: UInt32? {
+        node.interfaces.first { $0.name == config.outside }?.ipv4?.addr
+    }
+
     /// Live translations, oldest first.
     func view() -> [NatEntry] {
-        entries.filter { $0.expiresAt > now }
+        let global = outsideAddr
+        return entries.filter { $0.expiresAt > now && $0.global == global }
     }
 
     /// Power cycle (`clear ip nat translation *`); the configuration stays.
@@ -116,6 +122,7 @@ final class Nat {
     }
 
     private func expire() {
-        entries.removeAll { $0.expiresAt <= now }
+        let global = outsideAddr
+        entries.removeAll { $0.expiresAt <= now || $0.global != global }
     }
 }

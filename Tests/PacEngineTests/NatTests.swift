@@ -203,6 +203,19 @@ private func checksumsHold(_ sim: Sim) -> Bool {
         #expect(r1.nat?.config == NatConfig(inside: ["Gi0/0", "Gi0/2"], outside: "Gi0/1"))
     }
 
+    @Test func aNewOutsideAddressClearsTheTranslationsBoundToTheOldOne() throws {
+        let (sim, h1, _, r1, srv) = try natLab()
+        let atSrv = try listen(srv, 7)
+        h1.sendUdp(try parseIp("203.0.113.10"), srcPort: 5000, dstPort: 7, data: [0])
+        sim.run(10 * MS)
+        try r1.setIp("Gi0/1", "203.0.113.2/24")
+        #expect(r1.nat?.view().isEmpty == true) // like IOS, which clears them when the interface address changes
+        h1.sendUdp(try parseIp("203.0.113.10"), srcPort: 5000, dstPort: 7, data: [0])
+        sim.run(10 * MS)
+        #expect(atSrv.got.map(\.from) == ["203.0.113.1", "203.0.113.2"])
+        #expect(r1.nat?.view().map { formatIp($0.global) } == ["203.0.113.2"])
+    }
+
     @Test func fragmentationNeededBeyondTheNatReachesTheInsideHost() throws {
         let (sim, h1, _, r1, _) = try natLab()
         try r1.iface("Gi0/1").mtu = 1000
