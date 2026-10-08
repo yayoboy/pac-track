@@ -4,6 +4,10 @@ let DHCP_LEASE_DEFAULT_S = 86_400
 let DHCP_LEASE_RANGE_S = 10...31_536_000
 /// How long an offered address stays reserved for the client's REQUEST.
 let DHCP_OFFER_HOLD_NS = 60 * S
+/// Conflict detection: how long the server waits for an echo reply before offering an address (IOS `ip dhcp ping timeout` 500 ms).
+let DHCP_PROBE_WAIT_NS = 500 * MS
+/// ICMP id of the server's probe pings.
+private let DHCP_PROBE_ID: UInt16 = 0xDC
 
 struct DhcpPool: Equatable {
     var start: UInt32
@@ -72,19 +76,28 @@ public func suggestedDhcpConfig(cidr: String) -> DhcpConfig? {
 
 /// RFC 2131 server for one pool, answering on the interface whose subnet holds the pool. Without relay agents a
 /// pool serves only its own segment: routers never forward the clients' limited broadcasts.
-// ponytail: no ICMP probe before offering (IOS and ISC ping first); exclude statically addressed hosts from the pool
+/// Like IOS, it pings a new address before offering it and never offers one that answers.
+// ponytail: one probe echo (IOS sends two); conflicts are not shown in the UI, a power cycle clears them (`clear ip dhcp conflict`)
 final class DhcpServer {
     unowned let node: IpNode
     var pool: DhcpPool
     /// Ordered by address.
     private var leases: [DhcpLease] = []
+    /// Addresses that answered a probe (IOS `show ip dhcp conflict`), in detection order.
+    private(set) var conflicts: [UInt32] = []
     private var unbind: () -> Void = {}
+    private var unlisten: () -> Void = {}
 
     init(node: IpNode, pool: DhcpPool) throws {
         self.node = node
         self.pool = pool
         unbind = try node.bindUdp(PORT_DHCP_SERVER) { [weak self] _, u, iface in
             if case .dhcp(let m) = u.payload, let iface { self?.receive(m, on: iface) }
+        }
+        unlisten = node.onIcmp { [weak self] p, m in
+            guard let self, m.type == ICMP_ECHO_REPLY, m.id == DHCP_PROBE_ID, !conflicts.contains(p.src),
+                  leases.contains(where: { $0.ip == p.src && !$0.bound }) else { return }
+            conflicts.append(p.src)
         }
     }
 
@@ -96,10 +109,12 @@ final class DhcpServer {
     /// Power cycle: bindings live in RAM, as on IOS.
     func reset() {
         leases = []
+        conflicts = []
     }
 
     func stop() {
         unbind()
+        unlisten()
     }
 
     private func receive(_ m: DhcpMessage, on iface: Interface) {
@@ -115,7 +130,7 @@ final class DhcpServer {
 
     private func available(_ ip: UInt32, for mac: Mac) -> Bool {
         (pool.start...pool.end).contains(ip) && !pool.excluded.contains { $0.contains(ip) } && ip != pool.gateway && ip != pool.dns
-            && !node.ownsIp(ip) && !leases.contains { $0.ip == ip && $0.mac != mac }
+            && !node.ownsIp(ip) && !conflicts.contains(ip) && !leases.contains { $0.ip == ip && $0.mac != mac }
     }
 
     /// The client's current address, else the one it asks for, else the lowest free one.
@@ -144,10 +159,20 @@ final class DhcpServer {
     private func offer(_ m: DhcpMessage, _ iface: Interface, _ own: Cidr) {
         // ponytail: an exhausted pool stays silent (IOS only logs it)
         guard let ip = pick(for: m.chaddr, requested: m.requestedIp) else { return }
+        let known = leases.contains { $0.mac == m.chaddr && $0.ip == ip }
         if !leases.contains(where: { $0.mac == m.chaddr && $0.ip == ip && $0.bound }) {
             record(ip, m.chaddr, until: node.sim.now + DHCP_OFFER_HOLD_NS, bound: false)
         }
-        reply(.offer, to: m, yiaddr: ip, iface, own)
+        // An address already offered to or bound by this client was probed then.
+        guard !known else { return reply(.offer, to: m, yiaddr: ip, iface, own) }
+        node.sendPacket(ip, .icmp(makeIcmp(type: ICMP_ECHO_REQUEST, code: 0, id: DHCP_PROBE_ID, seq: 0, data: [])))
+        node.sim.sched.after(DHCP_PROBE_WAIT_NS) { [weak self] in
+            // A power cycle or a REQUEST meanwhile dropped the held offer: nothing to do.
+            guard let self, leases.contains(where: { $0.mac == m.chaddr && $0.ip == ip && !$0.bound }) else { return }
+            guard conflicts.contains(ip) else { return reply(.offer, to: m, yiaddr: ip, iface, own) }
+            leases.removeAll { $0.ip == ip }
+            offer(m, iface, own)
+        }
     }
 
     private func request(_ m: DhcpMessage, _ iface: Interface, _ own: Cidr) {

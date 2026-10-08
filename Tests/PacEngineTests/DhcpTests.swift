@@ -38,7 +38,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
     @Test func runsDoraAndBindsTheFirstFreeAddressWithGatewayAndDns() throws {
         let (sim, srv, pc) = try direct()
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         #expect(dhcpTx(sim) == [
             "C Discover 0.0.0.0→255.255.255.255",
             "S Offer 10.0.0.1→255.255.255.255",
@@ -47,12 +47,13 @@ private func clientRequests(_ sim: Sim) -> [String] {
         ])
         let client = try #require(pc.dhcp)
         #expect(client.state == .bound)
-        #expect(client.leaseStart == 6_856) // the REQUEST left after DISCOVER + OFFER (2 × 3 428 ns); bound at 13 712 ns
+        // the REQUEST left after DISCOVER + the 500 ms probe of 10.0.0.100 + OFFER (2 × 3 428 ns); bound 6 856 ns later
+        #expect(client.leaseStart == 500_006_856)
         #expect(try pc.iface("eth0").ipv4 == Cidr(addr: ip("10.0.0.100"), prefix: 24))
         #expect(pc.routes.lookup(ip("8.8.8.8"))?.nextHop == ip("10.0.0.1"))
         #expect(pc.routes.view().last == RouteView(isStatic: false, network: 0, prefix: 0, nextHop: ip("10.0.0.1"), iface: "eth0", dhcp: true))
         #expect(pc.learnedNameServer == ip("10.0.0.53"))
-        #expect(srv.dhcpServer?.view() == [DhcpLease(ip: ip("10.0.0.100"), mac: try pc.iface("eth0").mac, expiresAt: 10_284 + 3600 * S, bound: true)])
+        #expect(srv.dhcpServer?.view() == [DhcpLease(ip: ip("10.0.0.100"), mac: try pc.iface("eth0").mac, expiresAt: 500_010_284 + 3600 * S, bound: true)])
     }
 
     @Test func skipsExcludedAddressesServesClientsInOrderAndStaysSilentWhenThePoolIsFull() throws {
@@ -79,17 +80,18 @@ private func clientRequests(_ sim: Sim) -> [String] {
         config.leaseS = 60
         let (sim, srv, pc) = try direct(config)
         try pc.setDhcp(true)
-        let t1 = 6_856 + 30 * S
+        let t1 = 500_006_856 + 30 * S
         sim.sched.runUntil(t1 - 1)
         #expect(pc.dhcp?.state == .bound)
         sim.sched.runUntil(t1 + 1 * MS)
-        // The REQUEST is sent at T1 (it waits for ARP: 2 × 1 172 ns for 84 wire bytes + 500 ns) and the lease counts from then
+        // The REQUEST is sent at T1 and the lease counts from then. No ARP wait: the client learnt the server's MAC when the
+        // server's probe ARP for 10.0.0.100 was retried (1 s) after the client had taken that address.
         #expect(pc.dhcp?.leaseStart == t1)
         #expect(try pc.iface("eth0").ipv4 != nil)
         #expect(pc.dhcp?.state == .bound)
         #expect(Array(dhcpTx(sim).suffix(2)) == ["C Request 10.0.0.100→10.0.0.1", "S ACK 10.0.0.1→10.0.0.100"])
-        // The server counts from its ACK: after ARP (2 344 ns) and the REQUEST (3 428 ns)
-        #expect(srv.dhcpServer?.view().first?.expiresAt == t1 + 5_772 + 60 * S)
+        // The server counts from its ACK: after the REQUEST (3 428 ns)
+        #expect(srv.dhcpServer?.view().first?.expiresAt == t1 + 3_428 + 60 * S)
     }
 
     @Test func rebindsAtT2AndDropsTheAddressWhenTheLeaseExpires() throws {
@@ -97,14 +99,14 @@ private func clientRequests(_ sim: Sim) -> [String] {
         config.leaseS = 60
         let (sim, srv, pc) = try direct(config)
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         srv.powered = false
         srv.reset()
-        let expiry = 6_856 + 60 * S
+        let expiry = 500_006_856 + 60 * S
         sim.sched.runUntil(expiry - 1)
         #expect(pc.dhcp?.state == .rebinding)
         #expect(try pc.iface("eth0").ipv4?.addr == ip("10.0.0.100"))
-        // The T1 unicast never left (ARP to a dead server); at T2 (52.5 s) a broadcast REQUEST; no retry fits before expiry.
+        // The T1 unicast never left (ARP to a dead server); at T2 (53 s) a broadcast REQUEST; no retry fits before expiry.
         #expect(Array(dhcpTx(sim).suffix(2)) == ["S ACK 10.0.0.1→255.255.255.255", "C Request 10.0.0.100→255.255.255.255"])
         sim.sched.runUntil(expiry)
         #expect(try pc.iface("eth0").ipv4 == nil)
@@ -115,10 +117,10 @@ private func clientRequests(_ sim: Sim) -> [String] {
 
     @Test func manualRenewalsKeepASingleRetransmissionChain() throws {
         var config = pool
-        config.leaseS = 800 // T1 400 s, T2 700 s, expiry 800 s (+ 6 856 ns)
+        config.leaseS = 800 // bound at 0.5 s: T1 400.5 s, T2 700.5 s, expiry 800.5 s
         let (sim, srv, pc) = try direct(config)
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         try srv.configureDhcpServer(nil) // alive but deaf: every REQUEST leaves, none is answered
         sim.sched.runUntil(100 * S)
         pc.dhcp?.renewNow()
@@ -127,7 +129,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
         sim.sched.runUntil(700 * S)
         // Each renewal supersedes the previous chain; from T1 the retries halve the time to T2, at least 60 s.
         #expect(Array(clientRequests(sim).dropFirst()) == [
-            "100000 10.0.0.1", "150000 10.0.0.1", "400000 10.0.0.1", "550000 10.0.0.1", "625000 10.0.0.1", "685000 10.0.0.1",
+            "100000 10.0.0.1", "150000 10.0.0.1", "400500 10.0.0.1", "550500 10.0.0.1", "625500 10.0.0.1", "685500 10.0.0.1",
         ])
     }
 
@@ -136,15 +138,15 @@ private func clientRequests(_ sim: Sim) -> [String] {
         config.leaseS = 800
         let (sim, srv, pc) = try direct(config)
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         try srv.configureDhcpServer(nil)
         sim.sched.runUntil(720 * S)
         #expect(pc.dhcp?.state == .rebinding)
         pc.dhcp?.renewNow()
         #expect(pc.dhcp?.state == .rebinding)
         sim.sched.runUntil(800 * S)
-        // One chain before expiry: T2, the manual broadcast, then 60 s later (the 760 s retry of the T2 chain is gone).
-        #expect(Array(clientRequests(sim).suffix(3)) == ["700000 255.255.255.255", "720000 255.255.255.255", "780000 255.255.255.255"])
+        // One chain before expiry: T2, the manual broadcast, then 60 s later (the 760.5 s retry of the T2 chain is gone).
+        #expect(Array(clientRequests(sim).suffix(3)) == ["700500 255.255.255.255", "720000 255.255.255.255", "780000 255.255.255.255"])
     }
 
     @Test func aRenewalTheServerCannotHonourIsNakedAndTheClientStartsOver() throws {
@@ -152,7 +154,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
         config.leaseS = 60
         let (sim, srv, pc) = try direct(config)
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         config.start = "10.0.0.150"
         try srv.configureDhcpServer(config)
         #expect(srv.dhcpServer?.view().count == 1) // a pool change keeps existing bindings
@@ -171,7 +173,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
     @Test func leavingDhcpModeReleasesTheLeaseAndRemovesTheAddress() throws {
         let (sim, srv, pc) = try direct()
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         try pc.setDhcp(false)
         #expect(pc.dhcp == nil)
         #expect(try pc.iface("eth0").ipv4 == nil)
@@ -185,7 +187,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
     @Test func aPowerCycleForgetsTheAddressAndGetsTheSameLeaseBack() throws {
         let (sim, srv, pc) = try direct()
         try pc.setDhcp(true)
-        sim.run(1 * MS)
+        sim.run(1 * S)
         pc.powered = false
         pc.reset()
         #expect(try pc.iface("eth0").ipv4 == nil)
@@ -215,6 +217,29 @@ private func clientRequests(_ sim: Sim) -> [String] {
         #expect(near.interfaces[0].ipv4?.addr == ip("10.0.0.100"))
         #expect(far.interfaces[0].ipv4 == nil)
         #expect(!sim.log.all.contains { $0.kind == .tx && $0.node == "R" && $0.iface == "Gi0/1" })
+    }
+
+    @Test func pingsAnAddressBeforeOfferingItAndSkipsOneInUse() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW")
+        let srv = Host(sim: sim, id: "S")
+        let fixed = Host(sim: sim, id: "P")
+        let pc = Host(sim: sim, id: "C")
+        for (i, h) in [srv, fixed, pc].enumerated() { _ = try Link(sim: sim, try h.iface("eth0"), try sw.iface("Gi0/\(i + 1)")) }
+        try srv.setIp("eth0", "10.0.0.1/24")
+        try fixed.setIp("eth0", "10.0.0.100/24") // static, inside the pool
+        try srv.configureDhcpServer(pool)
+        try pc.setDhcp(true)
+        sim.run(2 * S)
+        #expect(pc.interfaces[0].ipv4?.addr == ip("10.0.0.101"))
+        #expect(srv.dhcpServer?.conflicts == [ip("10.0.0.100")])
+        #expect(srv.dhcpServer?.view().map { formatIp($0.ip) } == ["10.0.0.101"])
+        // IOS-style conflict detection: one echo per candidate, the OFFER only after 500 ms of silence.
+        let offer = try #require(sim.log.all.first { e in
+            guard e.kind == .tx, e.node == "S", case .ipv4(let p)? = e.frame?.payload, case .udp(let u) = p.payload, case .dhcp(let m) = u.payload else { return false }
+            return m.type == .offer
+        })
+        #expect(offer.time > 2 * DHCP_PROBE_WAIT_NS)
     }
 
     @Test func rejectsPoolsOutsideTheSubnetAndMalformedSettings() throws {
