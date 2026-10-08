@@ -190,7 +190,7 @@ struct ServicesTab: View {
                 if records.isEmpty { Text("nessuno").font(Theme.small).foregroundStyle(Theme.muted) }
                 ForEach(records.indices, id: \.self) { i in
                     HStack {
-                        Text("\(records[i].name)  \(records[i].ip)  TTL \(records[i].ttl)s").font(Theme.mono).lineLimit(1)
+                        Text("\(records[i].name)  \(records[i].ip)  TTL \(records[i].ttl)s").font(Theme.mono).lineLimit(1).minimumScaleFactor(0.75)
                         Spacer()
                         Button { Task { await editor.removeDnsRecord(node.id, at: i) } } label: { Image(systemName: "xmark") }
                             .buttonStyle(.borderless)

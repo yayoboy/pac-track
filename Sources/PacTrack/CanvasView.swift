@@ -256,8 +256,10 @@ struct CanvasView: View {
         }
         return ZStack {
             line.stroke(selected ? Theme.accent : link.up ? Theme.muted : Theme.err, style: StrokeStyle(lineWidth: selected ? 2.5 : 1.5, dash: link.up ? [] : [5, 4]))
-            Text("\(link.a.iface) ↔ \(link.b.iface) · \(formatBandwidth(link.options.bandwidthBps)) · \(LinkField.delay.format(link.options)) µs")
+            // Two lines: one line of all four overlapped the next cable's label on short cables.
+            Text("\(link.a.iface) ↔ \(link.b.iface)\n\(formatBandwidth(link.options.bandwidthBps)) · \(LinkField.delay.format(link.options)) µs")
                 .font(.system(size: 9, design: .monospaced))
+                .multilineTextAlignment(.center)
                 .foregroundStyle(Theme.muted)
                 .padding(.horizontal, 3)
                 .background(Theme.bg)
