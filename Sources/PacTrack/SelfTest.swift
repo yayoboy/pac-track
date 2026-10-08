@@ -224,12 +224,13 @@ enum SelfTest {
     }
 
     /// M6: a fibre cable drawn with the Collega tool, back to Sposta (the palette still marks Fibra, which the port dot also draws),
-    /// the grid hidden, the minimap in the corner.
+    /// the grid hidden, the minimap in the corner faded around the PC that sits under it.
     private static func toolsScenario(output: String) async -> [String] {
         var failures: [String] = []
         let editor = Editor(client: Simulation())
         await editor.addDevice(.switch, at: Pos(x: 420, y: 200))
         await editor.addDevice(.server, at: Pos(x: 700, y: 360))
+        await editor.addDevice(.pc, at: Pos(x: 840, y: 380))
         editor.tool = .connect
         editor.cable = .fiber
         let ids = editor.snapshot.nodes.map(\.id)

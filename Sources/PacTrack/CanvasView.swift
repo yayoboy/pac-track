@@ -162,12 +162,14 @@ struct CanvasView: View {
     }
 
     private func nodeAt(_ point: CGPoint) -> String? {
+        editor.snapshot.nodes.last { nodeRect($0.id).contains(point) }?.id
+    }
+
+    private func nodeRect(_ id: String) -> CGRect {
+        let c = center(id)
         let w = Self.nodeSize.width * zoom
         let h = Self.nodeSize.height * zoom
-        return editor.snapshot.nodes.last { node in
-            let c = center(node.id)
-            return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h).contains(point)
-        }?.id
+        return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
     }
 
     private func fit(_ size: CGSize) {
@@ -220,8 +222,11 @@ struct CanvasView: View {
     }
 
     /// Overview (spec §7.1 ③): every device as a dot, the visible area as a frame; a click centres the view there.
+    /// A device under it fades it and lets clicks and drags through to the device.
     private func minimap(_ size: CGSize) -> some View {
         let box = CGSize(width: 160, height: 100)
+        let corner = CGRect(x: size.width - box.width - 20, y: size.height - box.height - 20, width: box.width + 20, height: box.height + 20)
+        let covered = editor.snapshot.nodes.contains { nodeRect($0.id).intersects(corner) }
         let visible = CGRect(x: -offset.width / zoom, y: -offset.height / zoom, width: size.width / zoom, height: size.height / zoom)
         let points = editor.snapshot.nodes.compactMap { editor.positions[$0.id] }.map { CGPoint(x: $0.x, y: $0.y) }
         let world = points.reduce(visible) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -40, dy: -40)
@@ -243,6 +248,8 @@ struct CanvasView: View {
             offset = CGSize(width: size.width / 2 - c.x * zoom, height: size.height / 2 - c.y * zoom)
         }
         .padding(10)
+        .opacity(covered ? 0.2 : 1)
+        .allowsHitTesting(!covered)
         .accessibilityIdentifier("minimap")
     }
 
