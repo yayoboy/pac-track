@@ -25,6 +25,15 @@ private func dhcpTx(_ sim: Sim) -> [String] {
     }
 }
 
+/// REQUESTs client C put on the wire: "<ms> <dst>".
+private func clientRequests(_ sim: Sim) -> [String] {
+    sim.log.all.compactMap { e in
+        guard e.kind == .tx, e.node == "C", case .ipv4(let p)? = e.frame?.payload, case .udp(let u) = p.payload,
+              case .dhcp(let m) = u.payload, m.type == .request else { return nil }
+        return "\(e.time / MS) \(formatIp(p.dst))"
+    }
+}
+
 @Suite struct DhcpTests {
     @Test func runsDoraAndBindsTheFirstFreeAddressWithGatewayAndDns() throws {
         let (sim, srv, pc) = try direct()
@@ -102,6 +111,40 @@ private func dhcpTx(_ sim: Sim) -> [String] {
         #expect(pc.routes.lookup(ip("8.8.8.8")) == nil)
         #expect(pc.learnedNameServer == nil)
         #expect(pc.dhcp?.state == .selecting)
+    }
+
+    @Test func manualRenewalsKeepASingleRetransmissionChain() throws {
+        var config = pool
+        config.leaseS = 800 // T1 400 s, T2 700 s, expiry 800 s (+ 6 856 ns)
+        let (sim, srv, pc) = try direct(config)
+        try pc.setDhcp(true)
+        sim.run(1 * MS)
+        try srv.configureDhcpServer(nil) // alive but deaf: every REQUEST leaves, none is answered
+        sim.sched.runUntil(100 * S)
+        pc.dhcp?.renewNow()
+        sim.sched.runUntil(150 * S)
+        pc.dhcp?.renewNow()
+        sim.sched.runUntil(700 * S)
+        // Each renewal supersedes the previous chain; from T1 the retries halve the time to T2, at least 60 s.
+        #expect(Array(clientRequests(sim).dropFirst()) == [
+            "100000 10.0.0.1", "150000 10.0.0.1", "400000 10.0.0.1", "550000 10.0.0.1", "625000 10.0.0.1", "685000 10.0.0.1",
+        ])
+    }
+
+    @Test func aManualRenewalWhileRebindingRebroadcastsAndStaysRebinding() throws {
+        var config = pool
+        config.leaseS = 800
+        let (sim, srv, pc) = try direct(config)
+        try pc.setDhcp(true)
+        sim.run(1 * MS)
+        try srv.configureDhcpServer(nil)
+        sim.sched.runUntil(720 * S)
+        #expect(pc.dhcp?.state == .rebinding)
+        pc.dhcp?.renewNow()
+        #expect(pc.dhcp?.state == .rebinding)
+        sim.sched.runUntil(800 * S)
+        // One chain before expiry: T2, the manual broadcast, then 60 s later (the 760 s retry of the T2 chain is gone).
+        #expect(Array(clientRequests(sim).suffix(3)) == ["700000 255.255.255.255", "720000 255.255.255.255", "780000 255.255.255.255"])
     }
 
     @Test func aRenewalTheServerCannotHonourIsNakedAndTheClientStartsOver() throws {

@@ -67,10 +67,10 @@ final class DhcpClient {
         unbind()
     }
 
-    /// `ipconfig /renew`: a client holding a lease renews it now by unicast; otherwise it starts over.
+    /// `ipconfig /renew`: a client holding a lease renews it now (by unicast, or by broadcast once past T2); otherwise it starts over.
     func renewNow() {
         guard hasLease else { return start() }
-        enterRenewing()
+        state == .rebinding ? enterRebinding() : enterRenewing()
     }
 
     private func later(_ delay: Int, _ action: @escaping (DhcpClient) -> Void) {
@@ -173,8 +173,10 @@ final class DhcpClient {
         retry(before: expiry) { if $0.state == .rebinding { $0.rebind() } }
     }
 
+    /// Each renewal or rebinding draws a new xid, so a retry whose xid is stale belongs to a superseded chain and stays quiet.
     private func retry(before deadline: Int, _ action: @escaping (DhcpClient) -> Void) {
         let wait = max((deadline - node.sim.now) / 2, DHCP_MIN_RETRY_NS)
-        if node.sim.now + wait < deadline { later(wait, action) }
+        let chain = xid
+        if node.sim.now + wait < deadline { later(wait) { if $0.xid == chain { action($0) } } }
     }
 }
