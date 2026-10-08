@@ -19,13 +19,6 @@ Desktop.ini
 *.sublime-project
 *.sublime-workspace
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-yarn.lock
-
 # Logs
 logs/
 *.log
@@ -50,11 +43,9 @@ temp/
 
 # Test Coverage
 coverage/
-.nyc_output/
 
 # Cache
 .cache/
-.parcel-cache/
 
 # Saved Topologies (Optional - comment out if you want to track them)
 # topology_*.json

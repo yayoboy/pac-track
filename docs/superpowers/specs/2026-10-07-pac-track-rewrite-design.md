@@ -130,6 +130,7 @@ Comandi di menu nativi (`.commands`) con le scorciatoie macOS standard: V sposta
 
 ## 8. Persistenza e cronologia
 - File progetto `.ptk` (JSON): `{ version, seed, nodes, links, services, layout, view }`. Versione esplicita per migrazioni.
+- *Decisione 2026-10-08:* zoom e pan (`view`) non vengono salvati, perché ogni pan segnerebbe il documento come modificato; i servizi stanno nei nodi (decisione M3), non in una chiave `services`.
 - Documento macOS nativo (`DocumentGroup` + `FileDocument`, tipo `.ptk`): apri, salva, recenti, salvataggio automatico, versioni e finestre multiple vengono dal sistema (sostituisce l'autosave/recovery manuale). Export PNG del canvas con `ImageRenderer`.
 - Undo/redo con l'`UndoManager` di sistema. Ogni modifica registra lo snapshot della topologia precedente (memento): annullare una modifica di rete ricarica la rete (clock, cache ARP/MAC e app ripartono); annullare uno spostamento ripristina solo le posizioni. Le azioni di simulazione non entrano in cronologia. Eliminare un nodo con i suoi cavi è un solo passo.
 
