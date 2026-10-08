@@ -7,6 +7,7 @@ class IpNode: Node {
     private(set) lazy var arp = Arp(node: self)
     private(set) lazy var routes = RoutingTable(interfaces: { [unowned self] in self.interfaces })
     private(set) lazy var resolver = Resolver(node: self)
+    private(set) lazy var tcp = Tcp(node: self)
     var defaultTtl: UInt8 = 64
     var forwarding = false
     /// Name server set by hand (resolv.conf); wins over the one learned from DHCP.
@@ -69,13 +70,14 @@ class IpNode: Node {
         arp.reset()
         resolver.reset()
         dhcpServer?.reset()
+        tcp.reset()
     }
 
-    /// Originates a packet. Returns false when there is no route to `dst`.
+    /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
     @discardableResult
-    func sendPacket(_ dst: UInt32, _ payload: L4, ttl: UInt8? = nil) -> Bool {
-        guard let src = sourceFor(dst) else { return false }
-        output(makeIpv4(src: src, dst: dst, ttl: ttl ?? defaultTtl, id: nextIpId(), payload: payload))
+    func sendPacket(_ dst: UInt32, _ payload: L4, ttl: UInt8? = nil, src: UInt32? = nil) -> Bool {
+        guard let from = sourceFor(dst) else { return false }
+        output(makeIpv4(src: src ?? from, dst: dst, ttl: ttl ?? defaultTtl, id: nextIpId(), payload: payload))
         return true
     }
 
@@ -161,8 +163,8 @@ class IpNode: Node {
             } else if p.dst != BROADCAST_IP {
                 icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_PORT)
             }
-        case .tcp:
-            break // segments are ignored until the node has a TCP layer
+        case .tcp(let t):
+            tcp.input(p, t)
         }
     }
 
