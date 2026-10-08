@@ -73,6 +73,7 @@ enum SelfTest {
         if o != CGSize(width: -90, height: -80) { failures.append("anchored zoom offset \(o)") }
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         failures += await servicesScenario(output: output)
+        failures += await trafficScenario(output: output)
         return failures
     }
 
@@ -118,6 +119,42 @@ enum SelfTest {
         editor.select(.node(id("PC1")))
         editor.inspectorTab = .interfaces
         if !render(editor, to: sibling(output, "m3-pc")) { failures.append("could not write the M3 host image") }
+        return failures
+    }
+
+    /// M4: SRV1 runs the sink behind a 10 Mb/s cable; PC1 sends 1 MB over TCP and PC2 1 Mb/s of UDP for 2 s.
+    private static func trafficScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 140))
+        await editor.addDevice(.server, at: Pos(x: 560, y: 360))
+        await editor.addDevice(.pc, at: Pos(x: 360, y: 300))
+        await editor.addDevice(.pc, at: Pos(x: 760, y: 300))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        for name in ["SRV1", "PC1", "PC2"] { await editor.connect(id("SW1"), id(name)) }
+        for (name, cidr) in [("SRV1", "10.0.0.2/24"), ("PC1", "10.0.0.10/24"), ("PC2", "10.0.0.11/24")] {
+            await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
+        }
+        let cable = editor.snapshot.links[0].id // a = SW1, b = SRV1
+        await editor.setLink(cable, .bandwidth, "10")
+        await editor.edit(.setSink(node: id("SRV1"), on: true))
+        await editor.startTraffic(id("PC1"), target: "10.0.0.2", kind: .tcp, amount: "1000000", seconds: "")
+        await editor.startTraffic(id("PC2"), target: "10.0.0.2", kind: .udp, amount: "1", seconds: "2")
+        for _ in 0..<40 { await editor.tick(wallMs: 100) }
+        let apps = editor.snapshot.apps
+        if apps.map({ $0.lines.last }) != ["iperf Done.", "iperf Done."] { failures.append("traffic output \(apps.map(\.lines))") }
+        if !(apps.last?.lines.contains { $0.hasSuffix("0/171 (0%)") } ?? false) { failures.append("UDP report \(apps.last?.lines ?? [])") }
+        if apps.contains(where: { $0.samples.isEmpty }) { failures.append("a flow has no metrics") }
+        let peak = editor.snapshot.linkSamples[cable]?.map(\.ab.utilization).max() ?? 0
+        if peak < 0.9 { failures.append("SW1 → SRV1 peak utilisation \(peak)") }
+        if editor.snapshot.nodes.first(where: { $0.name == "SRV1" })?.tcp.first?.state != "LISTEN" { failures.append("SRV1 TCP table") }
+        editor.select(.link(cable))
+        editor.bottomTab = .metrics
+        if !render(editor, to: sibling(output, "m4")) { failures.append("could not write the M4 metrics image") }
+        editor.select(.node(id("PC1")))
+        editor.inspectorTab = .app
+        editor.bottomTab = .output
+        if !render(editor, to: sibling(output, "m4-app")) { failures.append("could not write the M4 app image") }
         return failures
     }
 

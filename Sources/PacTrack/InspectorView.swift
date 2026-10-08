@@ -135,6 +135,7 @@ private struct NodeInspector: View {
                 TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
                              rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
+                TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
                 if node.kind.isHost {
                     TableSection(title: "Cache DNS", head: ["Nome", "IP", "TTL"], rows: node.dnsCache.map { [$0.name, $0.ip, "\($0.ttlS)s"] })
                 }
@@ -200,6 +201,9 @@ private struct AppTab: View {
     let node: NodeView
     @Bindable var editor: Editor
     @State private var target = ""
+    @State private var kind = TrafficKind.tcp
+    @State private var amount = "1000000"
+    @State private var seconds = "10"
 
     var body: some View {
         let key = "app:\(node.id)"
@@ -213,6 +217,32 @@ private struct AppTab: View {
             }
             ErrorLine(editor: editor, key: key)
             Text("L'output compare nel pannello in basso.").font(Theme.small).foregroundStyle(Theme.muted)
+            Divider()
+            Text("GENERATORE DI TRAFFICO").font(.system(size: 9)).foregroundStyle(Theme.muted)
+            Picker("", selection: $kind) { ForEach(TrafficKind.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .onChange(of: kind) { _, k in amount = k == .tcp ? "1000000" : "1" }
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind == .tcp ? "Byte da inviare" : "Bitrate (Mb/s)").font(Theme.small).foregroundStyle(Theme.muted)
+                    TextField("", text: $amount).textFieldStyle(.roundedBorder).font(Theme.mono).accessibilityIdentifier("traffic-amount")
+                }
+                if kind == .udp {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Durata (s)").font(Theme.small).foregroundStyle(Theme.muted)
+                        TextField("", text: $seconds).textFieldStyle(.roundedBorder).font(Theme.mono).frame(width: 60)
+                    }
+                }
+            }
+            Button("Avvia traffico") {
+                Task { await editor.startTraffic(node.id, target: target, kind: kind, amount: amount, seconds: seconds) }
+            }
+            .accessibilityIdentifier("traffic-start")
+            Text("Destinazione: un server con il sink attivo (Servizi). Risultati in Output app e Metriche.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
         }
     }
 }

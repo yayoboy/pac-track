@@ -13,7 +13,24 @@ struct ServicesTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             dhcp
-            if node.kind == .server { dns }
+            if node.kind == .server {
+                dns
+                sink
+            }
+        }
+    }
+
+    private var sink: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Sink TCP/UDP (porta 9)", isOn: Binding(get: { node.sink }, set: { on in
+                Task { await editor.edit(.setSink(node: node.id, on: on)) }
+            }))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .accessibilityIdentifier("sink-enabled")
+            Text(node.sink ? "Riceve e scarta il traffico del generatore." : "Spento: TCP risponde con RST, UDP con ICMP port unreachable.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
         }
     }
 

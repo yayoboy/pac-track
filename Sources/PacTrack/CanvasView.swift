@@ -204,6 +204,10 @@ struct CanvasView: View {
         .onTapGesture { editor.select(.link(link.id)) }
         .contextMenu {
             Button("Proprietà") { editor.select(.link(link.id)) }
+            Button("Mostra metriche") {
+                editor.select(.link(link.id))
+                editor.bottomTab = .metrics
+            }
             Button(link.up ? "Simula guasto" : "Ripristina") { Task { await editor.edit(.setLinkUp(id: link.id, up: !link.up)) } }
             Divider()
             Button("Scollega", role: .destructive) { Task { await editor.remove(nodes: [], links: [link.id]) } }
