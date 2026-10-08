@@ -448,6 +448,7 @@ public final class Runtime {
     private func load(_ t: Topology) throws {
         guard t.version == 1 else { throw EngineError("Unsupported or corrupt project file") }
         let next = Runtime(seed: t.seed)
+        // Addresses before cables: a duplicate made by cabling two segments together (never refused) still opens.
         for n in t.nodes {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }

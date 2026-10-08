@@ -26,6 +26,24 @@ final class Interface {
     }
 }
 
+extension Interface {
+    /// IP interfaces in this interface's broadcast domain: across cables, switches and hubs, whatever their power or link state; self excluded.
+    func segmentPeers() -> [Interface] {
+        var seen: Set<ObjectIdentifier> = [ObjectIdentifier(self)]
+        var todo = [self]
+        var peers: [Interface] = []
+        while let i = todo.popLast() {
+            guard let peer = i.link?.peer(i), seen.insert(ObjectIdentifier(peer)).inserted else { continue }
+            if peer.node is IpNode {
+                peers.append(peer)
+            } else {
+                for next in peer.node.interfaces where seen.insert(ObjectIdentifier(next)).inserted { todo.append(next) }
+            }
+        }
+        return peers
+    }
+}
+
 /// Base class of every device. Subclasses override `receive`.
 class Node {
     unowned let sim: Sim

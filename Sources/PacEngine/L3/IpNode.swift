@@ -44,6 +44,11 @@ class IpNode: Node {
                 throw EngineError("\(cidr) overlaps with \(other.name)")
             }
         }
+        // Typed addresses only: a DHCP lease is run-time state (the server checks its pool before offering).
+        let typed = { (i: Interface) in (i.node as? Host)?.dhcp?.iface !== i }
+        if let other = iface.segmentPeers().first(where: { $0.ipv4?.addr == c.addr && typed($0) }) {
+            throw EngineError("Duplicate address: \(formatIp(c.addr)) is already used by \(other.node.name) \(other.name) on this segment")
+        }
         iface.ipv4 = c
     }
 
