@@ -79,7 +79,11 @@ public func ruleSummary(_ r: FirewallRule) -> String {
 }
 
 public func defaultName(_ kind: DeviceKind, existing nodes: [NodeView]) -> String {
-    let taken = Set(nodes.map(\.name))
+    defaultName(kind, taken: Set(nodes.map(\.name)))
+}
+
+/// Lowest free "<prefix><n>" given the names already used (several devices added in one step).
+func defaultName(_ kind: DeviceKind, taken: Set<String>) -> String {
     var i = 1
     while taken.contains("\(kind.namePrefix)\(i)") { i += 1 }
     return "\(kind.namePrefix)\(i)"

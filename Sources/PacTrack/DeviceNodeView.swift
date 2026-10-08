@@ -111,8 +111,8 @@ struct NodeMenu: View {
         }
         Button(node.powered ? "Spegni" : "Accendi") { Task { await editor.edit(.setPower(id: node.id, on: !node.powered)) } }
         Divider()
-        Button("Duplica") { Task { await editor.duplicate(node.id) } }
-        Button("Copia") { editor.copy(node.id) }
+        Button("Duplica") { Task { await editor.duplicate([node.id]) } }
+        Button("Copia") { editor.copy([node.id]) }
         Divider()
         Button("Elimina", role: .destructive) { Task { await editor.remove(nodes: [node.id], links: []) } }
     }

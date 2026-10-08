@@ -224,7 +224,7 @@ actor Recording: EngineClient {
         await editor.edit(.setIp(node: pc, iface: "eth0", cidr: "10.0.0.1/24"))
         await editor.edit(.addRoute(node: pc, cidr: "0.0.0.0/0", nextHop: "10.0.0.254"))
         await editor.edit(.setPower(id: pc, on: false))
-        editor.copy(pc)
+        editor.copy([pc])
         await editor.paste(at: nil)
         #expect(names == ["PC1", "PC2"])
         let copy = node("PC2")
@@ -233,13 +233,23 @@ actor Recording: EngineClient {
         #expect(editor.selection == .node(copy.id))
         await editor.paste(at: Pos(x: 140, y: 0))
         #expect(editor.positions[node("PC3").id] == Pos(x: 140, y: 0))
-        await editor.duplicate(copy.id)
+        await editor.duplicate([copy.id])
         #expect(names == ["PC1", "PC2", "PC3", "PC4"])
         #expect(editor.positions[node("PC4").id] == Pos(x: 126, y: 126))
         await editor.undo()
         await editor.undo()
         await editor.undo()
         #expect(names == ["PC1"])
+        // Several devices: one paste, distinct names, the group keeps its shape. This test alone uses the process-wide clipboard
+        // (suites run in parallel).
+        await editor.addDevice(.pc, at: Pos(x: 112, y: 14))
+        editor.copy([pc, node("PC2").id])
+        await editor.paste(at: Pos(x: 14, y: 140))
+        #expect(names == ["PC1", "PC2", "PC3", "PC4"])
+        #expect(editor.positions[node("PC3").id] == Pos(x: 14, y: 140) && editor.positions[node("PC4").id] == Pos(x: 112, y: 140))
+        #expect(editor.selection == .nodes([node("PC3").id, node("PC4").id]))
+        await editor.undo()
+        #expect(names == ["PC1", "PC2"])
     }
 
     @Test func setsLinkPropertiesFromTextAndShowsParseErrorsOnTheField() async {

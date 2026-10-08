@@ -133,7 +133,7 @@ struct EditCommands: Commands {
             Button("Taglia") { if typing { send("cut:") } }
                 .keyboardShortcut("x")
             Button("Copia") {
-                if typing { send("copy:") } else if let id = selectedNode { editor?.copy(id) }
+                if typing { send("copy:") } else if let id = selectedNode { editor?.copy([id]) }
             }
             .keyboardShortcut("c")
             Button("Incolla") {
@@ -141,7 +141,7 @@ struct EditCommands: Commands {
             }
             .keyboardShortcut("v")
             Button("Duplica") {
-                if let id = selectedNode { Task { await editor?.duplicate(id) } }
+                if let id = selectedNode { Task { await editor?.duplicate([id]) } }
             }
             .keyboardShortcut("d")
             Button("Seleziona tutto") { if typing { send("selectAll:") } }

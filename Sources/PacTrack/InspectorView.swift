@@ -16,6 +16,10 @@ struct InspectorView: View {
                 if let link = editor.snapshot.links.first(where: { $0.id == id }) {
                     LinkInspector(link: link, editor: editor).id(link.id)
                 }
+            case .nodes(let ids):
+                Text("\(ids.count) dispositivi selezionati. Trascinane uno per spostarli insieme; con il tasto destro: Duplica, Copia, Spegni/Accendi, Elimina.")
+                    .foregroundStyle(Theme.muted)
+                    .padding(12)
             case nil:
                 Text("Seleziona un dispositivo o un collegamento.").foregroundStyle(Theme.muted).padding(12)
             }

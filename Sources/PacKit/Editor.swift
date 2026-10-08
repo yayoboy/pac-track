@@ -5,6 +5,8 @@ import PacEngine
 public enum Selection: Equatable, Sendable {
     case node(String)
     case link(String)
+    /// Two or more devices, in the order they were picked.
+    case nodes([String])
 }
 
 public struct EditorError: Equatable, Sendable {
@@ -50,7 +52,7 @@ public final class Editor {
     private static let copyOffset = 56.0
     /// Process-wide device clipboard.
     // ponytail: in-memory, not NSPasteboard; enough to copy between windows of this app
-    private static var clipboard: TopologyNode?
+    private static var clipboard: [TopologyNode] = []
 
     public init(client: any EngineClient) {
         self.client = client
@@ -180,6 +182,30 @@ public final class Editor {
         selection = s
     }
 
+    /// Devices in the selection, in the order they were picked; empty for a cable or nothing.
+    public var selectedNodes: [String] {
+        switch selection {
+        case .node(let id): [id]
+        case .nodes(let ids): ids
+        case .link, nil: []
+        }
+    }
+
+    /// Several devices at once (rectangle, Seleziona tutto): none clears, one is an ordinary selection.
+    public func select(nodes ids: [String]) {
+        selection = ids.count > 1 ? .nodes(ids) : ids.first.map { .node($0) }
+    }
+
+    /// Shift-click: adds the device to the selected ones or takes it out.
+    public func toggle(_ id: String) {
+        let ids = selectedNodes
+        select(nodes: ids.contains(id) ? ids.filter { $0 != id } : ids + [id])
+    }
+
+    public func selectAll() {
+        select(nodes: snapshot.nodes.map(\.id))
+    }
+
     public func setPosition(_ id: String, _ pos: Pos) {
         positions[id] = pos
     }
@@ -226,6 +252,7 @@ public final class Editor {
         switch selection {
         case .node(let id): await remove(nodes: [id], links: [])
         case .link(let id): await remove(nodes: [], links: [id])
+        case .nodes(let ids): await remove(nodes: ids, links: [])
         case nil: break
         }
     }
@@ -310,39 +337,58 @@ public final class Editor {
         dismissedWarning = snapshot.warnings.last?.id ?? dismissedWarning
     }
 
-    public func copy(_ id: String) {
-        Self.clipboard = current.nodes.first { $0.id == id }
+    public func copy(_ ids: [String]) {
+        Self.clipboard = current.nodes.filter { ids.contains($0.id) }
     }
 
-    /// Pastes the copied device at `pos`, or `copyOffset` below-right of the last copy.
+    /// Pastes the copied devices with the first one at `pos` (the group keeps its shape), or `copyOffset` below-right of the last copy.
     public func paste(at pos: Pos?) async {
         await serialized {
-            guard var src = Self.clipboard else { return }
-            src.pos = pos ?? Pos(x: src.pos.x + Self.copyOffset, y: src.pos.y + Self.copyOffset)
-            if pos == nil { Self.clipboard = src }
-            await self.insertCopy(of: src)
+            guard let first = Self.clipboard.first else { return }
+            let dx = pos.map { $0.x - first.pos.x } ?? Self.copyOffset
+            let dy = pos.map { $0.y - first.pos.y } ?? Self.copyOffset
+            let moved = Self.clipboard.map { n -> TopologyNode in
+                var c = n
+                c.pos = Pos(x: n.pos.x + dx, y: n.pos.y + dy)
+                return c
+            }
+            if pos == nil { Self.clipboard = moved }
+            await self.insertCopies(of: moved)
         }
     }
 
-    public func duplicate(_ id: String) async {
+    public func duplicate(_ ids: [String]) async {
         await serialized {
-            guard var src = self.current.nodes.first(where: { $0.id == id }) else { return }
-            src.pos = Pos(x: src.pos.x + Self.copyOffset, y: src.pos.y + Self.copyOffset)
-            await self.insertCopy(of: src)
+            let srcs = self.current.nodes.filter { ids.contains($0.id) }.map { n -> TopologyNode in
+                var c = n
+                c.pos = Pos(x: n.pos.x + Self.copyOffset, y: n.pos.y + Self.copyOffset)
+                return c
+            }
+            await self.insertCopies(of: srcs)
         }
     }
 
-    /// Adds a device of the same kind, power state, interface modes and name server as `src` (no addresses, routes or cables: a copied IP would
-    /// silently conflict on the same segment, and static routes need an address) in one undo step.
-    private func insertCopy(of src: TopologyNode) async {
-        let id = newId()
-        positions[id] = src.pos
-        var cmds: [Command] = [.addNode(id: id, kind: src.kind, name: defaultName(src.kind, existing: snapshot.nodes))]
-        // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
-        for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
-        if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
-        if !src.powered { cmds.append(.setPower(id: id, on: false)) }
-        if await editNow(cmds, key: "paste") { selection = .node(id) }
+    /// Adds devices of the same kind, power state, interface modes and name server as `srcs` (no addresses, routes or cables: a copied IP
+    /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
+    /// and selects them.
+    private func insertCopies(of srcs: [TopologyNode]) async {
+        guard !srcs.isEmpty else { return }
+        var taken = Set(snapshot.nodes.map(\.name))
+        var ids: [String] = []
+        var cmds: [Command] = []
+        for src in srcs {
+            let id = newId()
+            let name = defaultName(src.kind, taken: taken)
+            taken.insert(name)
+            ids.append(id)
+            positions[id] = src.pos
+            cmds.append(.addNode(id: id, kind: src.kind, name: name))
+            // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
+            for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
+            if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
+            if !src.powered { cmds.append(.setPower(id: id, on: false)) }
+        }
+        if await editNow(cmds, key: "paste") { select(nodes: ids) }
     }
 
     /// Applies one link property typed in the inspector; parse and range errors show on that field.

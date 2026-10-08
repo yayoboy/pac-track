@@ -62,7 +62,7 @@ enum SelfTest {
         await editor.setLink(cable, .delay, "veloce")
         if editor.error?.key != "link:\(cable):delay" { failures.append("link field error: \(String(describing: editor.error))") }
         await editor.edit(.setLinkUp(id: editor.snapshot.links[1].id, up: false))
-        await editor.duplicate(id("PC2"))
+        await editor.duplicate([id("PC2")])
         await editor.edit(.setPower(id: id("PC3"), on: false))
         if editor.snapshot.nodes.first(where: { $0.name == "PC3" })?.powered != false { failures.append("PC3 should be off") }
         if PaletteView.groups(matching: "rou").map(\.1) != [[.router]] { failures.append("palette search") }

@@ -88,7 +88,7 @@ import Testing
         let (_, pc) = await pair()
         await editor.edit(.setIfaceMode(node: pc, iface: "eth0", mode: .dhcp))
         await editor.edit(.setNameServer(node: pc, ip: "10.0.0.2"))
-        await editor.duplicate(pc)
+        await editor.duplicate([pc])
         #expect(node("PC2").ifaces[0].mode == .dhcp)
         #expect(node("PC2").nameServer == "10.0.0.2")
     }
