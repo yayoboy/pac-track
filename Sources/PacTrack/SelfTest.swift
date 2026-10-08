@@ -82,6 +82,7 @@ enum SelfTest {
         failures += await pingScenario(output: output)
         failures += await exportScenario(output: output)
         failures += await vlanScenario(output: output)
+        failures += await stickScenario(output: output)
         return failures
     }
 
@@ -364,6 +365,48 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m7a-ports")) { failures.append("could not write the M7a ports image") }
         editor.inspectorTab = .tables
         if !render(editor, to: sibling(output, "m7a-mac")) { failures.append("could not write the M7a MAC table image") }
+        return failures
+    }
+
+    /// M7a: router-on-a-stick — PC1 (VLAN 10) pings PC2 (VLAN 20) through R1's subinterfaces on SW1's trunk; R1's Interfacce tab beside
+    /// the 802.1Q PDU of the echo request R1 forwards.
+    private static func stickScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.router, at: Pos(x: 560, y: 120))
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 260))
+        await editor.addDevice(.pc, at: Pos(x: 420, y: 400))
+        await editor.addDevice(.pc, at: Pos(x: 700, y: 400))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("R1"), id("SW1")) // R1 Gi0/0 — SW1 Gi0/1
+        await editor.connect(id("SW1"), id("PC1")) // SW1 Gi0/2
+        await editor.connect(id("SW1"), id("PC2")) // SW1 Gi0/3
+        await editor.edit(.setSwitchport(node: id("SW1"), iface: "Gi0/1", config: PortConfig(mode: .trunk)))
+        await editor.setPort(id("SW1"), iface: "Gi0/2", .vlan, "10")
+        await editor.setPort(id("SW1"), iface: "Gi0/3", .vlan, "20")
+        await editor.addSubinterface(id("R1"), parent: "Gi0/0", vlan: "20", cidr: "10.0.20.1/24")
+        await editor.addSubinterface(id("R1"), parent: "Gi0/0", vlan: "10", cidr: "10.0.10.1/24")
+        for (name, cidr, gateway) in [("PC1", "10.0.10.10/24", "10.0.10.1"), ("PC2", "10.0.20.10/24", "10.0.20.1")] {
+            await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
+            await editor.edit(.addRoute(node: id(name), cidr: "0.0.0.0/0", nextHop: gateway))
+        }
+        await editor.run(.ping(node: id("PC1"), target: "10.0.20.10"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") || !lines.contains(where: { $0.contains("ttl=63") }) {
+            failures.append("inter-VLAN ping \(lines)")
+        }
+        let names = editor.snapshot.nodes.first { $0.name == "R1" }?.ifaces.map(\.name) ?? []
+        if names != ["Gi0/0", "Gi0/0.10", "Gi0/0.20", "Gi0/1", "Gi0/2", "Gi0/3"] { failures.append("R1 interfaces \(names)") }
+        if let fwd = editor.events.first(where: { $0.kind == .tx && $0.node == id("R1") && $0.info.hasPrefix("10.0.10.10 → 10.0.20.10 Echo request") }) {
+            await editor.selectEvent(fwd.id)
+            if editor.pdu?.map(\.title) != ["Ethernet II", "802.1Q", "IPv4", "ICMP"] { failures.append("tagged PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no echo request forwarded by R1")
+        }
+        editor.select(.node(id("R1")))
+        editor.inspectorTab = .interfaces
+        if !render(editor, to: sibling(output, "m7a-stick")) { failures.append("could not write the M7a router-on-a-stick image") }
         return failures
     }
 

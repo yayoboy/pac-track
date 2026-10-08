@@ -494,6 +494,25 @@ public final class Editor {
         }
     }
 
+    /// The Interfacce tab's "Aggiungi sottointerfaccia": `<parent>.<VLAN>` and its address (blank: none) in one undo step. A refused
+    /// address leaves the subinterface without it, as IOS takes the interface and rejects the `ip address` line. Returns false, with
+    /// the error under the form, if anything was refused.
+    @discardableResult
+    public func addSubinterface(_ id: String, parent: String, vlan: String, cidr: String) async -> Bool {
+        await serialized {
+            let key = "sub:\(id)"
+            guard let v = Int(vlan.trimmingCharacters(in: .whitespaces)) else {
+                self.error = EditorError(key: key, message: "Invalid number: \"\(vlan)\"")
+                return false
+            }
+            let name = "\(parent).\(v)"
+            let ip = cidr.trimmingCharacters(in: .whitespaces)
+            var cmds: [Command] = [.addSubinterface(node: id, iface: name)]
+            if !ip.isEmpty { cmds.append(.setIp(node: id, iface: name, cidr: ip)) }
+            return await self.editNow(cmds, key: key)
+        }
+    }
+
     public func enableDns(_ id: String, _ on: Bool) async {
         await edit(.setDnsServer(node: id, records: on ? [] : nil), key: "dnsrec:\(id)")
     }

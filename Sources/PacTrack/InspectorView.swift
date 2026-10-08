@@ -77,6 +77,14 @@ private struct NodeInspector: View {
                         Text(iface.name).foregroundStyle(Theme.fgStrong)
                         Spacer()
                         Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        if iface.name.contains(".") {
+                            Button("Elimina", role: .destructive) {
+                                Task { await editor.edit(.removeSubinterface(node: node.id, iface: iface.name), key: "sub:\(node.id)") }
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Elimina la sottointerfaccia")
+                            .accessibilityIdentifier("subif-delete-\(iface.name)")
+                        }
                     }
                     .font(.system(size: 11))
                     if node.kind.isHost {
@@ -107,6 +115,7 @@ private struct NodeInspector: View {
                     Text("MAC \(iface.mac)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
                 }
             }
+            if node.kind == .router { SubinterfaceForm(node: node, editor: editor) }
             if node.kind.isHost {
                 let key = "dns:\(node.id)"
                 CommitField(label: "Server DNS", value: node.nameServer ?? "",
@@ -204,6 +213,44 @@ private struct SwitchportFields: View {
                     .frame(maxWidth: field == .allowed ? .infinity : 80)
                 }
             }
+        }
+    }
+}
+
+/// Router-on-a-stick (spec M7 §5): a subinterface `<fisica>.<VID>` with its address.
+private struct SubinterfaceForm: View {
+    let node: NodeView
+    @Bindable var editor: Editor
+    @State private var parent = "Gi0/0"
+    @State private var vlan = ""
+    @State private var cidr = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SOTTOINTERFACCIA 802.1Q").font(.system(size: 9)).foregroundStyle(Theme.muted)
+            HStack {
+                Picker("", selection: $parent) {
+                    ForEach(node.ifaces.filter { !$0.name.contains(".") }, id: \.name) { Text($0.name).tag($0.name) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                TextField("VID", text: $vlan).textFieldStyle(.roundedBorder).font(Theme.mono).frame(width: 50)
+                TextField("10.0.10.1/24", text: $cidr).textFieldStyle(.roundedBorder).font(Theme.mono)
+            }
+            Button("Aggiungi sottointerfaccia") {
+                Task {
+                    if await editor.addSubinterface(node.id, parent: parent, vlan: vlan, cidr: cidr) {
+                        vlan = ""
+                        cidr = ""
+                    }
+                }
+            }
+            .accessibilityIdentifier("subif-add")
+            ErrorLine(editor: editor, key: "sub:\(node.id)")
+            Text("Nome <fisica>.<VID>, stesso MAC della fisica: collega la fisica a una porta trunk.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
         }
     }
 }

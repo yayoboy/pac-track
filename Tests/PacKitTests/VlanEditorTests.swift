@@ -64,4 +64,25 @@ import Testing
         await editor.edit(.setSwitchport(node: sw2, iface: "Gi0/1", config: PortConfig(mode: .trunk)))
         #expect(isTrunk(editor.snapshot.links[0], in: editor.snapshot.nodes))
     }
+
+    @Test func theSubinterfaceFormAddsInOneStepAndDeleteWaitsForNatToLetGo() async {
+        await editor.addDevice(.router, at: origin)
+        let r = node("R1")?.id ?? ""
+        let key = "sub:\(r)"
+        var ok = await editor.addSubinterface(r, parent: "Gi0/0", vlan: "dieci", cidr: "")
+        #expect(!ok && editor.error == EditorError(key: key, message: "Invalid number: \"dieci\""))
+        ok = await editor.addSubinterface(r, parent: "Gi0/0", vlan: " 10 ", cidr: " 10.0.10.1/24 ")
+        #expect(ok && node("R1")?.ifaces[1].name == "Gi0/0.10" && node("R1")?.ifaces[1].cidr == "10.0.10.1/24")
+        ok = await editor.addSubinterface(r, parent: "Gi0/0", vlan: "10", cidr: "")
+        #expect(!ok && editor.error == EditorError(key: key, message: "Gi0/0.10 already exists"))
+        await editor.undo()
+        #expect(node("R1")?.ifaces.count == 4) // subinterface and address: one step
+        await editor.redo()
+        await editor.setNatRole(r, iface: "Gi0/0.10", .inside)
+        await editor.edit(.removeSubinterface(node: r, iface: "Gi0/0.10"), key: key)
+        #expect(editor.error == EditorError(key: key, message: "Gi0/0.10 has a NAT role"))
+        await editor.setNatRole(r, iface: "Gi0/0.10", .off)
+        await editor.edit(.removeSubinterface(node: r, iface: "Gi0/0.10"), key: key)
+        #expect(node("R1")?.ifaces.map(\.name) == ["Gi0/0", "Gi0/1", "Gi0/2", "Gi0/3"])
+    }
 }
