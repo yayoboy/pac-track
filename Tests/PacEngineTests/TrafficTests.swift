@@ -48,7 +48,8 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(lines[2].hasPrefix("[  1]   0.00-0.84 sec  1000000 bytes  9.4") && lines[2].hasSuffix(" Mbits/sec  0 retr"))
         #expect(lines[3] == "iperf Done.")
         let samples = flow.result.samples
-        #expect(samples.count == 8) // 100 … 800 ms: TIME_WAIT (the end of the flow) comes before 900 ms
+        #expect(samples.count == 9) // 100 … 900 ms: the flow ends (TIME_WAIT) at ~843 ms; 900 ms holds its last bytes
+        #expect(samples.last!.timeNs == 900 * MS && samples.last!.bitsPerSecond > 0)
         for s in samples[1...6] { #expect(abs(s.bitsPerSecond - GOODPUT_10MB) / GOODPUT_10MB < 0.05) }
         #expect(samples.allSatisfy { $0.jitterNs == nil && $0.lossPct == 0 && $0.delayNs != nil })
         #expect(srv.tcp.connections.isEmpty)
@@ -88,6 +89,21 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(samples[1].delayNs == 1_229_300) // 1536 wire bytes at 10 Mb/s + 500 ns of cable
         #expect(samples.allSatisfy { $0.lossPct == 0 && $0.jitterNs != nil })
         #expect(samples[11...].allSatisfy { $0.bitsPerSecond == 0 }) // nothing arrives after 1.1 s
+    }
+
+    @Test func aStoppedUdpFlowStillSamplesItsLastPartialInterval() throws {
+        let (sim, h1, _) = try direct()
+        let flow = try UdpFlow(node: h1, target: "10.0.0.2", bitsPerSecond: 1e6, seconds: 1)
+        run(sim, seconds: 1) {
+            flow.sample(at: $0)
+            if $0 == 500 * MS {
+                sim.sched.runUntil(550 * MS)
+                flow.stop()
+            }
+        }
+        let samples = flow.result.samples
+        #expect(samples.map(\.timeNs) == (1...6).map { $0 * 100 * MS }) // 600 ms holds 500–550 ms, then nothing
+        #expect(samples.last!.bitsPerSecond > 0)
     }
 
     @Test func udpFlowToAHostWithoutTheSinkLosesEverything() throws {

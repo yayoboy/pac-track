@@ -46,6 +46,16 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(rt.snapshot().linkSamples.isEmpty)
     }
 
+    @Test func aTcpFlowShorterThan100msStillGetsOnePoint() throws {
+        let rt = try trafficRuntime()
+        try rt.handle(.updateLink(id: "l1", options: LinkOptions())) // 1 Gb/s: 1 MB takes ~9 ms
+        try rt.handle(.trafficTcp(node: "a", target: "10.0.0.2", bytes: 1_000_000))
+        runFor(rt, wallMs: 1_000)
+        let app = rt.snapshot().apps[0]
+        #expect(app.done && app.lines.last == "iperf Done.")
+        #expect(app.samples.map(\.timeNs) == [100 * MS] && app.samples[0].bitsPerSecond == 80e6) // 1 MB in one 100 ms interval
+    }
+
     @Test func udpAboveTheCableRateFillsTheQueueAndTailDrops() throws {
         let rt = try trafficRuntime()
         try rt.handle(.updateLink(id: "l1", options: LinkOptions(bandwidthBps: 10e6, queueLimit: 10)))

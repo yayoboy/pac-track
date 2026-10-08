@@ -65,8 +65,9 @@ final class TcpFlow {
         }
     }
 
+    /// After the end, one last point if bytes arrived since the previous one (a flow under 100 ms gets just that one).
     func sample(at time: Int) {
-        guard !result.done, let c = conn else { return }
+        guard let c = conn, !result.done || c.bytesAcked != lastAcked else { return }
         let acked = c.bytesAcked
         let loss = c.segmentsSent == 0 ? 0 : Double(c.retransmissions) / Double(c.segmentsSent) * 100
         keep(FlowSample(timeNs: time, bitsPerSecond: bitsPerSecond(acked - lastAcked), delayNs: c.srtt, jitterNs: nil, lossPct: loss),
@@ -165,9 +166,10 @@ final class UdpFlow {
         report()
     }
 
+    /// After the end, one last point if datagrams arrived since the previous one.
     func sample(at time: Int) {
-        guard !result.done, sent > 0 else { return }
         let bytes = received * TRAFFIC_DATAGRAM
+        guard sent > 0, !result.done || bytes != lastBytes else { return }
         let loss = highest < 0 ? 0 : Double(highest + 1 - received) / Double(highest + 1) * 100
         keep(FlowSample(timeNs: time, bitsPerSecond: bitsPerSecond(bytes - lastBytes), delayNs: delayCount == 0 ? nil : delaySum / delayCount,
                         jitterNs: Int(jitter.rounded()), lossPct: loss), in: &result.samples)

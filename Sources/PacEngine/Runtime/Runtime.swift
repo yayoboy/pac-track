@@ -273,7 +273,7 @@ public final class Runtime {
         }
     }
 
-    /// One point for every cable and running traffic flow, stamped at the boundary.
+    /// One point for every cable and traffic flow (a finished flow adds at most its last), stamped at the boundary.
     private func sample() {
         let at = nextSampleAt
         nextSampleAt += SAMPLE_NS
@@ -285,7 +285,7 @@ public final class Runtime {
                                                            ba: directionSample(now.ba, since: last.ba)))
             if linkSamples[id]!.count > METRICS_HISTORY { linkSamples[id]!.removeFirst() }
         }
-        for app in apps where !app.program.done { app.program.sample(at: at) }
+        for app in apps { app.program.sample(at: at) }
     }
 
     private func forget(link id: String) {
