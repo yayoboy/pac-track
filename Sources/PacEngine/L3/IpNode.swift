@@ -155,9 +155,18 @@ class IpNode: Node {
 
     override func receive(_ frame: EthernetFrame, on iface: Interface) {
         guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC else { return }
+        // 802.1Q, after the NIC's MAC filter: a tagged frame belongs to the subinterface for its VLAN; a host, or a router without one, drops it.
+        var to = iface
+        if let vlan = frame.vlan {
+            guard let sub = interfaces.first(where: { $0.dot1q?.parent === iface && $0.dot1q?.vlan == vlan }) else {
+                sim.emit(.drop, node: id, iface: iface.name, frame: frame, reason: .unknownVlan)
+                return
+            }
+            to = sub
+        }
         switch frame.payload {
-        case .arp(let a): arp.handle(a, on: iface)
-        case .ipv4(let p): input(p, on: iface)
+        case .arp(let a): arp.handle(a, on: to)
+        case .ipv4(let p): input(p, on: to)
         }
     }
 

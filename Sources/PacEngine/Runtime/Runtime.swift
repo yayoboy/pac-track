@@ -237,6 +237,10 @@ public final class Runtime {
             let n = try get(node)
             guard let sw = n as? Switch else { throw EngineError("\(n.name) has no switch ports") }
             try sw.setSwitchport(iface, config)
+        case let .addSubinterface(node, iface):
+            try router(node).addSubinterface(iface)
+        case let .removeSubinterface(node, iface):
+            try router(node).removeSubinterface(iface)
         case let .updateLink(id, options):
             try link(id).update(options)
         case let .setLinkUp(id, up):
@@ -365,7 +369,7 @@ public final class Runtime {
                 name: node.name,
                 powered: node.powered,
                 ifaces: node.interfaces.map {
-                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil,
+                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: ($0.dot1q?.parent ?? $0).link != nil,
                               mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil)
                 },
                 routes: ip?.routes.view().map {
@@ -433,6 +437,13 @@ public final class Runtime {
         let node = try get(id)
         guard let ip = node as? IpNode else { throw EngineError("\(node.name) has no IP stack") }
         return ip
+    }
+
+    /// Subinterfaces are for routers only (spec M7 §6), not clouds.
+    private func router(_ id: String) throws -> Router {
+        let node = try get(id)
+        guard nodes[id]?.kind == .router, let r = node as? Router else { throw EngineError("\(node.name) cannot have subinterfaces") }
+        return r
     }
 
     private func link(_ id: String) throws -> Link {

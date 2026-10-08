@@ -9,16 +9,25 @@ final class Interface {
     var ipv4: Cidr?
     /// Switch ports only: access or trunk and the VLANs (IOS `switchport`).
     var switchport = Switchport()
+    /// Router subinterfaces only (IOS `encapsulation dot1q`): the physical interface it rides on and its VLAN.
+    let dot1q: (parent: Interface, vlan: Int)?
 
-    init(node: Node, name: String, mac: Mac) {
+    init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node
         self.name = name
         self.mac = mac
+        self.dot1q = dot1q
     }
 
     var id: String { "\(node.id)/\(name)" }
 
     func send(_ frame: EthernetFrame) {
+        // A subinterface sends through its physical interface, tagged with its VLAN.
+        if let dot1q {
+            var tagged = frame
+            tagged.vlan = dot1q.vlan
+            return dot1q.parent.send(tagged)
+        }
         let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil ? .noLink : nil
         if let reason {
             node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: reason)
@@ -73,6 +82,17 @@ class Node {
 
     func removeLastInterface() {
         retired.append(interfaces.removeLast())
+    }
+
+    /// A router subinterface, at the place `show ip interface brief` lists it.
+    func insertInterface(_ iface: Interface, at index: Int) {
+        interfaces.insert(iface, at: index)
+    }
+
+    /// A deleted router subinterface: retired like the ports a smaller switch gives up.
+    func removeInterface(_ iface: Interface) {
+        interfaces.removeAll { $0 === iface }
+        retired.append(iface)
     }
 
     func iface(_ name: String) throws -> Interface {

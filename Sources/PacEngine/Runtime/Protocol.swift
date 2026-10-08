@@ -95,6 +95,10 @@ public enum Command: Sendable {
     case setPorts(id: String, count: Int)
     /// A switch port's 802.1Q role and VLANs (switches only); the addresses the port learned are flushed.
     case setSwitchport(node: String, iface: String, config: PortConfig)
+    /// Router subinterface "<physical>.<VLAN>" (IOS `interface Gi0/0.10` + `encapsulation dot1q 10`), routers only.
+    case addSubinterface(node: String, iface: String)
+    /// Refused while NAT or a firewall rule names it.
+    case removeSubinterface(node: String, iface: String)
     case updateLink(id: String, options: LinkOptions)
     case setLinkUp(id: String, up: Bool)
     case setRunning(Bool)
@@ -130,6 +134,8 @@ public enum Command: Sendable {
         case .setPower: "setPower"
         case .setPorts: "setPorts"
         case .setSwitchport: "setSwitchport"
+        case .addSubinterface: "addSubinterface"
+        case .removeSubinterface: "removeSubinterface"
         case .updateLink: "updateLink"
         case .setLinkUp: "setLinkUp"
         case .setRunning: "setRunning"
@@ -143,6 +149,7 @@ public struct IfaceView: Equatable, Sendable {
     public let name: String
     public let mac: String
     public let cidr: String?
+    /// A subinterface is linked when its physical interface is.
     public let linked: Bool
     public let mode: IfaceMode
     /// Switch ports only: the 802.1Q role.

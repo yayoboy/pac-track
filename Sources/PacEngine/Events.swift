@@ -19,6 +19,8 @@ enum DropReason: String, Sendable {
     case firewallDefault = "firewall-default"
     /// A switch port refused a frame: tagged on an access port, or with a VLAN the trunk does not carry.
     case vlanNotAllowed = "vlan-not-allowed"
+    /// A tagged frame reached a host, or a router with no subinterface for its VLAN.
+    case unknownVlan = "unknown-vlan"
 }
 
 struct SimEvent: Sendable {
