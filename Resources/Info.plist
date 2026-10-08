@@ -6,6 +6,7 @@
     <key>CFBundleIdentifier</key><string>com.pactrack.app</string>
     <key>CFBundleName</key><string>Pac-Track</string>
     <key>CFBundleDisplayName</key><string>Pac-Track</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>3.0</string>
     <key>CFBundleVersion</key><string>1</string>
