@@ -5,7 +5,7 @@ private let MAX_APPS = 20
 private let MAX_STEP_MS = 100.0
 /// Simulation mode, play: one step per half second of wall time at 1×.
 private let SIM_STEP_MS = 500.0
-/// ponytail: fixed work budget per clock tick; a storm slows simulated time instead of freezing the app (spec §6 effective speed, not yet reported)
+/// ponytail: fixed work budget per clock tick; a storm slows simulated time instead of freezing the app (reported as Snapshot.effectiveSpeed)
 private let MAX_EVENTS_PER_ADVANCE = 50_000
 /// A step whose events log nothing (only timers) gives up after this many.
 private let MAX_SILENT_EVENTS = 100_000
@@ -99,6 +99,8 @@ public final class Runtime {
     /// Bumped by `load`: a new Sim restarts event sequence numbers.
     public private(set) var epoch = 0
     private var stepCredit = 0.0
+    /// Speed reached by the last Realtime tick.
+    private var effectiveSpeed = 1.0
     /// Clock state to restore when leaving Simulation mode.
     private var runningBeforeSimulation = true
     private var last: Snapshot?
@@ -236,6 +238,7 @@ public final class Runtime {
         case let .setSpeed(value):
             guard value > 0 && value <= 1000 else { throw EngineError("Invalid speed: \(value)") }
             speed = value
+            effectiveSpeed = value
         case let .load(topology):
             try load(topology)
         }
@@ -245,7 +248,10 @@ public final class Runtime {
         guard running else { return }
         switch mode {
         case .realtime:
-            run(until: sim.now + Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded()), maxEvents: MAX_EVENTS_PER_ADVANCE)
+            let start = sim.now
+            let target = start + Int((min(wallMs, MAX_STEP_MS) * Double(MS) * speed).rounded())
+            run(until: target, maxEvents: MAX_EVENTS_PER_ADVANCE)
+            effectiveSpeed = target > start ? speed * Double(sim.now - start) / Double(target - start) : speed
         case .simulation:
             stepCredit += min(wallMs, MAX_STEP_MS) * speed
             while stepCredit >= SIM_STEP_MS {
@@ -393,7 +399,8 @@ public final class Runtime {
             AppView(id: $0.id, node: $0.node, title: $0.title, lines: $0.program.lines, done: $0.program.done,
                     samples: Array($0.program.samples.suffix(METRICS_HISTORY)))
         }
-        return Snapshot(version: 0, seed: seed, timeNs: now, running: running, speed: speed, mode: mode, epoch: epoch,
+        return Snapshot(version: 0, seed: seed, timeNs: now, running: running, speed: speed,
+                        effectiveSpeed: running && mode == .realtime ? effectiveSpeed : speed, mode: mode, epoch: epoch,
                         eventCount: sim.log.total, nodes: nodeViews, links: linkViews, apps: appViews,
                         warnings: sim.warnings.map { WarningView(id: $0.id, node: $0.node, timeNs: $0.time) },
                         linkSamples: linkSamples.mapValues { Array($0.suffix(METRICS_HISTORY)) })

@@ -363,6 +363,8 @@ public struct Snapshot: Equatable, Sendable {
     public let timeNs: Int
     public let running: Bool
     public let speed: Double
+    /// Speed the last Realtime tick actually reached; below `speed` when a tick ran out of its event budget (spec §6).
+    public let effectiveSpeed: Double
     public let mode: SimMode
     /// Bumped when the network is reloaded: event sequence numbers restart.
     public let epoch: Int
@@ -375,7 +377,7 @@ public struct Snapshot: Equatable, Sendable {
     /// Per cable id, one point per 100 ms of simulated time (the last minute).
     public let linkSamples: [String: [LinkSample]]
 
-    public static let empty = Snapshot(version: 0, seed: 1, timeNs: 0, running: true, speed: 1, mode: .realtime, epoch: 0,
+    public static let empty = Snapshot(version: 0, seed: 1, timeNs: 0, running: true, speed: 1, effectiveSpeed: 1, mode: .realtime, epoch: 0,
                                        eventCount: 0, nodes: [], links: [], apps: [], warnings: [], linkSamples: [:])
 }
 

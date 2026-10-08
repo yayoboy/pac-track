@@ -93,6 +93,12 @@ struct SimulationToolbar: ToolbarContent {
                 .monospacedDigit()
                 .foregroundStyle(Theme.muted)
                 .frame(width: 150, alignment: .trailing)
+            if s.mode == .realtime && s.running && s.effectiveSpeed < s.speed * 0.9 {
+                Text(String(format: "effettiva %.1f×", s.effectiveSpeed))
+                    .font(Theme.mono)
+                    .foregroundStyle(Theme.warn)
+                    .help("Troppi eventi per tick: la simulazione non tiene la velocità scelta.")
+            }
         }
     }
 }

@@ -220,7 +220,9 @@ enum SelfTest {
         await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.0.1/24"))
         await editor.run(.ping(node: id("PC1"), target: "10.0.0.9"))
         for _ in 0..<3 { await editor.tick(wallMs: 100) }
-        return editor.warning == nil ? ["no L2 loop warning"] : []
+        var failures = editor.warning == nil ? ["no L2 loop warning"] : []
+        if editor.snapshot.effectiveSpeed >= editor.snapshot.speed { failures.append("the storm did not lower the effective speed") }
+        return failures
     }
 
     static func render(_ editor: Editor, to path: String) -> Bool {
