@@ -21,12 +21,14 @@ class Router: IpNode {
     }
 
     /// IOS `no interface Gi0/0.10`. Refused while NAT or a firewall rule names it (IOS would drop those with it); frames still on
-    /// their way for its VLAN are dropped on arrival.
+    /// their way for its VLAN are dropped on arrival, and what is still queued to leave it (ARP retries, a delayed DHCP offer) is
+    /// dropped as it goes down.
     func removeSubinterface(_ name: String) throws {
         let sub = try iface(name)
         guard sub.dot1q != nil else { throw EngineError("\(name) is not a subinterface") }
         if let nat, nat.config.inside.contains(name) || nat.config.outside == name { throw EngineError("\(name) has a NAT role") }
         if firewall?.config.rules.contains(where: { $0.iface == name }) == true { throw EngineError("\(name) has firewall rules") }
+        sub.up = false
         removeInterface(sub)
     }
 }

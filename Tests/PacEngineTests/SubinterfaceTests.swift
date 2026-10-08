@@ -106,6 +106,18 @@ private func stick() throws -> Runtime {
         #expect(rt.events(from: 0).contains { $0.reason == "unknown-vlan" && $0.node == "r" && $0.proto == .icmp })
     }
 
+    @Test func aDeletedSubinterfaceSendsNothingMore() throws {
+        let rt = try stick()
+        try rt.handle(.ping(node: "r", target: "10.0.10.99")) // nobody: ARP retries out of Gi0/0.10
+        runFor(rt, wallMs: 500)
+        try rt.handle(.removeSubinterface(node: "r", iface: "Gi0/0.10"))
+        let removed = rt.events(from: 0).last?.id ?? 0
+        runFor(rt, wallMs: 3_000)
+        let after = rt.events(from: removed + 1)
+        #expect(!after.contains { $0.kind == .tx && $0.node == "r" })
+        #expect(after.contains { $0.kind == .drop && $0.node == "r" && $0.iface == "Gi0/0.10" && $0.reason == "iface-down" })
+    }
+
     @Test func aSubinterfaceServesDhcpToItsVlan() throws {
         let rt = try stick()
         try rt.handle(.setDhcpServer(node: "r", config: DhcpConfig(start: "10.0.20.100", end: "10.0.20.199", gateway: "10.0.20.1")))

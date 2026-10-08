@@ -22,8 +22,9 @@ final class Interface {
     var id: String { "\(node.id)/\(name)" }
 
     func send(_ frame: EthernetFrame) {
-        // A subinterface sends through its physical interface, tagged with its VLAN.
+        // A subinterface sends through its physical interface, tagged with its VLAN; once deleted (down) it sends nothing.
         if let dot1q {
+            guard up else { return node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: .ifaceDown) }
             var tagged = frame
             tagged.vlan = dot1q.vlan
             return dot1q.parent.send(tagged)
