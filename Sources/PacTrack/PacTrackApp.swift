@@ -113,10 +113,6 @@ struct EditCommands: Commands {
         NSApp.sendAction(Selector((action)), to: nil, from: nil)
     }
 
-    private var selectedNode: String? {
-        if case .node(let id)? = editor?.selection { id } else { nil }
-    }
-
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
             Button("Annulla") {
@@ -133,18 +129,23 @@ struct EditCommands: Commands {
             Button("Taglia") { if typing { send("cut:") } }
                 .keyboardShortcut("x")
             Button("Copia") {
-                if typing { send("copy:") } else if let id = selectedNode { editor?.copy([id]) }
+                if typing { send("copy:") } else if let ids = editor?.selectedNodes, !ids.isEmpty { editor?.copy(ids) }
             }
             .keyboardShortcut("c")
             Button("Incolla") {
                 if typing { send("paste:") } else { Task { await editor?.paste(at: nil) } }
             }
             .keyboardShortcut("v")
+            // Never while typing: Cmd+D in a field must not duplicate the selected devices.
             Button("Duplica") {
-                if let id = selectedNode { Task { await editor?.duplicate([id]) } }
+                if !typing, let ids = editor?.selectedNodes, !ids.isEmpty { Task { await editor?.duplicate(ids) } }
             }
             .keyboardShortcut("d")
-            Button("Seleziona tutto") { if typing { send("selectAll:") } }
+            // No key equivalent: Backspace stays with text fields; the canvas deletes on its own (onDeleteCommand).
+            Button("Elimina") {
+                if typing { send("delete:") } else { Task { await editor?.deleteSelection() } }
+            }
+            Button("Seleziona tutto") { if typing { send("selectAll:") } else { editor?.selectAll() } }
                 .keyboardShortcut("a")
         }
     }

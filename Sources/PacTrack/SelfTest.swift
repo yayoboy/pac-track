@@ -75,6 +75,7 @@ enum SelfTest {
         failures += await servicesScenario(output: output)
         failures += await trafficScenario(output: output)
         failures += await natScenario(output: output)
+        failures += await selectionScenario(output: output)
         return failures
     }
 
@@ -199,6 +200,21 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m5")) { failures.append("could not write the M5 services image") }
         editor.inspectorTab = .tables
         if !render(editor, to: sibling(output, "m5-tables")) { failures.append("could not write the M5 tables image") }
+        return failures
+    }
+
+    /// M6: three devices, the first and the last picked together; Seleziona tutto takes all three.
+    private static func selectionScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        for x in [420.0, 560, 700] { await editor.addDevice(.pc, at: Pos(x: x, y: 300)) }
+        let ids = editor.snapshot.nodes.map(\.id)
+        editor.select(.node(ids[0]))
+        editor.toggle(ids[2])
+        if editor.selection != .nodes([ids[0], ids[2]]) { failures.append("shift-click selection \(String(describing: editor.selection))") }
+        if !render(editor, to: sibling(output, "m6-selection")) { failures.append("could not write the M6 selection image") }
+        editor.selectAll()
+        if editor.selectedNodes != ids { failures.append("select all \(editor.selectedNodes)") }
         return failures
     }
 

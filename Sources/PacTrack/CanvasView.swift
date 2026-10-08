@@ -19,6 +19,8 @@ struct CanvasView: View {
     @State private var monitor: Any?
     @State private var wire: Wire?
     @State private var hover = CGPoint.zero
+    /// Shift-drag selection rectangle, in canvas coordinates.
+    @State private var band: CGRect?
 
     var body: some View {
         GeometryReader { geo in
@@ -54,6 +56,9 @@ struct CanvasView: View {
                     }
                     .stroke(Theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     .allowsHitTesting(false)
+                }
+                if let band {
+                    Path(band).stroke(Theme.accent, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).allowsHitTesting(false)
                 }
             }
             .coordinateSpace(.named(Self.space))
@@ -172,13 +177,23 @@ struct CanvasView: View {
         .background(Theme.bg)
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 3)
+            // Shift-drag draws a selection rectangle; a plain drag pans.
+            DragGesture(minimumDistance: 3, coordinateSpace: .named(Self.space))
                 .onChanged { value in
+                    if band == nil, panStart == nil, NSEvent.modifierFlags.contains(.shift) { band = .zero }
+                    if band != nil {
+                        band = CGRect(origin: value.startLocation, size: .zero).union(CGRect(origin: value.location, size: .zero))
+                        return
+                    }
                     let start = panStart ?? offset
                     panStart = start
                     offset = CGSize(width: start.width + value.translation.width, height: start.height + value.translation.height)
                 }
-                .onEnded { _ in panStart = nil }
+                .onEnded { _ in
+                    if let rect = band { editor.select(nodes: editor.snapshot.nodes.filter { rect.contains(center($0.id)) }.map(\.id)) }
+                    band = nil
+                    panStart = nil
+                }
         )
         .onTapGesture { editor.select(nil) }
     }
@@ -229,6 +244,7 @@ struct CanvasView: View {
             let at = snap(toWorld(menuPoint))
             Task { await editor.paste(at: at) }
         }
+        Button("Seleziona tutto") { editor.selectAll() }
         Button("Adatta alla vista") { fit(size) }
     }
 }

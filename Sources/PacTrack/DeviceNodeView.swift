@@ -1,3 +1,4 @@
+import AppKit
 import PacEngine
 import PacKit
 import SwiftUI
@@ -14,10 +15,10 @@ struct DeviceNodeView: View {
     let center: CGPoint
     let nodeAt: (CGPoint) -> String?
     @Binding var wire: Wire?
-    @State private var dragStart: Pos?
+    @State private var dragStart: [String: Pos]?
 
     var body: some View {
-        let selected = editor.selection == .node(node.id)
+        let selected = editor.selectedNodes.contains(node.id)
         VStack(spacing: 1) {
             HStack(spacing: 5) {
                 Image(systemName: node.kind.symbol).font(.system(size: 11))
@@ -36,22 +37,27 @@ struct DeviceNodeView: View {
         .scaleEffect(zoom)
         .position(center)
         .gesture(drag)
-        .onTapGesture { editor.select(.node(node.id)) }
+        .onTapGesture {
+            // Shift-click adds the device to the selection or takes it out (spec §7.1 ③).
+            if NSEvent.modifierFlags.contains(.shift) { editor.toggle(node.id) } else { editor.select(.node(node.id)) }
+        }
         .contextMenu { NodeMenu(node: node, editor: editor) }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("node-\(node.name)")
     }
 
+    /// Moves the device, or every selected device when it is one of them, on the grid; one undo step per drag.
     private var drag: some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .named(CanvasView.space))
             .onChanged { value in
                 if dragStart == nil {
-                    dragStart = editor.positions[node.id] ?? Pos(x: 0, y: 0)
+                    if !editor.selectedNodes.contains(node.id) { editor.select(.node(node.id)) }
+                    dragStart = Dictionary(uniqueKeysWithValues: editor.selectedNodes.map { ($0, editor.positions[$0] ?? Pos(x: 0, y: 0)) })
                     editor.moveStart()
-                    editor.select(.node(node.id))
                 }
-                let start = dragStart!
-                editor.setPosition(node.id, snap(Pos(x: start.x + value.translation.width / zoom, y: start.y + value.translation.height / zoom)))
+                for (id, start) in dragStart ?? [:] {
+                    editor.setPosition(id, snap(Pos(x: start.x + value.translation.width / zoom, y: start.y + value.translation.height / zoom)))
+                }
             }
             .onEnded { _ in
                 dragStart = nil
@@ -89,7 +95,35 @@ struct NodeMenu: View {
     }
 
     var body: some View {
+        let group = editor.selectedNodes
+        if group.count > 1 && group.contains(node.id) {
+            groupMenu(group)
+        } else {
+            single
+        }
+    }
+
+    /// Spec §7.2: only what makes sense for several devices at once.
+    @ViewBuilder
+    private func groupMenu(_ ids: [String]) -> some View {
+        let anyOn = editor.snapshot.nodes.contains { ids.contains($0.id) && $0.powered }
+        Button("Duplica") { Task { await editor.duplicate(ids) } }
+        Button("Copia") { editor.copy(ids) }
+        Button(anyOn ? "Spegni" : "Accendi") { Task { await editor.edit(ids.map { .setPower(id: $0, on: !anyOn) }) } }
+        Divider()
+        Button("Elimina", role: .destructive) { Task { await editor.remove(nodes: ids, links: []) } }
+    }
+
+    /// One device (spec §7.2): the previous menu plus *Mostra tabelle*.
+    @ViewBuilder
+    private var single: some View {
         Button("Apri ispettore") { editor.select(.node(node.id)) }
+        if inspectorTabs(for: node.kind).contains(.tables) {
+            Button("Mostra tabelle") {
+                editor.select(.node(node.id))
+                editor.inspectorTab = .tables
+            }
+        }
         if node.kind.hasIp {
             let targets = Self.targets(for: node.id, in: editor.snapshot.nodes)
             Menu("Ping verso") {
