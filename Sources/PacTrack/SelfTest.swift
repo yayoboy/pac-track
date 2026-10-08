@@ -78,6 +78,7 @@ enum SelfTest {
         failures += await selectionScenario(output: output)
         failures += await toolsScenario(output: output)
         failures += await portsScenario(output: output)
+        failures += await cloudScenario(output: output)
         return failures
     }
 
@@ -246,6 +247,37 @@ enum SelfTest {
         if editor.snapshot.nodes[0].ifaces.last?.name != "Gi0/24" { failures.append("switch ports \(editor.snapshot.nodes[0].ifaces.count)") }
         editor.select(.node(sw))
         if !render(editor, to: sibling(output, "m6-ports")) { failures.append("could not write the M6 ports image") }
+        return failures
+    }
+
+    /// M6: PC1 behind R1's NAT reaches ISP1's Internet: ping by name through its public DNS.
+    private static func cloudScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.pc, at: Pos(x: 360, y: 300))
+        await editor.addDevice(.router, at: Pos(x: 560, y: 300))
+        await editor.addDevice(.cloud, at: Pos(x: 760, y: 300))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("PC1"), id("R1")) // PC1 eth0 — R1 Gi0/0
+        await editor.connect(id("R1"), id("ISP1")) // R1 Gi0/1 — ISP1 Gi0/0 (203.0.113.1/24, preset)
+        for (name, iface, cidr) in [("PC1", "eth0", "192.168.1.10/24"), ("R1", "Gi0/0", "192.168.1.1/24"), ("R1", "Gi0/1", "203.0.113.2/24")] {
+            await editor.edit(.setIp(node: id(name), iface: iface, cidr: cidr))
+        }
+        await editor.edit(.addRoute(node: id("PC1"), cidr: "0.0.0.0/0", nextHop: "192.168.1.1"))
+        await editor.edit(.addRoute(node: id("R1"), cidr: "0.0.0.0/0", nextHop: "203.0.113.1"))
+        await editor.setNatRole(id("R1"), iface: "Gi0/0", .inside)
+        await editor.setNatRole(id("R1"), iface: "Gi0/1", .outside)
+        await editor.edit(.setNameServer(node: id("PC1"), ip: "8.8.8.8"))
+        await editor.run(.ping(node: id("PC1"), target: "www.example.com"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if lines.first?.hasPrefix("PING www.example.com (198.51.100.10)") != true || !lines.contains("4 packets transmitted, 4 received, 0% packet loss") {
+            failures.append("ping to the Internet \(lines)")
+        }
+        editor.select(.node(id("ISP1")))
+        editor.inspectorTab = .services
+        editor.bottomTab = .output
+        if !render(editor, to: sibling(output, "m6-cloud")) { failures.append("could not write the M6 cloud image") }
         return failures
     }
 

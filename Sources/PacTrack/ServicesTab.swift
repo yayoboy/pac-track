@@ -2,7 +2,7 @@ import PacEngine
 import PacKit
 import SwiftUI
 
-/// DHCP server (routers, servers), DNS server and sink (servers), NAT and firewall (routers): settings plus live tables (spec §7.1 ④).
+/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), NAT and firewall (routers): settings plus live tables (spec §7.1 ④).
 struct ServicesTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -19,16 +19,22 @@ struct ServicesTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if node.kind == .cloud { internet }
             dhcp
-            if node.kind == .server {
-                dns
-                sink
-            }
+            if node.kind == .server || node.kind == .cloud { dns }
+            if node.kind == .server { sink }
             if node.kind == .router {
                 nat
                 firewall
             }
         }
+    }
+
+    private var internet: some View {
+        Text("Internet simulata: \(node.name) risponde da sé a ogni indirizzo pubblico per cui non ha una route (ping, traceroute) e su ognuno fa da DNS pubblico, per esempio 8.8.8.8. Collega a Gi0/0 il router del cliente: 203.0.113.x/24, gateway 203.0.113.1.")
+            .font(Theme.small)
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var nat: some View {

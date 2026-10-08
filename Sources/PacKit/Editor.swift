@@ -227,7 +227,13 @@ public final class Editor {
     private func addDeviceNow(_ kind: DeviceKind, at pos: Pos) async {
         let id = newId()
         positions[id] = pos
-        if await editNow([.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))]) {
+        var cmds: [Command] = [.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))]
+        // A Cloud/ISP arrives ready (spec §5.5): the provider end of a customer link (RFC 5737) and a public name to resolve.
+        if kind == .cloud {
+            cmds += [.setIp(node: id, iface: "Gi0/0", cidr: "203.0.113.1/24"),
+                     .setDnsServer(node: id, records: [DnsRecord(name: "www.example.com", ip: "198.51.100.10")])]
+        }
+        if await editNow(cmds) {
             selection = .node(id)
         }
     }
@@ -439,7 +445,7 @@ public final class Editor {
                 return
             }
             let own = String(cidr.split(separator: "/")[0])
-            config.gateway = node.kind == .router ? own : gatewayOf(node)
+            config.gateway = node.kind == .router || node.kind == .cloud ? own : gatewayOf(node)
             config.dns = node.dnsRecords != nil ? own : node.nameServer
             await self.editNow([.setDhcpServer(node: id, config: config)], key: key)
         }

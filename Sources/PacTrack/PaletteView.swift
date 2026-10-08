@@ -4,7 +4,7 @@ import SwiftUI
 
 struct PaletteView: View {
     @Bindable var editor: Editor
-    private static let all: [(String, [DeviceKind])] = [("Rete", [.router, .switch, .hub]), ("Host", [.pc, .laptop, .server])]
+    private static let all: [(String, [DeviceKind])] = [("Rete", [.router, .switch, .hub, .cloud]), ("Host", [.pc, .laptop, .server])]
     @State private var query = ""
 
     /// Categories with the devices whose name (or category) contains `query`.
