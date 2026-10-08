@@ -38,17 +38,32 @@ final class Interface {
 }
 
 extension Interface {
-    /// IP interfaces in this interface's broadcast domain: across cables, switches and hubs, whatever their power or link state; self excluded.
+    /// IP interfaces in this interface's broadcast domain: across cables, hubs and switches within one VLAN (access ports, a trunk's
+    /// allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
     func segmentPeers() -> [Interface] {
-        var seen: Set<ObjectIdentifier> = [ObjectIdentifier(self)]
-        var todo = [self]
+        /// An interface reached by a frame carrying `tag` on the wire.
+        struct Hop: Hashable {
+            let iface: ObjectIdentifier
+            let tag: Int?
+        }
+        // A subinterface's frames leave its physical interface tagged.
+        let start = (iface: dot1q?.parent ?? self, tag: dot1q?.vlan)
+        var seen: Set<Hop> = [Hop(iface: ObjectIdentifier(start.iface), tag: start.tag)]
+        var todo = [start]
         var peers: [Interface] = []
-        while let i = todo.popLast() {
-            guard let peer = i.link?.peer(i), seen.insert(ObjectIdentifier(peer)).inserted else { continue }
+        while let hop = todo.popLast() {
+            guard let peer = hop.iface.link?.peer(hop.iface), seen.insert(Hop(iface: ObjectIdentifier(peer), tag: hop.tag)).inserted else { continue }
             if peer.node is IpNode {
-                peers.append(peer)
+                // Untagged: the physical interface; tagged: its subinterface for that VLAN, if any.
+                let ip = peer.node.interfaces.first { hop.tag == nil ? $0 === peer : $0.dot1q?.parent === peer && $0.dot1q?.vlan == hop.tag }
+                if let ip { peers.append(ip) }
+            } else if peer.node is Switch {
+                guard let vlan = peer.switchport.ingress(hop.tag) else { continue }
+                for next in peer.node.interfaces where next !== peer && next.switchport.carries(vlan) {
+                    todo.append((next, next.switchport.tag(vlan)))
+                }
             } else {
-                for next in peer.node.interfaces where seen.insert(ObjectIdentifier(next)).inserted { todo.append(next) }
+                for next in peer.node.interfaces where next !== peer { todo.append((next, hop.tag)) }
             }
         }
         return peers
