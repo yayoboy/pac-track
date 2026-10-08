@@ -207,6 +207,12 @@ public final class Editor {
         select(nodes: ids.contains(id) ? ids.filter { $0 != id } : ids + [id])
     }
 
+    /// Shift-drag rectangle: adds its devices to the selected ones (macOS convention).
+    public func extendSelection(with ids: [String]) {
+        let selected = selectedNodes
+        select(nodes: selected + ids.filter { !selected.contains($0) })
+    }
+
     public func selectAll() {
         select(nodes: snapshot.nodes.map(\.id))
     }

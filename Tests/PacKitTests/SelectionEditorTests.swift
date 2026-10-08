@@ -32,6 +32,16 @@ import Testing
         #expect(editor.selection == nil)
     }
 
+    @Test func aShiftRectangleAddsToTheSelection() async {
+        await threePcs()
+        editor.select(.node(id("PC1")))
+        editor.extendSelection(with: [id("PC1"), id("PC3")]) // already selected devices are not listed twice
+        #expect(editor.selection == .nodes([id("PC1"), id("PC3")]))
+        editor.select(.link("x"))
+        editor.extendSelection(with: [id("PC2")]) // a cable is not a device: the rectangle starts over
+        #expect(editor.selection == .node(id("PC2")))
+    }
+
     @Test func duplicatesPowersAndDeletesSeveralDevicesAsOneStepEach() async {
         await threePcs()
         let pcs = [id("PC1"), id("PC3")]

@@ -211,7 +211,7 @@ struct CanvasView: View {
                     offset = CGSize(width: start.width + value.translation.width, height: start.height + value.translation.height)
                 }
                 .onEnded { _ in
-                    if let rect = band { editor.select(nodes: editor.snapshot.nodes.filter { rect.contains(center($0.id)) }.map(\.id)) }
+                    if let rect = band { editor.extendSelection(with:editor.snapshot.nodes.filter { rect.contains(center($0.id)) }.map(\.id)) }
                     band = nil
                     panStart = nil
                 }
