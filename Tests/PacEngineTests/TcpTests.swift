@@ -108,6 +108,40 @@ private func label(_ t: TcpSegment) -> String {
         #expect(c.state == .closed && c.failure == .timedOut) // the 7th timeout, at 127 s
     }
 
+    @Test func aServerGivesUpOnAnUnansweredSynAckAfter5Retransmissions() throws {
+        let (sim, h1, h2, tap) = try tapped()
+        try h2.tcp.listen(9)
+        var first = true
+        tap.lose = { f in // only the first SYN gets through
+            guard tcpOf(f) != nil else { return false }
+            defer { first = false }
+            return !first
+        }
+        _ = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 1000)
+        sim.run(62 * S)
+        let synAcks = segments(sim, "H2")
+        #expect(synAcks.map { label($0.seg) } == Array(repeating: "S.", count: 6))
+        #expect(synAcks.dropFirst().map { $0.time - synAcks[0].time } == [1, 3, 7, 15, 31].map { $0 * S }) // Linux tcp_synack_retries
+        #expect(h2.tcp.connections.count == 1)
+        sim.run(2 * S)
+        #expect(h2.tcp.connections.isEmpty) // the 6th timeout, at 63 s
+    }
+
+    @Test func anEstablishedConnectionRetransmits15TimesBeforeTimingOut() throws {
+        let (sim, h1, h2, tap) = try tapped()
+        try h2.tcp.listen(9)
+        var cut = false
+        tap.lose = { cut && tcpOf($0) != nil } // ARP still gets through after the cache expires
+        let c = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 10_000_000)
+        sim.run(10 * MS)
+        cut = true
+        sim.run(1206 * S)
+        #expect(c.state == .established && c.failure == nil) // RTO 1, 2 … 64 s, then 120 s: the 16th timeout comes at ~1207 s
+        #expect(segments(sim, "H1").filter { $0.time > 500 * MS }.count == 15) // Linux tcp_retries2
+        sim.run(2 * S)
+        #expect(c.state == .closed && c.failure == .timedOut)
+    }
+
     @Test func retransmitsALostLastSegmentWhenTheRetransmissionTimerExpires() throws {
         let (sim, h1, h2, tap) = try tapped()
         try h2.tcp.listen(9)

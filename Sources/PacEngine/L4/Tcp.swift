@@ -8,7 +8,12 @@ let TCP_MIN_RTO = 1 * S
 /// RFC 6298 (2.5) allows any cap of at least 60 s; Linux TCP_RTO_MAX.
 let TCP_MAX_RTO = 120 * S
 /// Retransmissions of one segment before giving up (Linux tcp_syn_retries: the 7th SYN goes out at 63 s, failure at 127 s).
-let TCP_MAX_RETRIES = 6
+let TCP_SYN_RETRIES = 6
+/// Linux tcp_synack_retries: the server drops a half-open connection at 63 s.
+let TCP_SYNACK_RETRIES = 5
+/// Linux tcp_retries2, for data and FIN. ponytail: Linux turns it into a time limit (924.6 s from a 200 ms RTO);
+/// counting retransmissions from our 1 s RTO floor gives up at ~1207 s instead.
+let TCP_DATA_RETRIES = 15
 /// Linux TCP_TIMEWAIT_LEN.
 let TCP_TIME_WAIT = 60 * S
 
@@ -351,7 +356,12 @@ final class TcpConnection {
     /// RFC 6298 (5.4)–(5.6): back off and go back to the oldest unacknowledged byte; RFC 5681 (4): half the flight, one segment.
     private func timeout() {
         retries += 1
-        guard retries <= TCP_MAX_RETRIES else { return fail(.timedOut) }
+        let limit = switch state {
+        case .synSent: TCP_SYN_RETRIES
+        case .synReceived: TCP_SYNACK_RETRIES
+        default: TCP_DATA_RETRIES
+        }
+        guard retries <= limit else { return fail(.timedOut) }
         if state == .synSent || state == .synReceived {
             synRetransmitted = true
         } else {
