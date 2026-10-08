@@ -420,6 +420,17 @@ public struct DnsRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// NAT/PAT roles of a router's interfaces (IOS `ip nat inside` / `ip nat outside`); inside traffic leaves with the outside address.
+public struct NatConfig: Codable, Equatable, Sendable {
+    public var inside: [String]
+    public var outside: String?
+
+    public init(inside: [String] = [], outside: String? = nil) {
+        self.inside = inside
+        self.outside = outside
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind

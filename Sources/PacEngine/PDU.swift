@@ -339,3 +339,87 @@ func withTtl(_ p: Ipv4Packet, _ ttl: UInt8) -> Ipv4Packet {
     q.ttl = ttl
     return withChecksum(q)
 }
+
+private func word16(_ b: [UInt8], _ i: Int) -> UInt16 { UInt16(b[i]) << 8 | UInt16(b[i + 1]) }
+private func word32(_ b: [UInt8], _ i: Int) -> UInt32 { UInt32(word16(b, i)) << 16 | UInt32(word16(b, i + 2)) }
+
+/// A packet's flow as NAT and the firewall see it. ICMP echo uses its identifier as the requester's port (a request is
+/// `id → 0`, its reply `0 → id`), so a reply is always the mirror image of its request.
+struct Endpoints: Equatable {
+    var proto: UInt8
+    var src: UInt32
+    var srcPort: UInt16
+    var dst: UInt32
+    var dstPort: UInt16
+
+    var reversed: Endpoints { Endpoints(proto: proto, src: dst, srcPort: dstPort, dst: src, dstPort: srcPort) }
+}
+
+/// nil for ICMP other than echo: an error belongs to the flow it quotes (`quotedEndpoints`).
+func endpoints(_ p: Ipv4Packet) -> Endpoints? {
+    switch p.payload {
+    case .tcp(let t): return Endpoints(proto: IPPROTO_TCP, src: p.src, srcPort: t.srcPort, dst: p.dst, dstPort: t.dstPort)
+    case .udp(let u): return Endpoints(proto: IPPROTO_UDP, src: p.src, srcPort: u.srcPort, dst: p.dst, dstPort: u.dstPort)
+    case .icmp(let m) where m.type == ICMP_ECHO_REQUEST:
+        return Endpoints(proto: IPPROTO_ICMP, src: p.src, srcPort: m.id, dst: p.dst, dstPort: 0)
+    case .icmp(let m) where m.type == ICMP_ECHO_REPLY:
+        return Endpoints(proto: IPPROTO_ICMP, src: p.src, srcPort: 0, dst: p.dst, dstPort: m.id)
+    case .icmp: return nil
+    }
+}
+
+/// The flow an ICMP error is about, read from the IPv4 header and first 8 bytes it quotes (RFC 792), as its sender sent it.
+func quotedEndpoints(_ m: IcmpMessage) -> Endpoints? {
+    let q = m.data
+    guard m.type == ICMP_DEST_UNREACH || m.type == ICMP_TIME_EXCEEDED, q.count >= 28 else { return nil }
+    let (src, dst) = (word32(q, 12), word32(q, 16))
+    switch q[9] {
+    case IPPROTO_TCP, IPPROTO_UDP: return Endpoints(proto: q[9], src: src, srcPort: word16(q, 20), dst: dst, dstPort: word16(q, 22))
+    case IPPROTO_ICMP where q[20] == ICMP_ECHO_REQUEST: return Endpoints(proto: IPPROTO_ICMP, src: src, srcPort: word16(q, 24), dst: dst, dstPort: 0)
+    default: return nil
+    }
+}
+
+/// `p` with new addresses and ports (ICMP echo: the identifier), every checksum recomputed as RFC 3022 §4.2 asks: the IPv4 header,
+/// TCP's (its pseudo-header holds the addresses) and ICMP's; UDP's stays 0 (not computed, RFC 768).
+func rewritten(_ p: Ipv4Packet, src: UInt32? = nil, srcPort: UInt16? = nil, dst: UInt32? = nil, dstPort: UInt16? = nil) -> Ipv4Packet {
+    var q = p
+    q.src = src ?? p.src
+    q.dst = dst ?? p.dst
+    switch p.payload {
+    case .tcp(var t):
+        t.srcPort = srcPort ?? t.srcPort
+        t.dstPort = dstPort ?? t.dstPort
+        q.payload = .tcp(makeTcp(t, src: q.src, dst: q.dst))
+    case .udp(var u):
+        u.srcPort = srcPort ?? u.srcPort
+        u.dstPort = dstPort ?? u.dstPort
+        q.payload = .udp(u)
+    case .icmp(let m):
+        let id = (m.type == ICMP_ECHO_REQUEST ? srcPort : m.type == ICMP_ECHO_REPLY ? dstPort : nil) ?? m.id
+        q.payload = .icmp(makeIcmp(type: m.type, code: m.code, id: id, seq: m.seq, data: m.data))
+    }
+    return withChecksum(q)
+}
+
+/// RFC 1624 eqn. 3: a checksum after one 16-bit word of the data changed from `old` to `new`.
+private func adjusted(_ checksum: UInt16, _ old: UInt16, _ new: UInt16) -> UInt16 {
+    var sum = UInt32(~checksum) + UInt32(~old) + UInt32(new)
+    while sum > 0xFFFF { sum = (sum & 0xFFFF) + (sum >> 16) }
+    return ~UInt16(sum)
+}
+
+/// An ICMP error whose quoted packet gets a new source address and port (echo: identifier), as NAT hands it back inside
+/// (RFC 5508 §4): the quoted IPv4 checksum is recomputed and a quoted echo's adjusted (RFC 1624); a quoted UDP checksum is 0
+/// and TCP's lies beyond the 8 quoted bytes. `m` must quote a flow (`quotedEndpoints(m) != nil`).
+func withQuotedSource(_ m: IcmpMessage, _ addr: UInt32, _ port: UInt16) -> IcmpMessage {
+    var q = m.data
+    let echo = q[9] == IPPROTO_ICMP
+    let at = echo ? 24 : 20
+    if echo { q.replaceSubrange(22..<24, with: u16(adjusted(word16(q, 22), word16(q, at), port))) }
+    q.replaceSubrange(at..<at + 2, with: u16(port))
+    q.replaceSubrange(12..<16, with: u32(addr))
+    q.replaceSubrange(10..<12, with: [0, 0])
+    q.replaceSubrange(10..<12, with: u16(internetChecksum(Array(q[0..<20]))))
+    return makeIcmp(type: m.type, code: m.code, id: m.id, seq: m.seq, data: q)
+}

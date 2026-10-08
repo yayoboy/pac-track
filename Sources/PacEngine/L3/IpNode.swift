@@ -16,6 +16,8 @@ class IpNode: Node {
     var learnedNameServer: UInt32?
     var dhcpServer: DhcpServer?
     var dnsServer: DnsServer?
+    /// NAT/PAT (routers): translates between the inside interfaces and the outside one.
+    var nat: Nat?
     /// Turns the discard sink off again; nil while it is off.
     private var sinkStop: (() -> Void)?
 
@@ -99,6 +101,7 @@ class IpNode: Node {
         resolver.reset()
         dhcpServer?.reset()
         tcp.reset()
+        nat?.reset()
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
@@ -148,17 +151,20 @@ class IpNode: Node {
     }
 
     private func input(_ p: Ipv4Packet, on iface: Interface) {
-        let subnetBroadcast = iface.ipv4.map { p.dst == broadcastOf($0.addr, $0.prefix) } ?? false
-        if ownsIp(p.dst) || p.dst == BROADCAST_IP || subnetBroadcast { return deliver(p, from: iface) }
+        // NAT outside → inside comes before routing; inside → outside after it (`output`).
+        let packet = nat?.inbound(p, on: iface) ?? p
+        let subnetBroadcast = iface.ipv4.map { packet.dst == broadcastOf($0.addr, $0.prefix) } ?? false
+        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast { return deliver(packet, from: iface) }
         guard forwarding else { return }
-        if p.ttl <= 1 {
-            sim.emit(.drop, node: id, iface: iface.name, packet: p, reason: .ttlExpired)
-            return icmpError(p, type: ICMP_TIME_EXCEEDED, code: 0)
+        if packet.ttl <= 1 {
+            sim.emit(.drop, node: id, iface: iface.name, packet: packet, reason: .ttlExpired)
+            return icmpError(packet, type: ICMP_TIME_EXCEEDED, code: 0)
         }
-        output(withTtl(p, p.ttl - 1))
+        output(withTtl(packet, packet.ttl - 1), from: iface)
     }
 
-    private func output(_ p: Ipv4Packet) {
+    /// Routes and sends a packet; `inIface` is where a forwarded one came in (nil: this node originated it).
+    private func output(_ p: Ipv4Packet, from inIface: Interface? = nil) {
         if ownsIp(p.dst) {
             sim.sched.after(0) { [self] in deliver(p, from: nil) }
             return
@@ -167,13 +173,14 @@ class IpNode: Node {
             sim.emit(.drop, node: id, packet: p, reason: .noRoute)
             return icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_NET)
         }
+        // Checked before NAT, so "fragmentation needed" goes back to the inside host, not to our own outside address.
         if p.size > hop.iface.mtu {
             // ponytail: no IPv4 fragmentation; non-DF oversize packets are dropped
             sim.emit(.drop, node: id, iface: hop.iface.name, packet: p, reason: .mtuExceeded)
             if p.dontFragment { icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_FRAG_NEEDED) }
             return
         }
-        arp.send(hop.iface, nextHop: hop.nextHop, p)
+        arp.send(hop.iface, nextHop: hop.nextHop, inIface.flatMap { nat?.outbound(p, from: $0, to: hop.iface) } ?? p)
     }
 
     private func deliver(_ p: Ipv4Packet, from iface: Interface?) {
