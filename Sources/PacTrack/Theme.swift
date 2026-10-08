@@ -24,6 +24,7 @@ enum Theme {
         case .udp: Color(hex: 0x2FBFC4)
         case .dhcp: Color(hex: 0x56A8F5)
         case .dns: Color(hex: 0xB083F0)
+        case .tcp: Color(hex: 0x5FB865)
         }
     }
 }

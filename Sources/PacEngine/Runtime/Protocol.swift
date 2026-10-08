@@ -33,7 +33,7 @@ public enum IfaceMode: String, Codable, Sendable {
 }
 
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, dhcp, dns, udp
+    case arp, icmp, dhcp, dns, udp, tcp
 }
 
 public enum Command: Sendable {

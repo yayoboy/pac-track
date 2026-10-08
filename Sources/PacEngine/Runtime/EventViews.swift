@@ -48,9 +48,17 @@ private func proto(of p: Ipv4Packet) -> Proto {
         switch u.payload {
         case .dhcp: .dhcp
         case .dns: .dns
-        case .raw: .udp
+        case .raw, .traffic: .udp
         }
+    case .tcp: .tcp
     }
+}
+
+private let TCP_FLAG_NAMES: [(TcpFlags, String)] = [(.fin, "FIN"), (.syn, "SYN"), (.rst, "RST"), (.ack, "ACK")]
+
+/// Wireshark order, lowest bit first: "SYN, ACK".
+private func flagNames(_ f: TcpFlags) -> String {
+    TCP_FLAG_NAMES.filter { f.contains($0.0) }.map { $0.1 }.joined(separator: ", ")
 }
 
 private func describe(_ p: Ipv4Packet) -> String {
@@ -61,8 +69,11 @@ private func describe(_ p: Ipv4Packet) -> String {
         switch u.payload {
         case .dhcp(let m): return "\(ends) DHCP \(m.type.name)" + (dhcpAddress(m).map { " \(formatIp($0))" } ?? "") + " xid=\(hex(Int(m.xid), digits: 8))"
         case .dns(let m): return "\(ends) DNS \(dnsSummary(m))"
-        case .raw: return "\(ends) UDP \(u.srcPort) → \(u.dstPort) ttl=\(p.ttl)"
+        case .raw, .traffic: return "\(ends) UDP \(u.srcPort) → \(u.dstPort) ttl=\(p.ttl)"
         }
+    case .tcp(let t):
+        return "\(ends) TCP \(t.srcPort) → \(t.dstPort) [\(flagNames(t.flags))] seq=\(t.seq)" + (t.flags.contains(.ack) ? " ack=\(t.ack)" : "")
+            + " win=\(t.window) len=\(t.dataLength)" + (t.mss.map { " mss=\($0)" } ?? "")
     }
 }
 
@@ -160,7 +171,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         field("Flag", p.dontFragment ? "0x2 (DF)" : "0x0"),
         field("Offset frammento", "0"),
         field("TTL", "\(p.ttl)"),
-        field("Protocollo", p.proto == IPPROTO_ICMP ? "1 (ICMP)" : "17 (UDP)"),
+        field("Protocollo", p.proto == IPPROTO_ICMP ? "1 (ICMP)" : p.proto == IPPROTO_TCP ? "6 (TCP)" : "17 (UDP)"),
         field("Checksum header", hex(Int(p.checksum), digits: 4)),
         field("Sorgente", formatIp(p.src)),
         field("Destinazione", formatIp(p.dst)),
@@ -177,6 +188,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         case .raw(let data): "\(data.count) B"
         case .dhcp(let m): "\(m.size) B (DHCP)"
         case .dns(let m): "\(m.size) B (DNS)"
+        case .traffic(let d): "\(TRAFFIC_DATAGRAM) B (generatore di traffico, seq \(d.seq))"
         }
         let udp = PduLayer(title: "UDP", bytes: u.size, fields: [
             field("Porta sorgente", "\(u.srcPort)"),
@@ -186,10 +198,25 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
             field("Dati", body),
         ])
         switch u.payload {
-        case .raw: return [ip, udp]
+        case .raw, .traffic: return [ip, udp]
         case .dhcp(let m): return [ip, udp, dhcpLayer(m)]
         case .dns(let m): return [ip, udp, dnsLayer(m)]
         }
+    case .tcp(let t):
+        var fields = [
+            field("Porta sorgente", "\(t.srcPort)"),
+            field("Porta destinazione", "\(t.dstPort)"),
+            field("Numero di sequenza", "\(t.seq)"),
+            field("Numero di ack", "\(t.ack)"),
+            field("Lungh. header", "\(t.headerSize) B (data offset \(t.headerSize / 4))"),
+            field("Flag", "\(hex(Int(t.flags.rawValue), digits: 3)) (\(flagNames(t.flags)))"),
+            field("Finestra", "\(t.window)"),
+            field("Checksum", hex(Int(t.checksum), digits: 4)),
+            field("Puntatore urgente", "0"),
+        ]
+        if let mss = t.mss { fields.append(field("Opzione MSS", "\(mss) B")) }
+        fields.append(field("Dati", "\(t.dataLength) B"))
+        return [ip, PduLayer(title: "TCP", bytes: t.size, fields: fields)]
     }
 }
 

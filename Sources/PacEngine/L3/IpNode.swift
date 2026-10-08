@@ -161,6 +161,8 @@ class IpNode: Node {
             } else if p.dst != BROADCAST_IP {
                 icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_PORT)
             }
+        case .tcp:
+            break // segments are ignored until the node has a TCP layer
         }
     }
 

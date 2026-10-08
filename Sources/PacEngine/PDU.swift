@@ -2,6 +2,7 @@ let ETHERTYPE_IPV4: UInt16 = 0x0800
 let ETHERTYPE_ARP: UInt16 = 0x0806
 let IPPROTO_ICMP: UInt8 = 1
 let IPPROTO_UDP: UInt8 = 17
+let IPPROTO_TCP: UInt8 = 6
 
 let ICMP_ECHO_REPLY: UInt8 = 0
 let ICMP_DEST_UNREACH: UInt8 = 3
@@ -16,6 +17,8 @@ let PORT_DHCP_SERVER: UInt16 = 67
 let PORT_DHCP_CLIENT: UInt16 = 68
 let PORT_DNS: UInt16 = 53
 let DNS_NXDOMAIN: UInt8 = 3
+/// iperf3's default UDP payload: with UDP, IPv4 and Ethernet headers the frame stays within a 1500-byte MTU.
+let TRAFFIC_DATAGRAM = 1470
 
 struct ArpPacket: Equatable, Sendable {
     var op: UInt16
@@ -108,16 +111,25 @@ struct DnsMessage: Equatable, Sendable {
     }
 }
 
+/// A traffic generator datagram: like iperf3's payload it carries a sequence number and the send time (plus the flow id the sink reports to).
+struct TrafficData: Equatable, Sendable {
+    var flow: Int
+    var seq: Int
+    var sentAt: Int
+}
+
 enum UdpPayload: Equatable, Sendable {
     case raw([UInt8])
     case dhcp(DhcpMessage)
     case dns(DnsMessage)
+    case traffic(TrafficData)
 
     var size: Int {
         switch self {
         case .raw(let bytes): bytes.count
         case .dhcp(let m): m.size
         case .dns(let m): m.size
+        case .traffic: TRAFFIC_DATAGRAM
         }
     }
 }
@@ -131,14 +143,41 @@ struct UdpDatagram: Equatable, Sendable {
     var size: Int { 8 + payload.size }
 }
 
+/// TCP flags Pac-Track uses, with their wire bits (PSH, URG, ECE, CWR are never set).
+struct TcpFlags: OptionSet, Sendable {
+    let rawValue: UInt8
+    static let fin = TcpFlags(rawValue: 0x01)
+    static let syn = TcpFlags(rawValue: 0x02)
+    static let rst = TcpFlags(rawValue: 0x04)
+    static let ack = TcpFlags(rawValue: 0x10)
+}
+
+/// TCP header with the MSS option on SYNs; the payload is `dataLength` zero bytes (only its size matters).
+struct TcpSegment: Equatable, Sendable {
+    var srcPort: UInt16
+    var dstPort: UInt16
+    var seq: UInt32
+    var ack: UInt32
+    var flags: TcpFlags
+    var window: UInt16
+    var checksum: UInt16 = 0
+    var mss: UInt16? = nil
+    var dataLength = 0
+
+    var headerSize: Int { mss == nil ? 20 : 24 }
+    var size: Int { headerSize + dataLength }
+}
+
 enum L4: Equatable, Sendable {
     case icmp(IcmpMessage)
     case udp(UdpDatagram)
+    case tcp(TcpSegment)
 
     var size: Int {
         switch self {
         case .icmp(let m): m.size
         case .udp(let u): u.size
+        case .tcp(let t): t.size
         }
     }
 }
@@ -213,6 +252,23 @@ func serialize(_ u: UdpDatagram) -> [UInt8] {
     return b
 }
 
+/// Header with options; the zero payload is left out (it adds nothing to a checksum and is never quoted beyond 8 bytes).
+func serialize(_ t: TcpSegment) -> [UInt8] {
+    var b = u16(t.srcPort)
+    b += u16(t.dstPort)
+    b += u32(t.seq)
+    b += u32(t.ack)
+    b += [UInt8(t.headerSize / 4) << 4, t.flags.rawValue]
+    b += u16(t.window)
+    b += u16(t.checksum)
+    b += u16(0) // urgent pointer
+    if let mss = t.mss {
+        b += [2, 4]
+        b += u16(mss)
+    }
+    return b
+}
+
 func serializeHeader(_ p: Ipv4Packet) -> [UInt8] {
     var b: [UInt8] = [0x45, p.tos]
     b += u16(UInt16(p.size))
@@ -228,6 +284,7 @@ func serializeL4(_ p: Ipv4Packet) -> [UInt8] {
     switch p.payload {
     case .icmp(let m): serialize(m)
     case .udp(let u): serialize(u)
+    case .tcp(let t): serialize(t)
     }
 }
 
@@ -246,6 +303,18 @@ func makeUdp(srcPort: UInt16, dstPort: UInt16, payload: UdpPayload) -> UdpDatagr
     UdpDatagram(srcPort: srcPort, dstPort: dstPort, checksum: 0, payload: payload)
 }
 
+/// Fills in the checksum over the pseudo-header (RFC 793 §3.1) and the header.
+func makeTcp(_ t: TcpSegment, src: UInt32, dst: UInt32) -> TcpSegment {
+    var s = t
+    s.checksum = 0
+    var pseudo = u32(src)
+    pseudo += u32(dst)
+    pseudo += [0, IPPROTO_TCP]
+    pseudo += u16(UInt16(s.size))
+    s.checksum = internetChecksum(pseudo + serialize(s))
+    return s
+}
+
 private func withChecksum(_ p: Ipv4Packet) -> Ipv4Packet {
     var q = p
     q.checksum = 0
@@ -257,6 +326,7 @@ func makeIpv4(src: UInt32, dst: UInt32, ttl: UInt8, id: UInt16, payload: L4, tos
     let proto: UInt8 = switch payload {
     case .icmp: IPPROTO_ICMP
     case .udp: IPPROTO_UDP
+    case .tcp: IPPROTO_TCP
     }
     return withChecksum(Ipv4Packet(tos: tos, id: id, dontFragment: dontFragment, ttl: ttl, proto: proto,
                                    checksum: 0, src: src, dst: dst, payload: payload))
