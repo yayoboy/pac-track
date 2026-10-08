@@ -109,7 +109,7 @@ struct SimulationToolbar: ToolbarContent {
     }
 }
 
-/// Undo/redo for the network; inside a text field the same shortcut edits the text instead.
+/// Menu commands of the focused window: undo/redo, the device pasteboard, grid, PNG export. Inside a text field the editing shortcuts edit the text.
 struct EditCommands: Commands {
     @FocusedValue(\.editor) private var editor
 
@@ -153,6 +153,11 @@ struct EditCommands: Commands {
             }
             Button("Seleziona tutto") { if typing { send("selectAll:") } else { editor?.selectAll() } }
                 .keyboardShortcut("a")
+        }
+        CommandGroup(after: .saveItem) {
+            Button("Esporta immagine…") { if let editor { ExportImage.save(editor) } }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(editor?.snapshot.nodes.isEmpty ?? true)
         }
         CommandGroup(before: .toolbar) {
             Button(editor?.grid == false ? "Mostra griglia" : "Nascondi griglia") { editor?.grid.toggle() }

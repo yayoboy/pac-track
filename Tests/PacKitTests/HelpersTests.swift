@@ -1,3 +1,4 @@
+import CoreGraphics
 import PacEngine
 import Testing
 @testable import PacKit
@@ -103,5 +104,11 @@ import Testing
             == "1.01 Mb/s · latenza 1.229 ms · jitter 0.003 ms · perdita 0.0%")
         #expect(flowSummary(FlowSample(timeNs: 0, bitsPerSecond: 0, delayNs: nil, jitterNs: nil, lossPct: 0)) == "0.00 Mb/s · perdita 0.0%")
         #expect(directionSummary(DirectionSample(utilization: 0.946, queued: 12, drops: 3)) == "95% · coda 12 · drop 3")
+    }
+
+    @Test func exportFramesEveryDeviceBoxWithAMargin() {
+        #expect(exportBounds([], nodeSize: CGSize(width: 104, height: 46), margin: 40) == nil)
+        let r = exportBounds([Pos(x: 100, y: 100), Pos(x: 300, y: 200)], nodeSize: CGSize(width: 104, height: 46), margin: 40)
+        #expect(r == CGRect(x: 8, y: 37, width: 384, height: 226))
     }
 }

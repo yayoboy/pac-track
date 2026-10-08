@@ -80,6 +80,7 @@ enum SelfTest {
         failures += await portsScenario(output: output)
         failures += await cloudScenario(output: output)
         failures += await pingScenario(output: output)
+        failures += await exportScenario(output: output)
         return failures
     }
 
@@ -302,6 +303,22 @@ enum SelfTest {
         editor.inspectorTab = .app
         editor.bottomTab = .output
         if !render(editor, to: sibling(output, "m6-ping")) { failures.append("could not write the M6 ping image") }
+        return failures
+    }
+
+    /// M6: File ▸ Esporta immagine… draws every device at 2× with a 40 pt margin, also left of the origin.
+    private static func exportScenario(output: String) async -> [String] {
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 140, y: 70))
+        await editor.addDevice(.pc, at: Pos(x: 0, y: 210))
+        await editor.addDevice(.pc, at: Pos(x: 280, y: 210))
+        let ids = editor.snapshot.nodes.map(\.id)
+        await editor.connect(ids[0], ids[1])
+        await editor.connect(ids[0], ids[2])
+        guard let data = ExportImage.png(editor), let rep = NSBitmapImageRep(data: data) else { return ["export produced no PNG"] }
+        // Boxes span x −52…332 and y 47…233; with the margin 464 × 266 pt, at 2×.
+        var failures = rep.pixelsWide == 928 && rep.pixelsHigh == 532 ? [] : ["export size \(rep.pixelsWide)×\(rep.pixelsHigh)"]
+        if (try? data.write(to: URL(fileURLWithPath: sibling(output, "m6-export")))) == nil { failures.append("could not write the export") }
         return failures
     }
 

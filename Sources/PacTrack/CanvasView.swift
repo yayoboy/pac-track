@@ -21,6 +21,14 @@ struct CanvasView: View {
     @State private var hover = CGPoint.zero
     /// Shift-drag selection rectangle, in canvas coordinates.
     @State private var band: CGRect?
+    /// Set only by the PNG export: the pan that frames the network; no event monitor, no minimap.
+    private let exportOffset: CGSize?
+
+    init(editor: Editor, exportOffset: CGSize? = nil) {
+        _editor = Bindable(editor)
+        self.exportOffset = exportOffset
+        _offset = State(initialValue: exportOffset ?? .zero)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -64,7 +72,7 @@ struct CanvasView: View {
             .coordinateSpace(.named(Self.space))
             .clipped()
             .overlay(alignment: .bottomTrailing) {
-                if !editor.snapshot.nodes.isEmpty { minimap(geo.size) }
+                if exportOffset == nil && !editor.snapshot.nodes.isEmpty { minimap(geo.size) }
             }
             .onContinuousHover(coordinateSpace: .named(Self.space)) { phase in
                 switch phase {
@@ -76,6 +84,7 @@ struct CanvasView: View {
                 }
             }
             .onAppear {
+                guard exportOffset == nil else { return }
                 // SwiftUI has no scroll-wheel gesture: two-finger scroll pans the canvas under the pointer.
                 monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .rightMouseDown]) { event in
                     guard hovering else { return event }

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import PacEngine
 
 extension DeviceKind {
@@ -151,6 +152,14 @@ public func newId() -> String {
 
 public func snap(_ p: Pos, grid: Double = 14) -> Pos {
     Pos(x: (p.x / grid).rounded() * grid, y: (p.y / grid).rounded() * grid)
+}
+
+/// World rectangle holding every device box (`nodeSize`, centred on its position) plus `margin`: what Esporta immagine draws.
+/// nil without devices.
+public func exportBounds(_ centers: [Pos], nodeSize: CGSize, margin: Double) -> CGRect? {
+    let boxes = centers.map { CGRect(x: $0.x - nodeSize.width / 2, y: $0.y - nodeSize.height / 2, width: nodeSize.width, height: nodeSize.height) }
+    guard let first = boxes.first else { return nil }
+    return boxes.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -margin, dy: -margin)
 }
 
 private let posix = Locale(identifier: "en_US_POSIX")
