@@ -181,6 +181,7 @@ class IpNode: Node {
             return icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_NET)
         }
         if let inIface, let firewall, !firewall.admits(p, from: inIface, to: hop.iface) { return }
+        if inIface == nil { firewall?.track(p) }
         // Checked before NAT, so "fragmentation needed" goes back to the inside host, not to our own outside address.
         if p.size > hop.iface.mtu {
             // ponytail: no IPv4 fragmentation; non-DF oversize packets are dropped

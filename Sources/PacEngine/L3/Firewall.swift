@@ -41,7 +41,8 @@ private func compile(_ r: FirewallRule, on node: IpNode) throws -> CompiledRule 
 /// Stateful packet filter on a router (spec §5.4), one decision per packet in netfilter order: after NAT outside → inside, before
 /// NAT inside → outside, so rules see inside addresses. A packet let through records its flow; the flow's later packets in either
 /// direction, and ICMP errors quoting it, pass without rules (iptables ESTABLISHED/RELATED). Otherwise the first rule whose
-/// interface is the packet's ingress (`in`) or egress (`out`) decides, then the default policy. Router-originated packets are never checked.
+/// interface is the packet's ingress (`in`) or egress (`out`) decides, then the default policy. Router-originated packets are never checked,
+/// but their flows are recorded so the replies get back (Linux conntrack tracks OUTPUT even with no OUTPUT rules).
 // ponytail: flows idle out like NAT translations (no TCP state machine); linear scans
 final class Firewall {
     unowned let node: IpNode
@@ -63,13 +64,8 @@ final class Firewall {
 
     /// A packet forwarded from `inIface` to `outIface`, or for the router itself (`outIface` nil). A refused one is logged as a drop.
     func admits(_ p: Ipv4Packet, from inIface: Interface, to outIface: Interface?) -> Bool {
-        let now = node.sim.now
-        flows.removeAll { $0.expiresAt <= now }
         let e = endpoints(p)
-        if let e, let i = flows.firstIndex(where: { $0.flow == e || $0.flow == e.reversed }) {
-            flows[i].expiresAt = now + flowTimeout(e.proto)
-            return true
-        }
+        if refreshed(e) { return true }
         if case .icmp(let m) = p.payload, let q = quotedEndpoints(m), flows.contains(where: { $0.flow == q || $0.flow == q.reversed }) {
             return true
         }
@@ -79,7 +75,22 @@ final class Firewall {
             node.sim.emit(.drop, node: node.id, iface: at.name, packet: p, reason: rule == nil ? .firewallDefault : .firewallRule)
             return false
         }
-        if let e { flows.append((e, now + flowTimeout(e.proto))) }
+        if let e { flows.append((e, node.sim.now + flowTimeout(e.proto))) }
+        return true
+    }
+
+    /// A packet the router originates: never filtered, its flow recorded or refreshed.
+    func track(_ p: Ipv4Packet) {
+        guard let e = endpoints(p), !refreshed(e) else { return }
+        flows.append((e, node.sim.now + flowTimeout(e.proto)))
+    }
+
+    /// Forgets idle flows, then refreshes `e`'s in either direction; false when it is not tracked.
+    private func refreshed(_ e: Endpoints?) -> Bool {
+        let now = node.sim.now
+        flows.removeAll { $0.expiresAt <= now }
+        guard let e, let i = flows.firstIndex(where: { $0.flow == e || $0.flow == e.reversed }) else { return false }
+        flows[i].expiresAt = now + flowTimeout(e.proto)
         return true
     }
 }

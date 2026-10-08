@@ -55,6 +55,22 @@ private func rule(_ iface: String, _ direction: FirewallDirection, _ action: Fir
         #expect(sim.log.all.filter { $0.reason == .firewallDefault }.allSatisfy { $0.node == "R1" && $0.iface == "Gi0/1" })
     }
 
+    @Test func theRoutersOwnTrafficGetsItsRepliesUnderADefaultDeny() throws {
+        let (sim, _, h2, r1) = try routedPair()
+        try h2.configureSink(true)
+        r1.firewall = try Firewall(node: r1, config: FirewallConfig(rules: [rule("Gi0/0", .inbound, .allow)], defaultAction: .deny))
+        let ping = try Ping(node: r1, target: "10.0.2.10")
+        sim.run(5 * S)
+        let trace = try Traceroute(node: r1, target: "10.0.2.10")
+        sim.run(1 * S)
+        let flow = try TcpFlow(node: r1, target: "10.0.2.10", bytes: 10_000)
+        sim.run(2 * S)
+        #expect(ping.result.lines.contains("4 packets transmitted, 4 received, 0% packet loss"))
+        #expect(trace.result.done && trace.result.lines[1].hasPrefix(" 1  10.0.2.10 (10.0.2.10)")) // the port unreachable is RELATED
+        #expect(flow.result.lines.last == "iperf Done.")
+        #expect(drops(sim, .firewallDefault) == 0)
+    }
+
     @Test func portRulesMatchTheDestinationPortAndOutboundRulesFilterOnTheWayOut() throws {
         let (sim, h1, h2, r1) = try routedPair()
         try h2.configureSink(true)
