@@ -50,6 +50,9 @@ class Node {
     let id: String
     var name: String
     private(set) var interfaces: [Interface] = []
+    /// Interfaces taken away (a smaller switch): kept alive while a frame that was on their cable finishes (links refer to them `unowned`).
+    // ponytail: never freed before the Sim is replaced; at most 40 per resize
+    private var retired: [Interface] = []
     var powered = true
 
     init(sim: Sim, id: String) {
@@ -64,6 +67,10 @@ class Node {
         let iface = Interface(node: self, name: name, mac: sim.newMac())
         interfaces.append(iface)
         return iface
+    }
+
+    func removeLastInterface() {
+        retired.append(interfaces.removeLast())
     }
 
     func iface(_ name: String) throws -> Interface {

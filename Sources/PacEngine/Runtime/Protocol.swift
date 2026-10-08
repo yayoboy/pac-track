@@ -69,6 +69,8 @@ public enum Command: Sendable {
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
+    /// Switch size: 8, 24 or 48 ports; only free ports can go.
+    case setPorts(id: String, count: Int)
     case updateLink(id: String, options: LinkOptions)
     case setLinkUp(id: String, up: Bool)
     case setRunning(Bool)
@@ -102,6 +104,7 @@ public enum Command: Sendable {
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
+        case .setPorts: "setPorts"
         case .updateLink: "updateLink"
         case .setLinkUp: "setLinkUp"
         case .setRunning: "setRunning"
@@ -569,3 +572,5 @@ public struct Topology: Codable, Equatable, Sendable {
 }
 
 public let SPEEDS: [Double] = [0.1, 0.5, 1, 2, 5, 10, 100]
+/// Switch sizes offered in the Porte tab (spec §5.5).
+public let SWITCH_PORTS = [8, 24, 48]

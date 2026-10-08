@@ -9,6 +9,15 @@ final class Switch: Node {
         for i in 1...ports { addInterface("Gi0/\(i)") }
     }
 
+    /// 8, 24 or 48 ports (spec §5.5); the ports taken away must be free.
+    func setPorts(_ count: Int) throws {
+        guard SWITCH_PORTS.contains(count) else { throw EngineError("A switch has 8, 24 or 48 ports") }
+        if let busy = interfaces.dropFirst(count).first(where: { $0.link != nil }) { throw EngineError("\(busy.name) is connected") }
+        while interfaces.count > count { removeLastInterface() }
+        while interfaces.count < count { addInterface("Gi0/\(interfaces.count + 1)") }
+        table = table.filter { entry in interfaces.contains { $0 === entry.value.iface } }
+    }
+
     func lookup(_ mac: Mac) -> Interface? {
         guard let entry = table[mac] else { return nil }
         if sim.now - entry.seen > MAC_AGING_NS {

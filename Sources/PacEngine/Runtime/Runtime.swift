@@ -229,6 +229,10 @@ public final class Runtime {
                 node.reset()
                 for app in apps where app.node == id { app.program.stop() }
             }
+        case let .setPorts(id, count):
+            let node = try get(id)
+            guard let sw = node as? Switch else { throw EngineError("\(node.name) cannot change its ports") }
+            try sw.setPorts(count)
         case let .updateLink(id, options):
             try link(id).update(options)
         case let .setLinkUp(id, up):
@@ -458,6 +462,8 @@ public final class Runtime {
         // Addresses before cables: a duplicate made by cabling two segments together (never refused) still opens.
         for n in t.nodes {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
+            // The saved size is the interface count; a file listing no valid size (hand-written, abbreviated) keeps 8.
+            if n.kind == .switch, SWITCH_PORTS.contains(n.ifaces.count) { try next.handle(.setPorts(id: n.id, count: n.ifaces.count)) }
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }
         }
         for l in t.links {

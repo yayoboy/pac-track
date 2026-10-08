@@ -120,6 +120,18 @@ private struct NodeInspector: View {
 
     private var ports: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if node.kind == .switch {
+                let key = "ports:\(node.id)"
+                Picker("Porte", selection: Binding(get: { node.ifaces.count }, set: { n in
+                    Task { await editor.edit(.setPorts(id: node.id, count: n), key: key) }
+                })) {
+                    ForEach(SWITCH_PORTS, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .accessibilityIdentifier("switch-ports")
+                ErrorLine(editor: editor, key: key)
+            }
             ForEach(node.ifaces, id: \.name) { iface in
                 HStack {
                     Text(iface.name)

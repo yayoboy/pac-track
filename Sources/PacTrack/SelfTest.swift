@@ -77,6 +77,7 @@ enum SelfTest {
         failures += await natScenario(output: output)
         failures += await selectionScenario(output: output)
         failures += await toolsScenario(output: output)
+        failures += await portsScenario(output: output)
         return failures
     }
 
@@ -232,6 +233,19 @@ enum SelfTest {
         if editor.snapshot.links.first?.options.bandwidthBps != 10e9 { failures.append("fibre cable \(String(describing: editor.snapshot.links.first))") }
         editor.grid = false
         if !render(editor, to: sibling(output, "m6-tools")) { failures.append("could not write the M6 tools image") }
+        return failures
+    }
+
+    /// M6: a 24-port switch in its Porte tab.
+    private static func portsScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 300))
+        let sw = editor.snapshot.nodes[0].id
+        await editor.edit(.setPorts(id: sw, count: 24), key: "ports:\(sw)")
+        if editor.snapshot.nodes[0].ifaces.last?.name != "Gi0/24" { failures.append("switch ports \(editor.snapshot.nodes[0].ifaces.count)") }
+        editor.select(.node(sw))
+        if !render(editor, to: sibling(output, "m6-ports")) { failures.append("could not write the M6 ports image") }
         return failures
     }
 

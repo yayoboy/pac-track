@@ -399,6 +399,7 @@ public final class Editor {
             ids.append(id)
             positions[id] = src.pos
             cmds.append(.addNode(id: id, kind: src.kind, name: name))
+            if src.kind == .switch { cmds.append(.setPorts(id: id, count: src.ifaces.count)) }
             // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
             for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
             if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
