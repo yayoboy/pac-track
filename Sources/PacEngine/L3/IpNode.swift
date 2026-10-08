@@ -144,7 +144,8 @@ class IpNode: Node {
     func icmpError(_ orig: Ipv4Packet, type: UInt8, code: UInt8) {
         if case .icmp(let m) = orig.payload, m.type != ICMP_ECHO_REQUEST && m.type != ICMP_ECHO_REPLY { return }
         if orig.dst == BROADCAST_IP || orig.src == 0 { return }
-        guard let src = sourceFor(orig.src) else { return }
+        // About a packet for this node: from the address it hit (Linux; traceroute's last hop); otherwise from the way back.
+        guard let src = ownsIp(orig.dst) ? orig.dst : sourceFor(orig.src) else { return }
         let quote = serializeHeader(orig) + serializeL4(orig).prefix(8)
         output(makeIpv4(src: src, dst: orig.src, ttl: defaultTtl, id: nextIpId(),
                         payload: .icmp(makeIcmp(type: type, code: code, id: 0, seq: 0, data: quote))))

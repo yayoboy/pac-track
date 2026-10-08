@@ -44,6 +44,7 @@ extension DeviceKind {
         case .router: "wifi.router"
         case .switch: "rectangle.connected.to.line.below"
         case .hub: "circle.hexagongrid"
+        case .cloud: "cloud"
         }
     }
 }

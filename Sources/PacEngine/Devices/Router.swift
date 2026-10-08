@@ -1,4 +1,4 @@
-final class Router: IpNode {
+class Router: IpNode {
     init(sim: Sim, id: String, ports: Int = 4) {
         super.init(sim: sim, id: id)
         forwarding = true

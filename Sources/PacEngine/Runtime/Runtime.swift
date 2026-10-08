@@ -181,7 +181,7 @@ public final class Runtime {
             try setDhcpServer(node, config, requireInSubnet: true)
         case let .setDnsServer(node, records):
             let n = try ipNode(node)
-            guard records == nil || nodes[node]?.kind == .server else { throw EngineError("\(n.name) cannot run a DNS server") }
+            guard records == nil || nodes[node]?.kind == .server || nodes[node]?.kind == .cloud else { throw EngineError("\(n.name) cannot run a DNS server") }
             try n.configureDnsServer(records)
         case let .renewDhcp(node):
             let n = try liveIpNode(node)
@@ -416,6 +416,7 @@ public final class Runtime {
         case .router: Router(sim: sim, id: id)
         case .switch: Switch(sim: sim, id: id)
         case .hub: Hub(sim: sim, id: id)
+        case .cloud: Cloud(sim: sim, id: id)
         }
     }
 
@@ -443,7 +444,7 @@ public final class Runtime {
 
     private func setDhcpServer(_ id: String, _ config: DhcpConfig?, requireInSubnet: Bool) throws {
         let ip = try ipNode(id)
-        guard config == nil || nodes[id]?.kind == .router || nodes[id]?.kind == .server else {
+        guard config == nil || nodes[id]?.kind == .router || nodes[id]?.kind == .server || nodes[id]?.kind == .cloud else {
             throw EngineError("\(ip.name) cannot run a DHCP server")
         }
         try ip.configureDhcpServer(config, requireInSubnet: requireInSubnet)

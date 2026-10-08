@@ -45,7 +45,7 @@ final class DnsServer {
         self.node = node
         self.records = records
         unbind = try node.bindUdp(PORT_DNS) { [weak self] p, u, _ in
-            if case .dns(let m) = u.payload { self?.answer(m, to: p.src, port: u.srcPort) }
+            if case .dns(let m) = u.payload { self?.answer(m, to: p.src, from: p.dst, port: u.srcPort) }
         }
     }
 
@@ -53,13 +53,14 @@ final class DnsServer {
         unbind()
     }
 
-    private func answer(_ q: DnsMessage, to client: UInt32, port: UInt16) {
+    /// Answers from the address it was asked (a resolver drops replies from any other), like BIND.
+    private func answer(_ q: DnsMessage, to client: UInt32, from server: UInt32, port: UInt16) {
         guard !q.response else { return }
         let hits = records.filter { $0.name == q.name.lowercased() }
         let reply = DnsMessage(id: q.id, response: true, authoritative: true, recursionDesired: q.recursionDesired,
                                rcode: hits.isEmpty ? DNS_NXDOMAIN : 0, name: q.name,
                                answers: hits.map { DnsAnswer(ttl: UInt32($0.ttl), addr: $0.addr) })
-        node.sendUdp(client, srcPort: PORT_DNS, dstPort: port, payload: .dns(reply))
+        node.sendPacket(client, .udp(makeUdp(srcPort: PORT_DNS, dstPort: port, payload: .dns(reply))), src: server)
     }
 }
 

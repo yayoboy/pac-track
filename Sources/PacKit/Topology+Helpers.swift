@@ -10,6 +10,7 @@ extension DeviceKind {
         case .router: "Router"
         case .switch: "Switch"
         case .hub: "Hub"
+        case .cloud: "Cloud/ISP"
         }
     }
 
@@ -21,6 +22,7 @@ extension DeviceKind {
         case .router: "R"
         case .switch: "SW"
         case .hub: "HUB"
+        case .cloud: "ISP"
         }
     }
 
@@ -39,7 +41,7 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     switch kind {
     case .switch: [.ports, .tables]
     case .hub: [.ports]
-    case .router, .server: [.interfaces, .routing, .services, .tables, .app]
+    case .router, .server, .cloud: [.interfaces, .routing, .services, .tables, .app]
     case .pc, .laptop: [.interfaces, .routing, .tables, .app]
     }
 }
