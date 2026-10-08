@@ -62,6 +62,10 @@ public enum Command: Sendable {
     case trafficTcp(node: String, target: String, bytes: Int)
     /// iperf3-style constant-bitrate UDP stream to the target's sink.
     case trafficUdp(node: String, target: String, bitsPerSecond: Double, seconds: Int)
+    /// NAT/PAT interface roles (routers only); nil turns NAT off. Any change forgets the translations.
+    case setNat(node: String, config: NatConfig?)
+    /// Firewall rules and default policy (routers only); nil turns it off. Any change forgets the tracked flows.
+    case setFirewall(node: String, config: FirewallConfig?)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -93,6 +97,8 @@ public enum Command: Sendable {
         case .setSink: "setSink"
         case .trafficTcp: "trafficTcp"
         case .trafficUdp: "trafficUdp"
+        case .setNat: "setNat"
+        case .setFirewall: "setFirewall"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -192,6 +198,16 @@ public struct TcpRow: Equatable, Sendable {
     public let state: String
 }
 
+/// One row of a router's NAT table, `show ip nat translations` style (ICMP: the echo identifier as port).
+public struct NatRow: Equatable, Sendable {
+    public let proto: String
+    public let insideLocal: String
+    public let insideGlobal: String
+    public let outside: String
+    /// Seconds until the translation idles out.
+    public let ttlS: Int
+}
+
 /// One direction of a cable over a 100 ms interval.
 public struct DirectionSample: Equatable, Sendable {
     /// Share of the interval spent transmitting, 0…1.
@@ -246,6 +262,12 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let sink: Bool
     /// Listening ports, then connections.
     public let tcp: [TcpRow]
+    /// NAT interface roles; nil while NAT is off.
+    public let nat: NatConfig?
+    /// Live translations, oldest first.
+    public let natTable: [NatRow]
+    /// nil while the firewall is off.
+    public let firewall: FirewallConfig?
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -490,8 +512,11 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var dhcp: DhcpConfig?
     public var dns: [DnsRecord]?
     public var sink: Bool
+    public var nat: NatConfig?
+    public var firewall: FirewallConfig?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
-                nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false) {
+                nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
+                nat: NatConfig? = nil, firewall: FirewallConfig? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -503,9 +528,11 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.dhcp = dhcp
         self.dns = dns
         self.sink = sink
+        self.nat = nat
+        self.firewall = firewall
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -519,6 +546,8 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         dhcp = try c.decodeIfPresent(DhcpConfig.self, forKey: .dhcp)
         dns = try c.decodeIfPresent([DnsRecord].self, forKey: .dns)
         sink = try c.decodeIfPresent(Bool.self, forKey: .sink) ?? false
+        nat = try c.decodeIfPresent(NatConfig.self, forKey: .nat)
+        firewall = try c.decodeIfPresent(FirewallConfig.self, forKey: .firewall)
     }
 }
 

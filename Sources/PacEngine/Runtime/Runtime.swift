@@ -201,6 +201,14 @@ public final class Runtime {
             // Validated first: the title converts the rate to an integer.
             let flow = try UdpFlow(node: try liveIpNode(node), target: t, bitsPerSecond: bitsPerSecond, seconds: seconds)
             start(node, "iperf3 -u -c \(t) -p \(PORT_DISCARD) -b \(Int(bitsPerSecond)) -t \(seconds)", .udpFlow(flow))
+        case let .setNat(node, config):
+            let n = try ipNode(node)
+            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run NAT") }
+            n.nat = try config.map { try Nat(node: n, config: $0) }
+        case let .setFirewall(node, config):
+            let n = try ipNode(node)
+            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run a firewall") }
+            n.firewall = try config.map { try Firewall(node: n, config: $0) }
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -302,6 +310,15 @@ public final class Runtime {
             }
     }
 
+    /// show ip nat translations: protocol, inside local, inside global, outside, seconds left; oldest first.
+    private func natRows(_ nat: Nat, _ now: Int) -> [NatRow] {
+        nat.view().map { e in
+            NatRow(proto: e.proto == IPPROTO_TCP ? "tcp" : e.proto == IPPROTO_UDP ? "udp" : "icmp",
+                   insideLocal: "\(formatIp(e.local)):\(e.localPort)", insideGlobal: "\(formatIp(e.global)):\(e.globalPort)",
+                   outside: "\(formatIp(e.remote)):\(e.remotePort)", ttlS: secondsLeft(e.expiresAt - now))
+        }
+    }
+
     /// Log entries from `seq` on, at most the newest `limit` (the UI pulls only what it has not seen).
     public func events(from seq: Int, limit: Int = 5000) -> [EventView] {
         sim.log.since(max(seq, sim.log.total - limit)).map(eventView)
@@ -361,7 +378,10 @@ public final class Runtime {
                     e.addrs.map { DnsCacheRow(name: e.name, ip: formatIp($0), ttlS: secondsLeft(e.expiresAt - now)) }
                 } ?? [],
                 sink: ip?.sink ?? false,
-                tcp: ip.map { tcpRows($0) } ?? []
+                tcp: ip.map { tcpRows($0) } ?? [],
+                nat: ip?.nat?.config,
+                natTable: (ip?.nat).map { natRows($0, now) } ?? [],
+                firewall: ip?.firewall?.config
             )
         }
         let linkViews = linkOrder.map { id in
@@ -446,6 +466,8 @@ public final class Runtime {
             if let config = n.dhcp { try next.setDhcpServer(n.id, config, requireInSubnet: false) }
             if let records = n.dns { try next.handle(.setDnsServer(node: n.id, records: records)) }
             if n.sink { try next.handle(.setSink(node: n.id, on: true)) }
+            if let nat = n.nat { try next.handle(.setNat(node: n.id, config: nat)) }
+            if let firewall = n.firewall { try next.handle(.setFirewall(node: n.id, config: firewall)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }
