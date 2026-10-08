@@ -75,6 +75,12 @@ final class TcpConnection {
     private var armedAt: Int?
     private var timerGen = 0
 
+    // RFC 5681 congestion control (Reno).
+    private(set) var cwnd = TCP_MSS
+    private(set) var ssthresh = TCP_WINDOW
+    private var dupAcks = 0
+    private var recovering = false
+
     // Receive side.
     private var irs: UInt32 = 0
     private var rcvNxt = 0
@@ -134,7 +140,11 @@ final class TcpConnection {
         if s.flags.contains(.syn) { return sendAck() }
         guard s.flags.contains(.ack) else { return }
         let a = ours(s.ack)
-        if a > una && a <= sentMax { acknowledged(a, window: s.window) }
+        if a > una && a <= sentMax {
+            acknowledged(a, window: s.window)
+        } else if a == una && s.dataLength == 0 && !s.flags.contains(.fin) && sentMax > una && Int(s.window) == peerWindow {
+            duplicateAck() // RFC 5681 §2: same ACK, no data, same window, data outstanding
+        }
         guard state != .closed else { return }
         if s.dataLength > 0 || s.flags.contains(.fin) { arrived(s) }
         output() // the ACK may have opened the window
@@ -165,6 +175,7 @@ final class TcpConnection {
 
     /// A new cumulative ACK: everything before offset `a` arrived.
     private func acknowledged(_ a: Int, window: UInt16) {
+        let newData = min(a, dataEnd) - min(una, dataEnd)
         una = a
         nxt = max(nxt, una)
         peerWindow = Int(window)
@@ -173,6 +184,8 @@ final class TcpConnection {
             measure(now - t.at)
             timed = nil
         }
+        if newData > 0 { grow(newData) }
+        dupAcks = 0
         // RFC 6298 (5.2), (5.3): stop when everything is acknowledged, otherwise restart.
         setTimer(una == sentMax ? nil : now + rto)
         if doneAt == nil, dataLength > 0, una >= dataEnd { doneAt = now }
@@ -181,6 +194,32 @@ final class TcpConnection {
         case .finWait1 where finQueued && una > dataEnd: state = .finWait2
         case .lastAck where una > dataEnd: close()
         default: break
+        }
+    }
+
+    /// RFC 5681 §3.1: slow start below ssthresh, congestion avoidance above; §3.2 (6): Reno deflates on the first new ACK.
+    private func grow(_ acked: Int) {
+        if recovering {
+            cwnd = ssthresh
+            recovering = false
+        } else if cwnd < ssthresh {
+            cwnd += min(acked, mss)
+        } else {
+            cwnd += max(1, mss * mss / cwnd)
+        }
+    }
+
+    /// RFC 5681 §3.2: the third duplicate retransmits the missing segment and enters fast recovery; later ones inflate the window.
+    private func duplicateAck() {
+        dupAcks += 1
+        if dupAcks == 3 && !recovering && una < dataEnd {
+            ssthresh = max((sentMax - una) / 2, 2 * mss)
+            transmit([.ack], at: una, length: min(mss, dataEnd - una))
+            cwnd = ssthresh + 3 * mss
+            recovering = true
+        } else if recovering {
+            cwnd += mss
+            output()
         }
     }
 
@@ -200,6 +239,8 @@ final class TcpConnection {
     private func established() {
         // RFC 6298 (5.7): a SYN that timed out leaves at least a 3 s RTO.
         if synRetransmitted { rto = max(rto, 3 * S) }
+        // RFC 5681 §3.1: initial window min(4 × SMSS, max(2 × SMSS, 4380 B)); one segment if the SYN had to be repeated.
+        cwnd = synRetransmitted ? mss : min(4 * mss, max(2 * mss, 4380))
         state = .established
     }
 
@@ -250,7 +291,7 @@ final class TcpConnection {
             return
         }
         guard state != .synSent && state != .synReceived else { return }
-        let window = peerWindow
+        let window = min(cwnd, peerWindow)
         while nxt < dataEnd {
             let length = min(mss, dataEnd - nxt)
             guard nxt + length - una <= window else { return }
@@ -307,11 +348,18 @@ final class TcpConnection {
         }
     }
 
-    /// RFC 6298 (5.4)–(5.6): back off and go back to the oldest unacknowledged byte.
+    /// RFC 6298 (5.4)–(5.6): back off and go back to the oldest unacknowledged byte; RFC 5681 (4): half the flight, one segment.
     private func timeout() {
         retries += 1
         guard retries <= TCP_MAX_RETRIES else { return fail(.timedOut) }
-        if state == .synSent || state == .synReceived { synRetransmitted = true }
+        if state == .synSent || state == .synReceived {
+            synRetransmitted = true
+        } else {
+            ssthresh = max((sentMax - una) / 2, 2 * mss)
+            cwnd = mss
+        }
+        dupAcks = 0
+        recovering = false
         rto = min(rto * 2, TCP_MAX_RTO)
         timed = nil
         nxt = una

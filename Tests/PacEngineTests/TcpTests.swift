@@ -138,4 +138,77 @@ private func label(_ t: TcpSegment) -> String {
         #expect(segments(sim, "H2").map { label($0.seg) }.last == "R")
         #expect(c.state == .closed && c.failure == .reset)
     }
+
+    @Test func startsWithThreeSegmentsAndGrowsBySlowStartThenCongestionAvoidance() throws {
+        let (sim, h1, h2, _) = try tapped()
+        try h2.tcp.listen(9)
+        let c = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 100_000)
+        var initial = 0
+        c.onChange = { [unowned c] in if c.state == .established { initial = c.cwnd } }
+        sim.run(100 * MS)
+        #expect(initial == 4380) // RFC 5681 IW: min(4 × MSS, max(2 × MSS, 4380 B))
+        #expect(c.bytesAcked == 100_000 && c.ssthresh == 65_535)
+        // 69 ACKs, one per segment: the first 42 add 1 MSS each (slow start) and take cwnd past ssthresh;
+        // the other 27 add ⌊MSS² / cwnd⌋ = 32 B each (congestion avoidance). The FIN's ACK adds nothing.
+        #expect(c.cwnd == 66_564)
+    }
+
+    @Test func threeDuplicateAcksTriggerAFastRetransmitAndRenoHalvesTheWindow() throws {
+        let (sim, h1, h2, tap) = try tapped()
+        try h2.tcp.listen(9)
+        var seen = 0
+        var lost: UInt32?
+        tap.lose = { f in
+            guard lost == nil, let t = tcpOf(f), t.dataLength > 0 else { return false }
+            seen += 1
+            guard seen == 5 else { return false }
+            lost = t.seq
+            return true
+        }
+        let c = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 100_000)
+        sim.run(100 * MS)
+        let copies = segments(sim, "H1").filter { $0.seg.seq == lost && $0.seg.dataLength > 0 }
+        #expect(copies.count == 2)
+        #expect(copies[1].time - copies[0].time < 1 * MS) // long before the 1 s RTO
+        let acks = sim.log.all.filter { e in
+            e.kind == .rx && e.node == "H1" && e.time <= copies[1].time && e.frame.flatMap(tcpOf).map { $0.ack == lost && $0.dataLength == 0 } == true
+        }
+        #expect(acks.count >= 4) // the ACK of the segment before, then at least three duplicates
+        #expect(c.retransmissions == 1 && c.rto == 1 * S) // no timeout happened
+        #expect(c.ssthresh < 65_535 && c.ssthresh >= 2 * TCP_MSS) // the window was halved
+        #expect(c.state == .timeWait && c.bytesAcked == 100_000)
+    }
+
+    @Test func aTimeoutCollapsesTheWindowToOneSegment() throws {
+        let (sim, h1, h2, tap) = try tapped()
+        try h2.tcp.listen(9)
+        var dropped = false
+        tap.lose = { f in
+            guard !dropped, tcpOf(f)?.dataLength == 80 else { return false }
+            dropped = true
+            return true
+        }
+        let c = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 3000)
+        sim.run(2 * S)
+        #expect(c.ssthresh == 2 * TCP_MSS) // max(FlightSize / 2 = 81 / 2 B, 2 × MSS)
+        #expect(c.cwnd == TCP_MSS + 80) // one segment, then slow start on the 80 bytes acknowledged
+        #expect(c.retransmissions == 1)
+    }
+
+    @Test func aBulkTransferFillsA10MbLinkToTheTheoreticalGoodput() throws {
+        let sim = Sim()
+        let h1 = Host(sim: sim, id: "H1")
+        let h2 = Host(sim: sim, id: "H2")
+        _ = try Link(sim: sim, try h1.iface("eth0"), try h2.iface("eth0"), LinkOptions(bandwidthBps: 10e6))
+        try h1.setIp("eth0", "10.0.0.1/24")
+        try h2.setIp("eth0", "10.0.0.2/24")
+        try h2.tcp.listen(9)
+        let c = try h1.tcp.connect(to: 0x0A00_0002, port: 9, sending: 2_000_000)
+        sim.run(3 * S)
+        let done = try #require(c.doneAt)
+        let goodput = 2_000_000.0 * 8 / (Double(done - c.startedAt) / 1e9)
+        // 1460 B of data per 1538 B on the wire (TCP 20 + IPv4 20 + Ethernet 14 + FCS 4 + preamble 8 + gap 12)
+        let theory = 10e6 * 1460 / 1538
+        #expect(abs(goodput - theory) / theory < 0.05)
+    }
 }
