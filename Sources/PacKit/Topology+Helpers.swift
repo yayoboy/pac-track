@@ -54,6 +54,24 @@ public enum TrafficKind: String, CaseIterable, Sendable {
     case tcp = "TCP", udp = "UDP"
 }
 
+/// Canvas tool (spec §7.1 ①): Sposta drags devices, Collega drags cables between them.
+public enum Tool: String, CaseIterable, Sendable {
+    case move = "Sposta", connect = "Collega"
+}
+
+/// Cable types in the palette (spec §7.1 ②).
+public enum CableKind: String, CaseIterable, Sendable {
+    case ethernet = "Ethernet 1 Gb/s", fiber = "Fibra 10 Gb/s", custom = "Personalizzato"
+
+    /// Ethernet and Personalizzato start from the engine default (1 Gb/s, ~100 m of copper); fibre is 10 Gb/s over 1 km (5 µs).
+    public var options: LinkOptions {
+        switch self {
+        case .ethernet, .custom: LinkOptions()
+        case .fiber: LinkOptions(bandwidthBps: 10e9, propDelayNs: 5_000)
+        }
+    }
+}
+
 /// A router interface's NAT role (Servizi tab): IOS `ip nat inside` / `ip nat outside`.
 public enum NatRole: String, CaseIterable, Sendable {
     case off = "—", inside, outside

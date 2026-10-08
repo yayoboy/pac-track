@@ -46,20 +46,30 @@ struct DeviceNodeView: View {
         .accessibilityIdentifier("node-\(node.name)")
     }
 
-    /// Moves the device, or every selected device when it is one of them, on the grid; one undo step per drag.
+    /// Sposta: moves the device, or every selected device when it is one of them, one undo step per drag.
+    /// Collega: draws a cable from the device to the one under the pointer.
     private var drag: some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .named(CanvasView.space))
             .onChanged { value in
+                if editor.tool == .connect {
+                    wire = Wire(from: node.id, to: value.location)
+                    return
+                }
                 if dragStart == nil {
                     if !editor.selectedNodes.contains(node.id) { editor.select(.node(node.id)) }
                     dragStart = Dictionary(uniqueKeysWithValues: editor.selectedNodes.map { ($0, editor.positions[$0] ?? Pos(x: 0, y: 0)) })
                     editor.moveStart()
                 }
                 for (id, start) in dragStart ?? [:] {
-                    editor.setPosition(id, snap(Pos(x: start.x + value.translation.width / zoom, y: start.y + value.translation.height / zoom)))
+                    editor.setPosition(id, editor.aligned(Pos(x: start.x + value.translation.width / zoom, y: start.y + value.translation.height / zoom)))
                 }
             }
-            .onEnded { _ in
+            .onEnded { value in
+                if editor.tool == .connect {
+                    wire = nil
+                    if let target = nodeAt(value.location), target != node.id { Task { await editor.connect(node.id, target) } }
+                    return
+                }
                 dragStart = nil
                 editor.moveEnd()
             }

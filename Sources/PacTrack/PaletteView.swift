@@ -3,6 +3,7 @@ import PacKit
 import SwiftUI
 
 struct PaletteView: View {
+    @Bindable var editor: Editor
     private static let all: [(String, [DeviceKind])] = [("Rete", [.router, .switch, .hub]), ("Host", [.pc, .laptop, .server])]
     @State private var query = ""
 
@@ -36,8 +37,29 @@ struct PaletteView: View {
                     }
                 }
             }
+            let q = query.trimmingCharacters(in: .whitespaces)
+            let cables = CableKind.allCases.filter { q.isEmpty || $0.rawValue.localizedCaseInsensitiveContains(q) || "cavi".localizedCaseInsensitiveContains(q) }
+            if !cables.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CAVI").font(.system(size: 9)).foregroundStyle(Theme.muted).padding(.horizontal, 6)
+                    ForEach(cables, id: \.self) { cable in
+                        let on = editor.tool == .connect && editor.cable == cable
+                        Label(cable.rawValue, systemImage: cable == .fiber ? "fibrechannel" : cable == .custom ? "slider.horizontal.3" : "cable.connector")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(on ? Theme.accent.opacity(0.35) : Color.clear))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                editor.cable = cable
+                                editor.tool = .connect
+                            }
+                            .accessibilityIdentifier("cable-\(cable)")
+                    }
+                }
+            }
             Spacer()
-            Text("Trascina un dispositivo sul canvas. Collega due dispositivi trascinando dal pallino in basso.")
+            Text("Trascina un dispositivo sul canvas. Per collegare, trascina dal pallino in basso, oppure scegli un cavo e trascina da un dispositivo all'altro.")
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.muted)
         }

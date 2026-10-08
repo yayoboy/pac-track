@@ -63,6 +63,9 @@ struct CanvasView: View {
             }
             .coordinateSpace(.named(Self.space))
             .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                if !editor.snapshot.nodes.isEmpty { minimap(geo.size) }
+            }
             .onContinuousHover(coordinateSpace: .named(Self.space)) { phase in
                 switch phase {
                 case .active(let p):
@@ -91,7 +94,7 @@ struct CanvasView: View {
             }
             .dropDestination(for: String.self) { items, location in
                 guard let kind = items.first.flatMap(DeviceKind.init(rawValue:)) else { return false }
-                Task { await editor.addDevice(kind, at: snap(toWorld(location))) }
+                Task { await editor.addDevice(kind, at: editor.aligned(toWorld(location))) }
                 return true
             }
             .simultaneousGesture(
@@ -116,6 +119,14 @@ struct CanvasView: View {
             .onKeyPress(KeyEquivalent(".")) {
                 guard editor.snapshot.mode == .simulation else { return .ignored }
                 Task { await editor.step() }
+                return .handled
+            }
+            .onKeyPress(KeyEquivalent("v")) {
+                editor.tool = .move
+                return .handled
+            }
+            .onKeyPress(KeyEquivalent("c")) {
+                editor.tool = .connect
                 return .handled
             }
         }
@@ -161,9 +172,10 @@ struct CanvasView: View {
     // MARK: layers
 
     private var background: some View {
-        Canvas { ctx, size in
+        let showGrid = editor.grid
+        return Canvas { ctx, size in
             let step = Self.grid * zoom
-            guard step >= 6 else { return }
+            guard showGrid, step >= 6 else { return }
             var x0 = offset.width.truncatingRemainder(dividingBy: step)
             if x0 < 0 { x0 += step }
             var y0 = offset.height.truncatingRemainder(dividingBy: step)
@@ -198,6 +210,33 @@ struct CanvasView: View {
         .onTapGesture { editor.select(nil) }
     }
 
+    /// Overview (spec §7.1 ③): every device as a dot, the visible area as a frame; a click centres the view there.
+    private func minimap(_ size: CGSize) -> some View {
+        let box = CGSize(width: 160, height: 100)
+        let visible = CGRect(x: -offset.width / zoom, y: -offset.height / zoom, width: size.width / zoom, height: size.height / zoom)
+        let points = editor.snapshot.nodes.compactMap { editor.positions[$0.id] }.map { CGPoint(x: $0.x, y: $0.y) }
+        let world = points.reduce(visible) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -40, dy: -40)
+        let k = min(box.width / world.width, box.height / world.height)
+        let map = { (p: CGPoint) in CGPoint(x: (p.x - world.minX) * k, y: (p.y - world.minY) * k) }
+        return Canvas { ctx, _ in
+            for p in points {
+                ctx.fill(Path(ellipseIn: CGRect(origin: map(p), size: .zero).insetBy(dx: -2, dy: -2)), with: .color(Theme.fg))
+            }
+            let o = map(visible.origin)
+            ctx.stroke(Path(CGRect(x: o.x, y: o.y, width: visible.width * k, height: visible.height * k)), with: .color(Theme.accent), lineWidth: 1)
+        }
+        .frame(width: box.width, height: box.height)
+        .background(Theme.panel.opacity(0.9))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.border))
+        .contentShape(Rectangle())
+        .onTapGesture(coordinateSpace: .local) { p in
+            let c = CGPoint(x: p.x / k + world.minX, y: p.y / k + world.minY)
+            offset = CGSize(width: size.width / 2 - c.x * zoom, height: size.height / 2 - c.y * zoom)
+        }
+        .padding(10)
+        .accessibilityIdentifier("minimap")
+    }
+
     private func cable(_ link: LinkView) -> some View {
         let a = center(link.a.node)
         let b = center(link.b.node)
@@ -208,7 +247,7 @@ struct CanvasView: View {
         }
         return ZStack {
             line.stroke(selected ? Theme.accent : link.up ? Theme.muted : Theme.err, style: StrokeStyle(lineWidth: selected ? 2.5 : 1.5, dash: link.up ? [] : [5, 4]))
-            Text("\(link.a.iface) ↔ \(link.b.iface) · \(formatBandwidth(link.options.bandwidthBps))")
+            Text("\(link.a.iface) ↔ \(link.b.iface) · \(formatBandwidth(link.options.bandwidthBps)) · \(LinkField.delay.format(link.options)) µs")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Theme.muted)
                 .padding(.horizontal, 3)
@@ -235,17 +274,18 @@ struct CanvasView: View {
         Menu("Aggiungi dispositivo") {
             ForEach(DeviceKind.allCases, id: \.self) { kind in
                 Button {
-                    let at = snap(toWorld(menuPoint))
+                    let at = editor.aligned(toWorld(menuPoint))
                     Task { await editor.addDevice(kind, at: at) }
                 } label: { Label(kind.label, systemImage: kind.symbol) }
             }
         }
         Button("Incolla") {
-            let at = snap(toWorld(menuPoint))
+            let at = editor.aligned(toWorld(menuPoint))
             Task { await editor.paste(at: at) }
         }
         Button("Seleziona tutto") { editor.selectAll() }
         Button("Adatta alla vista") { fit(size) }
+        Button(editor.grid ? "Nascondi griglia" : "Mostra griglia") { editor.grid.toggle() }
     }
 }
 

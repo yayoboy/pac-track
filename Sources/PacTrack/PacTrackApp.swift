@@ -68,6 +68,12 @@ struct SimulationToolbar: ToolbarContent {
                 .disabled(!editor.canUndo)
             Button { Task { await editor.redo() } } label: { Label("Ripeti", systemImage: "arrow.uturn.forward") }
                 .disabled(!editor.canRedo)
+            Picker("Strumento", selection: $editor.tool) {
+                Label(Tool.move.rawValue, systemImage: "cursorarrow").tag(Tool.move)
+                Label(Tool.connect.rawValue, systemImage: "cable.connector").tag(Tool.connect)
+            }
+            .pickerStyle(.segmented)
+            .help("Sposta (V): trascini i dispositivi. Collega (C): trascini un cavo da un dispositivo all'altro.")
         }
         ToolbarItemGroup(placement: .primaryAction) {
             let s = editor.snapshot
@@ -147,6 +153,11 @@ struct EditCommands: Commands {
             }
             Button("Seleziona tutto") { if typing { send("selectAll:") } else { editor?.selectAll() } }
                 .keyboardShortcut("a")
+        }
+        CommandGroup(before: .toolbar) {
+            Button(editor?.grid == false ? "Mostra griglia" : "Nascondi griglia") { editor?.grid.toggle() }
+                .disabled(editor == nil)
+            Divider()
         }
     }
 }

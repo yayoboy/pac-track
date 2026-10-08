@@ -34,6 +34,11 @@ public final class Editor {
     public var inspectorTab: InspectorTab?
     /// Bottom panel tab; "Mostra metriche" on a cable switches it to Metriche.
     public var bottomTab = BottomTab.events
+    /// Canvas tool and the cable it draws (palette); per window, not saved.
+    public var tool = Tool.move
+    public var cable = CableKind.ethernet
+    /// Grid shown and snapped to (spec §7.2 "Griglia on/off").
+    public var grid = true
     private var dismissedWarning = 0
     @ObservationIgnored private var eventCursor = 0
     @ObservationIgnored private var eventEpoch = 0
@@ -210,6 +215,11 @@ public final class Editor {
         positions[id] = pos
     }
 
+    /// Where a device dropped or dragged at `p` lands: on the grid while it is shown.
+    public func aligned(_ p: Pos) -> Pos {
+        grid ? snap(p) : p
+    }
+
     public func addDevice(_ kind: DeviceKind, at pos: Pos) async {
         await serialized { await self.addDeviceNow(kind, at: pos) }
     }
@@ -232,7 +242,13 @@ public final class Editor {
             error = EditorError(key: "connect", message: "\(firstFreeIface(a) == nil ? a.name : b.name) has no free port")
             return
         }
-        await editNow([.connect(id: newId(), a: IfaceRef(node: aId, iface: ia), b: IfaceRef(node: bId, iface: ib))], key: "connect")
+        let id = newId()
+        let options = cable.options
+        // Ethernet is the engine's default cable; another kind sets its link in the same undo step.
+        let cmds: [Command] = [.connect(id: id, a: IfaceRef(node: aId, iface: ia), b: IfaceRef(node: bId, iface: ib))]
+            + (options == LinkOptions() ? [] : [.updateLink(id: id, options: options)])
+        // Personalizzato: the new cable opens in the inspector for its values.
+        if await editNow(cmds, key: "connect"), cable == .custom { selection = .link(id) }
     }
 
     /// Deletes nodes and cables in one undo step (cables of deleted nodes go with them).

@@ -7,7 +7,7 @@ struct MainContent: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            PaletteView().frame(width: 170)
+            PaletteView(editor: editor).frame(width: 170)
             Divider()
             VSplitView {
                 CanvasView(editor: editor)

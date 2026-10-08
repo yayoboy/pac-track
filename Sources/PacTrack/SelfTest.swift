@@ -76,6 +76,7 @@ enum SelfTest {
         failures += await trafficScenario(output: output)
         failures += await natScenario(output: output)
         failures += await selectionScenario(output: output)
+        failures += await toolsScenario(output: output)
         return failures
     }
 
@@ -215,6 +216,22 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m6-selection")) { failures.append("could not write the M6 selection image") }
         editor.selectAll()
         if editor.selectedNodes != ids { failures.append("select all \(editor.selectedNodes)") }
+        return failures
+    }
+
+    /// M6: a fibre cable drawn with the Collega tool, the grid hidden, the minimap in the corner.
+    private static func toolsScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 420, y: 200))
+        await editor.addDevice(.server, at: Pos(x: 700, y: 360))
+        editor.tool = .connect
+        editor.cable = .fiber
+        let ids = editor.snapshot.nodes.map(\.id)
+        await editor.connect(ids[0], ids[1])
+        if editor.snapshot.links.first?.options.bandwidthBps != 10e9 { failures.append("fibre cable \(String(describing: editor.snapshot.links.first))") }
+        editor.grid = false
+        if !render(editor, to: sibling(output, "m6-tools")) { failures.append("could not write the M6 tools image") }
         return failures
     }
 
