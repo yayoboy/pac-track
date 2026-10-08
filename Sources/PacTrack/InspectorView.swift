@@ -136,6 +136,13 @@ private struct NodeInspector: View {
                              rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
                 TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
+                if node.nat != nil {
+                    // Five wide columns: scroll sideways rather than squeeze addresses into the 300 pt column.
+                    ScrollView(.horizontal) {
+                        TableSection(title: "Traduzioni NAT", head: ["Proto", "Inside locale", "Inside globale", "Outside", "TTL"],
+                                     rows: node.natTable.map { [$0.proto, $0.insideLocal, $0.insideGlobal, $0.outside, "\($0.ttlS)s"] })
+                    }
+                }
                 if node.kind.isHost {
                     TableSection(title: "Cache DNS", head: ["Nome", "IP", "TTL"], rows: node.dnsCache.map { [$0.name, $0.ip, "\($0.ttlS)s"] })
                 }

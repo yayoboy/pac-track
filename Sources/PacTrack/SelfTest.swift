@@ -74,6 +74,7 @@ enum SelfTest {
         if !render(editor, to: output) { failures.append("could not write \(output)") }
         failures += await servicesScenario(output: output)
         failures += await trafficScenario(output: output)
+        failures += await natScenario(output: output)
         return failures
     }
 
@@ -155,6 +156,49 @@ enum SelfTest {
         editor.inspectorTab = .app
         editor.bottomTab = .output
         if !render(editor, to: sibling(output, "m4-app")) { failures.append("could not write the M4 app image") }
+        return failures
+    }
+
+    /// M5: PC1 behind R1's NAT (inside Gi0/0, outside Gi0/1) reaches SRV1, which knows no route back; R1's firewall (default deny,
+    /// anything entering Gi0/0 allowed) lets the replies through but not SRV1's own ping.
+    private static func natScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.pc, at: Pos(x: 360, y: 300))
+        await editor.addDevice(.router, at: Pos(x: 560, y: 300))
+        await editor.addDevice(.server, at: Pos(x: 760, y: 300))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("PC1"), id("R1")) // PC1 eth0 — R1 Gi0/0
+        await editor.connect(id("R1"), id("SRV1")) // R1 Gi0/1 — SRV1 eth0
+        for (name, iface, cidr) in [("PC1", "eth0", "192.168.1.10/24"), ("R1", "Gi0/0", "192.168.1.1/24"), ("R1", "Gi0/1", "203.0.113.1/24"),
+                                    ("SRV1", "eth0", "203.0.113.10/24")] {
+            await editor.edit(.setIp(node: id(name), iface: iface, cidr: cidr))
+        }
+        await editor.edit(.addRoute(node: id("PC1"), cidr: "0.0.0.0/0", nextHop: "192.168.1.1"))
+        await editor.setNatRole(id("R1"), iface: "Gi0/0", .inside)
+        await editor.setNatRole(id("R1"), iface: "Gi0/1", .outside)
+        await editor.edit(.setFirewall(node: id("R1"), config: FirewallConfig(defaultAction: .deny)))
+        await editor.addFirewallRule(id("R1"), FirewallRule(iface: "Gi0/0", direction: .inbound, action: .allow, proto: .any, src: "", dst: ""), port: "")
+        await editor.edit(.setSink(node: id("SRV1"), on: true))
+        await editor.run(.ping(node: id("PC1"), target: "203.0.113.10"))
+        await editor.startTraffic(id("PC1"), target: "203.0.113.10", kind: .tcp, amount: "100000", seconds: "")
+        await editor.run(.ping(node: id("SRV1"), target: "203.0.113.1"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let apps = editor.snapshot.apps
+        if !(apps.first?.lines.contains("4 packets transmitted, 4 received, 0% packet loss") ?? false) { failures.append("NAT ping \(apps.first?.lines ?? [])") }
+        if apps.count != 3 || apps[1].lines.last != "iperf Done." { failures.append("NAT traffic \(apps.map(\.lines))") }
+        if apps.count == 3, apps[2].lines.contains(where: { $0.contains("bytes from") }) { failures.append("SRV1 pinged R1 through the firewall") }
+        let r1 = editor.snapshot.nodes.first { $0.name == "R1" }
+        if Set(r1?.natTable.map(\.proto) ?? []) != ["icmp", "tcp"] { failures.append("NAT table \(r1?.natTable ?? [])") }
+        if !editor.events.contains(where: { $0.kind == .tx && $0.node == id("R1") && $0.info.hasPrefix("203.0.113.1 → 203.0.113.10 Echo request") }) {
+            failures.append("no translated echo request leaving R1")
+        }
+        if !editor.events.contains(where: { $0.reason == "firewall-default" && $0.node == id("R1") }) { failures.append("no firewall drop") }
+        editor.select(.node(id("R1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m5")) { failures.append("could not write the M5 services image") }
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m5-tables")) { failures.append("could not write the M5 tables image") }
         return failures
     }
 
