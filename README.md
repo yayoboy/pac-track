@@ -31,7 +31,7 @@ Per tenerla, trascina `build/PacTrack.app` in Applicazioni.
 2. Seleziona il primo PC: nell'ispettore, scheda *Interfacce*, scrivi `10.0.0.1/24` e premi Invio; al secondo `10.0.0.2/24`.
 3. Tasto destro sul primo PC ▸ *Ping verso* ▸ il secondo: in basso è aperta la scheda *Eventi* con i pacchetti; l'output del ping è nella scheda *Output app*.
 4. Passa a *Simulation* nella barra e premi `.` per avanzare un evento alla volta; un clic su un evento mostra la sua PDU.
-5. Per uscire su Internet: aggiungi una *Cloud/ISP* (Gi0/0 già su `203.0.113.1/24`), dai al tuo router `203.0.113.2/24` verso di lei, la route `0.0.0.0/0` via `203.0.113.1` e il NAT (*Servizi*); i PC, con il router come gateway, usano `8.8.8.8` come DNS e raggiungono `www.example.com`.
+5. Per uscire su Internet: aggiungi una *Cloud/ISP* (Gi0/0 già su `203.0.113.1/24`), dai al tuo router `203.0.113.2/24` verso di lei, la route `0.0.0.0/0` via `203.0.113.1` e il NAT (*Servizi*); i PC, con il router come gateway, usano `8.8.8.8` come DNS e raggiungono `www.example.com`. Solo la Cloud presa dalla palette arriva configurata: una copiata o duplicata, come ogni copia, non ha indirizzi né record DNS.
 
 Scorciatoie: V sposta, C collega, Canc elimina, Spazio avvia o ferma, `.` passo, Cmd+Z e Cmd+Shift+Z, Cmd+C, Cmd+V, Cmd+D, Cmd+A, Cmd+S, Cmd+O, Cmd+Shift+E esporta l'immagine. Shift-clic e Shift-trascina selezionano più dispositivi.
 
