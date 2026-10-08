@@ -253,7 +253,9 @@ public final class Runtime {
         let before = sim.log.total
         var budget = MAX_SILENT_EVENTS
         while sim.log.total == before, budget > 0, let next = sim.sched.nextTime {
-            // An idle stretch longer than the kept history would only produce points that get thrown away.
+            // An idle stretch longer than the kept history would only produce points that get thrown away;
+            // the boundary due first still gets its own point, so what came before it is not stamped after the stretch.
+            if nextSampleAt < next { sample() }
             nextSampleAt = max(nextSampleAt, (next - 1) / SAMPLE_NS * SAMPLE_NS - (METRICS_HISTORY - 1) * SAMPLE_NS)
             while nextSampleAt < next { sample() }
             sim.sched.step()

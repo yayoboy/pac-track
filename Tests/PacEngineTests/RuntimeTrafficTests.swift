@@ -129,6 +129,23 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(series.last!.timeNs == (s.timeNs - 1) / (100 * MS) * (100 * MS)) // the last boundary before the event
     }
 
+    @Test func steppingOverA64sRetransmissionGapKeepsEachFrameInItsOwnInterval() throws {
+        let rt = try trafficRuntime()
+        try rt.handle(.trafficTcp(node: "a", target: "10.0.0.2", bytes: 100_000_000))
+        runFor(rt, wallMs: 100)
+        try rt.handle(.setPower(id: "srv", on: false)) // PC1 retransmits at RTO 1, 2 … 64 s
+        try rt.handle(.setMode(.simulation))
+        // Stops on the 127 s retransmission. The 63 s one reaches SRV1's dead port at 63.1001 s, just past a boundary.
+        for _ in 0..<1000 where rt.snapshot().timeNs < 100 * S { try rt.handle(.step) }
+        let s = rt.snapshot()
+        let logged = rt.events(from: 0, limit: .max).map(\.timeNs)
+        for id in ["l1", "l2"] {
+            let active = s.linkSamples[id]!.filter { $0.ab.utilization + $0.ba.utilization > 0 || $0.ab.drops + $0.ba.drops > 0 }
+            // each point covers the 100 ms that end at its time: something happened then
+            #expect(active.allSatisfy { p in logged.contains { $0 > p.timeNs - 100 * MS && $0 <= p.timeNs } })
+        }
+    }
+
     @Test func loadsTheSinkAndOpensOlderFilesWithItOff() throws {
         let t = Topology(seed: 3, nodes: [
             TopologyNode(id: "srv", kind: .server, name: "SRV1", pos: Pos(x: 0, y: 0), ifaces: [TopologyIface(name: "eth0", cidr: "10.0.0.2/24")],
