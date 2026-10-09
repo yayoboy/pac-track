@@ -23,7 +23,9 @@ Segmentare una LAN in VLAN e vedere lo Spanning Tree convergere per ogni VLAN, p
 
 ## 4. Spanning Tree per VLAN (PVST+, 802.1D)
 - **Istanze:** una per ogni VLAN attiva su almeno una porta dello switch.
+- *Decisione (M7b):* senza database delle VLAN (§2), una VLAN esiste nella rete se una porta di uno switch qualsiasi la usa come VLAN access o nativa. Ogni switch esegue un'istanza per ciascuna VLAN esistente che passa da una sua porta attiva, anche se ha solo trunk, come se VTP tenesse allineati i database. Il motivo è che uno switch di distribuzione con soli trunk deve partecipare all'albero delle VLAN che trasporta, altrimenti un loop che lo attraversa resterebbe aperto. Un frame di una VLAN che non esiste viene scartato come VLAN non ammessa.
 - **Bridge ID:** priorità (default 32768) + VLAN (sys-id-ext) + MAC dello switch. La priorità si imposta per switch e per VLAN, in multipli di 4096 (0–61440).
+- *Decisione (M7b):* il MAC del bridge è quello della prima porta (Gi0/1) e il numero di porta nel port ID è la sua posizione (Gi0/n → n). Uno switch reale ha un MAC base proprio; qui un MAC in più cambierebbe la numerazione di tutti gli altri dispositivi.
 - **BPDU di configurazione:**
   - campi 802.1D: root ID, costo verso la root, bridge ID, port ID (priorità 128 + numero di porta), message age, max age 20 s, hello 2 s, forward delay 15 s;
   - inviate ogni hello time dalle porte designated;
@@ -41,30 +43,37 @@ Segmentare una LAN in VLAN e vedere lo Spanning Tree convergere per ogni VLAN, p
   - se diventa root o designated passa a **listening**, dopo forward delay a **learning** (impara i MAC ma non inoltra), dopo un altro forward delay a **forwarding**;
   - una porta in blocking che smette di ricevere BPDU migliori ricomincia il processo dopo max age.
   - Ogni cambio di stato è un evento in lista.
+  - Il max age si conta dall'ultima BPDU ricevuta meno il suo message age (1 s per bridge attraversato), come su IOS: il failover indiretto avviene fra 48 e 50 s, non esattamente a 50.
+- *Decisione (M7b):* i frame che arrivano su una porta in blocking, listening o learning sono scartati con un evento di drop motivato (`stp-discarding`); in learning il mittente viene comunque imparato. IOS li scarta in silenzio, ma l'evento spiega perché un PC appena collegato aspetta 30 s.
+- *Decisione (M7b):* ogni cambio di stato è un evento di tipo STATO con protocollo STP (per esempio `VLAN 10: listening → learning`), senza PDU da ispezionare.
+- *Decisione (M7b):* niente hold timer (al massimo una BPDU al secondo per porta). Qui le BPDU partono solo a ogni hello, in risposta a una BPDU peggiore o come TCA, quindi non serve un limite di frequenza.
 - **Topology change:**
   1. Uno switch che porta una porta in forwarding, o la toglie da forwarding, manda una **TCN** dalla root port.
   2. Chi la riceve risponde con il bit TCA e la inoltra verso la root.
   3. La root mette il flag **TC** nelle sue BPDU per max age + forward delay (35 s).
   4. Per tutto quel tempo, gli switch che ricevono TC usano forward delay (15 s) come aging della MAC table invece di 300 s.
 - **PortFast:** opzione per singola porta access, spenta di default come su IOS. Con PortFast la porta va subito in forwarding e un suo cambio di stato non genera TCN. *Decisione:* senza questa opzione ogni PC collegato aspetterebbe 30 s prima di comunicare; la si lascia spenta di default per fedeltà a IOS.
+- *Decisione (M7b):* PortFast vale solo sulle porte access; su un trunk resta salvato ma non ha effetto (IOS chiede `portfast trunk`). Attivarlo su una porta in listening o learning la porta subito in forwarding; disattivarlo non cambia lo stato attuale e vale dal prossimo ricalcolo.
 - *Decisione:* fuori da M7 BPDU guard, root guard, loop guard, UplinkFast/BackboneFast, RSTP/MST e EtherChannel.
 - **Avviso di loop L2:** resta attivo. Ora scatta solo se il loop c'è davvero, per esempio con degli hub o con STP ancora in convergenza.
 
 ## 5. Interfaccia (testi in italiano)
 - **Scheda Porte dello switch:** per ogni porta, modalità Access/Trunk; VLAN access oppure VLAN ammesse e nativa sul trunk; PortFast. Gli errori sono mostrati sul campo: VLAN fuori da 1–4094, lista non valida, nativa non ammessa.
-- **Scheda Servizi dello switch:** sezione *Spanning Tree* con la priorità per ciascuna VLAN attiva (scelta fra 0 e 61440 in passi di 4096).
+- **Scheda Servizi dello switch:** sezione *Spanning Tree* con la priorità per ciascuna VLAN attiva (scelta fra 0 e 61440 in passi di 4096). Lo switch guadagna così la scheda Servizi, con la sola sezione Spanning Tree.
 - **Scheda Tabelle dello switch:**
   - la MAC table guadagna la colonna VLAN;
   - nuova tabella *Spanning Tree* per VLAN: root ID, costo, root port e, per ogni porta, ruolo (root/designated/blocked) e stato (blocking/listening/learning/forwarding).
 - **Router, scheda Interfacce:** "Aggiungi sottointerfaccia" (interfaccia fisica, VID, IPv4/prefisso) e "Elimina" sulla sottointerfaccia.
 - **Canvas:** i cavi mostrano lo stato STP alle estremità. Un pallino ambra indica listening o learning, un pallino rosso indica blocking (convenzione Packet Tracer); forwarding non ha indicatori. L'etichetta di un trunk dice "trunk".
+  - *Decisione (M7b):* su una porta che porta più VLAN il pallino mostra lo stato meno avanzato fra quelle VLAN: rosso se la porta è in blocking in almeno una.
 - **Lista eventi:** filtro protocollo "STP" e colore dedicato.
 
 ## 6. Persistenza ed errori
 - Nel `.ptk`, sul nodo:
   - switch: le porte con modalità, VLAN, VLAN ammesse, nativa e PortFast, più le priorità STP per VLAN;
   - router: le sottointerfacce.
-- Lo stato STP (ruoli, stati, timer) e le MAC table non si salvano. A ogni caricamento la convergenza riparte, come per ARP e DHCP.
+- Lo stato STP (ruoli, stati, timer) e le MAC table non si salvano. A ogni caricamento la convergenza riparte, come per ARP e DHCP; anche Annulla e Ripeti ricaricano la rete.
+- *Decisione (M7b):* le copie di uno switch mantengono PortFast, che fa parte della porta come le VLAN, ma non le priorità STP: due switch con la stessa priorità bassa si contenderebbero la root.
 - Un file M6, che non ha queste chiavi, si apre con tutte le porte access in VLAN 1, PortFast spento e priorità 32768. Un file vecchio con un loop di switch quindi converge.
 - Errori tipizzati: VID fuori intervallo, VID duplicato sulla stessa interfaccia fisica, nome della sottointerfaccia già in uso, sottointerfaccia su un dispositivo che non è un router, priorità non multipla di 4096. Il controllo "IP duplicato nello stesso segmento" ora tiene conto delle VLAN: segmento = dominio di broadcast.
 
