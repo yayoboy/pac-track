@@ -34,6 +34,16 @@ import Testing
         try rt.handle(.load(t))
         #expect(rt.snapshot().nodes[0].ifaces.allSatisfy { $0.switchport == PortConfig() })
     }
+
+    @Test func anM7aFileOpensWithPortFastOffAndDefaultPriorities() throws {
+        let json = #"{"version":1,"seed":1,"links":[],"nodes":[{"id":"s","kind":"switch","name":"SW1","pos":{"x":0,"y":0},"routes":[],"ifaces":[{"name":"Gi0/1","switchport":{"mode":"access","vlan":10,"allowed":"all","native":1}}]}]}"#
+        let t = try ProjectFile.decode(Data(json.utf8))
+        #expect(t.nodes[0].ifaces[0].switchport == PortConfig(vlan: 10))
+        #expect(t.nodes[0].stpPriorities == nil)
+        let rt = Runtime()
+        try rt.handle(.load(t))
+        #expect(rt.snapshot().nodes[0].ifaces[0].switchport?.portfast == false && rt.snapshot().nodes[0].stpPriorities.isEmpty)
+    }
 }
 
 func expectError(_ fragment: String, sourceLocation: SourceLocation = #_sourceLocation, _ body: () throws -> Void) {

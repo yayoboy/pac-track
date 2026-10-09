@@ -367,6 +367,7 @@ public final class Runtime {
             let (node, kind) = nodes[id]!
             let ip = node as? IpNode
             let host = node as? Host
+            let sw = node as? Switch
             return NodeView(
                 id: id,
                 kind: kind,
@@ -403,7 +404,12 @@ public final class Runtime {
                 tcp: ip.map { tcpRows($0) } ?? [],
                 nat: ip?.nat?.config,
                 natTable: (ip?.nat).map { natRows($0, now) } ?? [],
-                firewall: ip?.firewall?.config
+                firewall: ip?.firewall?.config,
+                stp: sw?.stp.sorted { $0.key < $1.key }.map { vlan, st in
+                    StpView(vlan: vlan, priority: st.bridge.priority, root: st.root.text, cost: st.rootCost, rootPort: st.rootPort?.name,
+                            ports: st.rows.map { StpPortRow(iface: $0.port, role: $0.role, state: $0.state) })
+                } ?? [],
+                stpPriorities: sw?.stpPriority.sorted { $0.key < $1.key }.map { StpPriority(vlan: $0.key, priority: $0.value) } ?? []
             )
         }
         let linkViews = linkOrder.map { id in
@@ -489,6 +495,7 @@ public final class Runtime {
                 if i.name.contains(".") { try next.handle(.addSubinterface(node: n.id, iface: i.name)) }
                 if let c = i.switchport { try next.handle(.setSwitchport(node: n.id, iface: i.name, config: c)) }
             }
+            for p in n.stpPriorities ?? [] { try next.handle(.setStpPriority(node: n.id, vlan: p.vlan, priority: p.priority)) }
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }
         }
         for l in t.links {

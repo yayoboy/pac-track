@@ -36,6 +36,25 @@ import Testing
         #expect(node("R2")?.ifaces.map { "\($0.name) \($0.cidr ?? "-")" } == ["Gi0/0 -", "Gi0/0.10 -", "Gi0/1 -", "Gi0/2 -", "Gi0/3 -"])
     }
 
+    @Test func portFastAndPrioritiesSurviveSavingAndUndoCopiesKeepOnlyPortFast() async throws {
+        await editor.addDevice(.switch, at: origin)
+        let sw = node("SW1")?.id ?? ""
+        await editor.edit(.setSwitchport(node: sw, iface: "Gi0/1", config: PortConfig(portfast: true)))
+        await editor.edit(.setStpPriority(node: sw, vlan: 10, priority: 4096), key: "stp:\(sw)")
+        let saved = editor.current
+        #expect(saved.nodes[0].ifaces[0].switchport == PortConfig(portfast: true))
+        #expect(saved.nodes[0].stpPriorities == [StpPriority(vlan: 10, priority: 4096)])
+        let reopened = Editor(client: Simulation())
+        let opened = await reopened.load(try ProjectFile.decode(try ProjectFile.encode(saved)))
+        #expect(opened && sameNetwork(reopened.current, saved))
+        await editor.undo() // the priority: one step
+        #expect(editor.current.nodes[0].stpPriorities == nil)
+        await editor.redo()
+        await editor.duplicate([sw])
+        #expect(node("SW2")?.ifaces[0].switchport == PortConfig(portfast: true))
+        #expect(node("SW2")?.stpPriorities == [])
+    }
+
     @Test func portFieldsApplyTypedVlansAndShowErrorsOnTheirField() async {
         await editor.addDevice(.switch, at: origin)
         let sw = node("SW1")?.id ?? ""

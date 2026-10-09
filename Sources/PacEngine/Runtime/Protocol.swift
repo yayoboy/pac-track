@@ -77,6 +77,36 @@ public enum StpState: String, Sendable {
     case blocking, listening, learning, forwarding
 }
 
+public struct StpPortRow: Equatable, Sendable {
+    public let iface: String
+    public let role: StpRole
+    public let state: StpState
+}
+
+/// One PVST+ instance as `show spanning-tree vlan <n>` lists it.
+public struct StpView: Equatable, Sendable {
+    public let vlan: Int
+    /// This switch's bridge priority for the VLAN (the VLAN is added to it in the bridge ID).
+    public let priority: Int
+    /// Root bridge ID, "priority/VLAN/MAC".
+    public let root: String
+    public let cost: Int
+    /// nil on the root bridge.
+    public let rootPort: String?
+    public let ports: [StpPortRow]
+}
+
+/// A switch's bridge priority for one VLAN, saved when it is not the default 32768.
+public struct StpPriority: Codable, Equatable, Sendable {
+    public var vlan: Int
+    public var priority: Int
+
+    public init(vlan: Int, priority: Int) {
+        self.vlan = vlan
+        self.priority = priority
+    }
+}
+
 public enum Proto: String, CaseIterable, Sendable {
     case arp, icmp, dhcp, dns, udp, tcp, stp
 }
@@ -332,6 +362,10 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let natTable: [NatRow]
     /// nil while the firewall is off.
     public let firewall: FirewallConfig?
+    /// Switches: the PVST+ instances, by VLAN.
+    public let stp: [StpView]
+    /// Switches: the bridge priorities set away from 32768, by VLAN.
+    public let stpPriorities: [StpPriority]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -584,9 +618,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var sink: Bool
     public var nat: NatConfig?
     public var firewall: FirewallConfig?
+    public var stpPriorities: [StpPriority]?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
-                nat: NatConfig? = nil, firewall: FirewallConfig? = nil) {
+                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -600,9 +635,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.sink = sink
         self.nat = nat
         self.firewall = firewall
+        self.stpPriorities = stpPriorities
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -618,6 +654,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         sink = try c.decodeIfPresent(Bool.self, forKey: .sink) ?? false
         nat = try c.decodeIfPresent(NatConfig.self, forKey: .nat)
         firewall = try c.decodeIfPresent(FirewallConfig.self, forKey: .firewall)
+        stpPriorities = try c.decodeIfPresent([StpPriority].self, forKey: .stpPriorities)
     }
 }
 

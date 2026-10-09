@@ -305,4 +305,22 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         expectError("PC1 does not run spanning tree") { try rt.handle(.setStpPriority(node: "a", vlan: 1, priority: 4096)) }
         try rt.handle(.setStpPriority(node: "s", vlan: 10, priority: 0))
     }
+
+    @Test func theSnapshotListsEachVlanTreeAndTheConfiguredPriorities() throws {
+        let rt = Runtime()
+        for (id, name) in [("s1", "SW1"), ("s2", "SW2")] { try rt.handle(.addNode(id: id, kind: .switch, name: name)) }
+        for (id, port) in [("x", "Gi0/1"), ("y", "Gi0/2")] {
+            try rt.handle(.connect(id: id, a: IfaceRef(node: "s1", iface: port), b: IfaceRef(node: "s2", iface: port)))
+        }
+        try rt.handle(.setStpPriority(node: "s2", vlan: 1, priority: 28672))
+        for _ in 0..<310 { rt.advance(wallMs: 100) }
+        let s = rt.snapshot()
+        #expect(s.nodes[1].stpPriorities == [StpPriority(vlan: 1, priority: 28672)] && s.nodes[0].stpPriorities.isEmpty)
+        let root = s.nodes[1].stp
+        #expect(root.map(\.vlan) == [1] && root[0].priority == 28672 && root[0].rootPort == nil && root[0].cost == 0)
+        #expect(root[0].root == "28672/1/\(s.nodes[1].ifaces[0].mac)")
+        let other = s.nodes[0].stp[0]
+        #expect(other.priority == 32768 && other.rootPort == "Gi0/1" && other.cost == 4 && other.root == root[0].root)
+        #expect(other.ports == [StpPortRow(iface: "Gi0/1", role: .root, state: .forwarding), StpPortRow(iface: "Gi0/2", role: .blocked, state: .blocking)])
+    }
 }
