@@ -33,6 +33,7 @@ enum SelfTest {
         if editor.snapshot.links.count != 2 { failures.append("expected 2 cables, got \(editor.snapshot.links.count)") }
         await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.0.1/24"))
         await editor.edit(.setIp(node: id("PC2"), iface: "eth0", cidr: "10.0.0.2/24"))
+        await converge(editor)
         await editor.run(.ping(node: id("PC1"), target: "10.0.0.2"))
         for _ in 0..<60 { await editor.tick(wallMs: 100) }
         let lines = editor.snapshot.apps.first?.lines ?? []
@@ -96,6 +97,7 @@ enum SelfTest {
         await editor.addDevice(.pc, at: Pos(x: 760, y: 300))
         let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
         for name in ["SRV1", "PC1", "PC2"] { await editor.connect(id("SW1"), id(name)) }
+        await converge(editor)
         await editor.edit(.setIp(node: id("SRV1"), iface: "eth0", cidr: "10.0.0.2/24"))
         await editor.enableDns(id("SRV1"), true)
         await editor.addDnsRecord(id("SRV1"), name: "srv1.lab", ip: "10.0.0.2", ttl: "")
@@ -141,6 +143,7 @@ enum SelfTest {
         await editor.addDevice(.pc, at: Pos(x: 760, y: 300))
         let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
         for name in ["SRV1", "PC1", "PC2"] { await editor.connect(id("SW1"), id(name)) }
+        await converge(editor)
         for (name, cidr) in [("SRV1", "10.0.0.2/24"), ("PC1", "10.0.0.10/24"), ("PC2", "10.0.0.11/24")] {
             await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
         }
@@ -347,6 +350,7 @@ enum SelfTest {
         for (sw, port, vlan) in [("SW1", "Gi0/1", "10"), ("SW2", "Gi0/2", "10"), ("SW2", "Gi0/3", "20")] {
             await editor.setPort(id(sw), iface: port, .vlan, vlan)
         }
+        await converge(editor)
         for (name, cidr) in [("PC1", "10.0.0.1/24"), ("PC2", "10.0.0.2/24"), ("PC3", "10.0.0.3/24")] {
             await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
         }
@@ -384,6 +388,7 @@ enum SelfTest {
         await editor.edit(.setSwitchport(node: id("SW1"), iface: "Gi0/1", config: PortConfig(mode: .trunk)))
         await editor.setPort(id("SW1"), iface: "Gi0/2", .vlan, "10")
         await editor.setPort(id("SW1"), iface: "Gi0/3", .vlan, "20")
+        await converge(editor)
         await editor.addSubinterface(id("R1"), parent: "Gi0/0", vlan: "20", cidr: "10.0.20.1/24")
         await editor.addSubinterface(id("R1"), parent: "Gi0/0", vlan: "10", cidr: "10.0.10.1/24")
         for (name, cidr, gateway) in [("PC1", "10.0.10.10/24", "10.0.10.1"), ("PC2", "10.0.20.10/24", "10.0.20.1")] {
@@ -415,16 +420,21 @@ enum SelfTest {
         URL(fileURLWithPath: path).deletingPathExtension().path + "-\(suffix).png"
     }
 
-    /// Two switches cabled twice: the ARP broadcast circulates and the UI must warn.
+    /// 31 s of simulated time: switch ports without PortFast reach forwarding after 2 × forward delay (spec M7 §4).
+    private static func converge(_ editor: Editor) async {
+        for _ in 0..<310 { await editor.tick(wallMs: 100) }
+    }
+
+    /// Two hubs cabled twice: the ARP broadcast circulates and the UI must warn (a switch loop is broken by STP).
     private static func loopScenario() async -> [String] {
         let editor = Editor(client: Simulation())
-        await editor.addDevice(.switch, at: Pos(x: 0, y: 0))
-        await editor.addDevice(.switch, at: Pos(x: 200, y: 0))
+        await editor.addDevice(.hub, at: Pos(x: 0, y: 0))
+        await editor.addDevice(.hub, at: Pos(x: 200, y: 0))
         await editor.addDevice(.pc, at: Pos(x: 0, y: 200))
         let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
-        await editor.connect(id("SW1"), id("SW2"))
-        await editor.connect(id("SW1"), id("SW2"))
-        await editor.connect(id("PC1"), id("SW1"))
+        await editor.connect(id("HUB1"), id("HUB2"))
+        await editor.connect(id("HUB1"), id("HUB2"))
+        await editor.connect(id("PC1"), id("HUB1"))
         await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.0.1/24"))
         await editor.run(.ping(node: id("PC1"), target: "10.0.0.9"))
         for _ in 0..<3 { await editor.tick(wallMs: 100) }

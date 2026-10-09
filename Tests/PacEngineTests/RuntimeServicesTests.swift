@@ -10,6 +10,8 @@ private func servicesRuntime() throws -> Runtime {
     try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
     try rt.handle(.addNode(id: "b", kind: .pc, name: "PC2"))
     for (i, n) in ["srv", "a", "b"].enumerated() {
+        // Hosts on PortFast edge ports: forwarding as soon as they are cabled.
+        try rt.handle(.setSwitchport(node: "s", iface: "Gi0/\(i + 1)", config: PortConfig(portfast: true)))
         try rt.handle(.connect(id: "l\(i)", a: IfaceRef(node: n, iface: "eth0"), b: IfaceRef(node: "s", iface: "Gi0/\(i + 1)")))
     }
     try rt.handle(.setIp(node: "srv", iface: "eth0", cidr: "10.0.0.2/24"))

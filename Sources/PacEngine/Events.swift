@@ -1,5 +1,6 @@
+/// state: a spanning-tree port state change (no frame; `SimEvent.note` says which).
 public enum EventKind: String, Sendable {
-    case tx, rx, drop
+    case tx, rx, drop, state
 }
 
 enum DropReason: String, Sendable {
@@ -21,6 +22,8 @@ enum DropReason: String, Sendable {
     case vlanNotAllowed = "vlan-not-allowed"
     /// A tagged frame reached a host, or a router with no subinterface for its VLAN.
     case unknownVlan = "unknown-vlan"
+    /// A switch port in blocking, listening or learning state discards what it receives (802.1D).
+    case stpDiscarding = "stp-discarding"
 }
 
 struct SimEvent: Sendable {
@@ -32,6 +35,8 @@ struct SimEvent: Sendable {
     var frame: EthernetFrame? = nil
     var packet: Ipv4Packet? = nil
     var reason: DropReason? = nil
+    /// A spanning-tree state change: "VLAN 10: listening → learning".
+    var note: String? = nil
 }
 
 /// Ring buffer: keeps the latest `capacity` events.

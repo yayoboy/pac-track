@@ -47,8 +47,8 @@ final class Sim {
     }
 
     func emit(_ kind: EventKind, node: String, iface: String? = nil, frame: EthernetFrame? = nil,
-              packet: Ipv4Packet? = nil, reason: DropReason? = nil) {
-        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason))
+              packet: Ipv4Packet? = nil, reason: DropReason? = nil, note: String? = nil) {
+        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason, note: note))
     }
 
     /// Hubs and switches report every frame they receive.
@@ -67,6 +67,19 @@ final class Sim {
 
     func adopt(_ node: Node) {
         nodes.append(node)
+    }
+
+    /// VLANs in the network: one exists where a switch port uses it as access or native VLAN (spec M7 §2: no VLAN database).
+    // ponytail: a removed switch stays in `nodes` (powered off) and its VLANs count until the network is reloaded
+    func vlans() -> Set<Int> {
+        Set(nodes.compactMap { $0 as? Switch }.flatMap { sw in
+            sw.interfaces.map { $0.switchport.config.mode == .access ? $0.switchport.config.vlan : $0.switchport.config.native }
+        })
+    }
+
+    /// A port's VLANs changed somewhere: every switch brings its PVST+ instances in line.
+    func syncStp() {
+        for case let sw as Switch in nodes { sw.syncStp() }
     }
 
     func run(_ duration: Int) {

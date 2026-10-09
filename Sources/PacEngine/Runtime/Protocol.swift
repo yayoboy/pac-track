@@ -45,13 +45,36 @@ public struct PortConfig: Codable, Equatable, Sendable {
     public var vlan: Int
     public var allowed: String
     public var native: Int
+    /// IOS `spanning-tree portfast` (access ports only): straight to forwarding, and its changes send no TCN (spec M7 §4).
+    public var portfast: Bool
 
-    public init(mode: PortMode = .access, vlan: Int = 1, allowed: String = "all", native: Int = 1) {
+    public init(mode: PortMode = .access, vlan: Int = 1, allowed: String = "all", native: Int = 1, portfast: Bool = false) {
         self.mode = mode
         self.vlan = vlan
         self.allowed = allowed
         self.native = native
+        self.portfast = portfast
     }
+
+    /// Files written before M7b have no `portfast`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(PortMode.self, forKey: .mode)
+        vlan = try c.decode(Int.self, forKey: .vlan)
+        allowed = try c.decode(String.self, forKey: .allowed)
+        native = try c.decode(Int.self, forKey: .native)
+        portfast = try c.decodeIfPresent(Bool.self, forKey: .portfast) ?? false
+    }
+}
+
+/// A port's 802.1D role in one VLAN (alternate and backup ports are "blocked", as the spec's table shows them).
+public enum StpRole: String, Sendable {
+    case root, designated, blocked
+}
+
+/// A port's 802.1D state in one VLAN; a port that is down or outside the VLAN is not listed.
+public enum StpState: String, Sendable {
+    case blocking, listening, learning, forwarding
 }
 
 public enum Proto: String, CaseIterable, Sendable {

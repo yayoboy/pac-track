@@ -92,7 +92,7 @@ func eventView(_ e: SimEvent) -> EventView {
     case .arp(let a)?: (.arp, describe(a))
     case .ipv4(let p)?: (proto(of: p), describe(p))
     case .bpdu(let b)?: (.stp, describe(b))
-    case nil: (.arp, "") // every logged event carries a frame or a packet
+    case nil: (.stp, e.note ?? "") // a spanning-tree state change; every other logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,
                      frameId: e.frame?.id, bytes: e.frame?.size ?? e.packet?.size ?? 0, info: info, reason: e.reason?.rawValue)

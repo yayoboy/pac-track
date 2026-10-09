@@ -29,6 +29,7 @@ private func stick() throws -> Runtime {
     }
     try rt.handle(.addRoute(node: "a", cidr: "0.0.0.0/0", nextHop: "10.0.10.1"))
     try rt.handle(.addRoute(node: "b", cidr: "0.0.0.0/0", nextHop: "10.0.20.1"))
+    runFor(rt, wallMs: 30_000) // ports reach forwarding after 2 × forward delay
     return rt
 }
 
@@ -89,6 +90,7 @@ private func stick() throws -> Runtime {
         try rt.handle(.addNode(id: "c", kind: .pc, name: "PC3"))
         try cable(rt, "4", "c", "eth0", "s", "Gi0/7")
         try rt.handle(.setSwitchport(node: "s", iface: "Gi0/7", config: PortConfig(mode: .trunk))) // a PC on a trunk port
+        runFor(rt, wallMs: 30_000) // ports reach forwarding after 2 × forward delay
         try rt.handle(.removeSubinterface(node: "r", iface: "Gi0/0.10"))
         try rt.handle(.ping(node: "a", target: "10.0.10.1")) // PC1's ARP broadcast reaches both trunks tagged 10
         runFor(rt, wallMs: 1_000)

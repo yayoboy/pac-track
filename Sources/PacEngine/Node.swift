@@ -80,7 +80,15 @@ class Node {
     /// Interfaces taken away (a smaller switch): kept alive while a frame that was on their cable finishes (links refer to them `unowned`).
     // ponytail: never freed before the Sim is replaced; at most 40 per resize
     private var retired: [Interface] = []
-    var powered = true
+    var powered = true {
+        // The devices at the other end of its cables see their ports go down, or up, at once (spec M7 §4).
+        didSet {
+            guard powered != oldValue else { return }
+            for i in interfaces {
+                if let peer = i.link?.peer(i) { peer.node.linkChanged(peer) }
+            }
+        }
+    }
 
     init(sim: Sim, id: String) {
         self.sim = sim
@@ -125,4 +133,7 @@ class Node {
 
     /// Power on: starts what boots with the device (a DHCP client); configuration was kept.
     func powerOn() {}
+
+    /// The cable at `iface` was plugged, pulled, failed or restored, or the device at its other end was switched off or on.
+    func linkChanged(_ iface: Interface) {}
 }

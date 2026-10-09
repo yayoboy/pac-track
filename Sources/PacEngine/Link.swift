@@ -44,7 +44,9 @@ private final class Direction {
 
 /// Full-duplex point-to-point link with a FIFO tail-drop queue per direction.
 final class Link {
-    var up = true
+    var up = true {
+        didSet { if up != oldValue { notify() } }
+    }
     private(set) var opts: LinkOptions
     unowned let sim: Sim
     unowned let a: Interface
@@ -63,9 +65,16 @@ final class Link {
         self.opts = opts
         a.link = self
         b.link = self
+        notify()
     }
 
     func peer(_ i: Interface) -> Interface { i === a ? b : a }
+
+    /// Both ends see a change of the cable at once (spec M7 §4).
+    private func notify() {
+        a.node.linkChanged(a)
+        b.node.linkChanged(b)
+    }
 
     /// From `a` to `b`, and back.
     func counters() -> (ab: LinkCounters, ba: LinkCounters) {

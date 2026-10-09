@@ -26,6 +26,7 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         try sw.setSwitchport("Gi0/1", PortConfig(vlan: 10))
         try sw.setSwitchport("Gi0/2", PortConfig(vlan: 10))
         try sw.setSwitchport("Gi0/3", PortConfig(vlan: 20))
+        sim.run(30 * S) // ports reach forwarding after 2 × forward delay
         try p[0].sendRaw()
         sim.run(MS)
         #expect(p.map { $0.got.count } == [0, 1, 0])
@@ -48,6 +49,7 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         _ = try Link(sim: sim, try hub.iface("p2"), try t.iface("eth0"))
         try sw.setSwitchport("Gi0/1", PortConfig(vlan: 10))
         try sw.setSwitchport("Gi0/8", PortConfig(mode: .trunk))
+        sim.run(30 * S) // ports reach forwarding after 2 × forward delay
         try p[0].sendRaw()
         try p[1].sendRaw()
         sim.run(MS)
@@ -66,6 +68,7 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         try sw.setSwitchport("Gi0/1", PortConfig(vlan: 20))
         try sw.setSwitchport("Gi0/2", PortConfig(vlan: 10))
         try sw.setSwitchport("Gi0/3", PortConfig(mode: .trunk, allowed: "1,10"))
+        sim.run(30 * S) // ports reach forwarding after 2 × forward delay
         try p[0].sendRaw() // VLAN 20 does not leave on the trunk
         sim.run(MS)
         #expect(p[2].got.isEmpty)
@@ -117,6 +120,7 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
                                                      ("s2", "Gi0/8", PortConfig(mode: .trunk)), ("s2", "Gi0/1", PortConfig(vlan: 10)),
                                                      ("s2", "Gi0/2", PortConfig(vlan: 20))]
         for (sw, port, config) in ports { try rt.handle(.setSwitchport(node: sw, iface: port, config: config)) }
+        runFor(rt, wallMs: 30_000) // ports reach forwarding after 2 × forward delay
         for (node, cidr) in [("a", "10.0.0.1/24"), ("b", "10.0.0.2/24"), ("c", "10.0.0.3/24")] {
             try rt.handle(.setIp(node: node, iface: "eth0", cidr: cidr))
         }

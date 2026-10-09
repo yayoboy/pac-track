@@ -1,15 +1,15 @@
 import Testing
 @testable import PacEngine
 
-/// Two switches cabled twice and a PC asking ARP into them: a broadcast storm that uses up every tick's event budget.
+/// Two hubs cabled twice and a PC asking ARP into them: a broadcast storm that uses up every tick's event budget (STP breaks a switch loop).
 private func storm() throws -> Runtime {
     let rt = Runtime()
     try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
-    try rt.handle(.addNode(id: "s1", kind: .switch, name: "SW1"))
-    try rt.handle(.addNode(id: "s2", kind: .switch, name: "SW2"))
-    try rt.handle(.connect(id: "x", a: IfaceRef(node: "s1", iface: "Gi0/1"), b: IfaceRef(node: "s2", iface: "Gi0/1")))
-    try rt.handle(.connect(id: "y", a: IfaceRef(node: "s1", iface: "Gi0/2"), b: IfaceRef(node: "s2", iface: "Gi0/2")))
-    try rt.handle(.connect(id: "z", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "s1", iface: "Gi0/3")))
+    try rt.handle(.addNode(id: "s1", kind: .hub, name: "HUB1"))
+    try rt.handle(.addNode(id: "s2", kind: .hub, name: "HUB2"))
+    try rt.handle(.connect(id: "x", a: IfaceRef(node: "s1", iface: "p1"), b: IfaceRef(node: "s2", iface: "p1")))
+    try rt.handle(.connect(id: "y", a: IfaceRef(node: "s1", iface: "p2"), b: IfaceRef(node: "s2", iface: "p2")))
+    try rt.handle(.connect(id: "z", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "s1", iface: "p3")))
     try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "10.0.0.1/24"))
     try rt.handle(.ping(node: "a", target: "10.0.0.9"))
     return rt

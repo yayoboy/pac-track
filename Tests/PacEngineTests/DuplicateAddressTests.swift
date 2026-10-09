@@ -61,6 +61,7 @@ private func lab() throws -> Runtime {
         let rt = try lab()
         try rt.handle(.setIp(node: "r", iface: "Gi0/0", cidr: "10.0.0.1/24"))
         try rt.handle(.setDhcpServer(node: "r", config: DhcpConfig(start: "10.0.0.100", end: "10.0.0.199")))
+        for _ in 0..<300 { rt.advance(wallMs: 100) } // ports reach forwarding after 2 × forward delay
         try rt.handle(.setIfaceMode(node: "a", iface: "eth0", mode: .dhcp))
         for _ in 0..<10 { rt.advance(wallMs: 100) }
         #expect(rt.snapshot().nodes[0].ifaces[0].cidr == "10.0.0.100/24")

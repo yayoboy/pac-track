@@ -21,6 +21,7 @@ final class Probe: Node {
     }
 
     override func receive(_ frame: EthernetFrame, on iface: Interface) {
+        if case .bpdu = frame.payload { return } // like a PC's NIC, deaf to the PVST+ group address
         got.append((frame, iface.name, sim.now))
     }
 
@@ -69,6 +70,7 @@ func lan(_ sim: Sim = Sim()) throws -> (sim: Sim, sw: Switch, a: Host, b: Host) 
     _ = try Link(sim: sim, try b.iface("eth0"), try sw.iface("Gi0/2"))
     try a.setIp("eth0", "10.0.0.1/24")
     try b.setIp("eth0", "10.0.0.2/24")
+    sim.run(30 * S) // ports reach forwarding after 2 × forward delay
     return (sim, sw, a, b)
 }
 

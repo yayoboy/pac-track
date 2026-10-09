@@ -11,6 +11,7 @@ private func lanRuntime() throws -> Runtime {
     try rt.handle(.connect(id: "l2", a: IfaceRef(node: "b", iface: "eth0"), b: IfaceRef(node: "s", iface: "Gi0/2")))
     try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "10.0.0.1/24"))
     try rt.handle(.setIp(node: "b", iface: "eth0", cidr: "10.0.0.2/24"))
+    runFor(rt, wallMs: 30_000) // ports reach forwarding after 2 × forward delay
     return rt
 }
 
@@ -134,18 +135,19 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
 
     @Test func simulationModeStopsTheClockAndStepsToTheNextLoggedEvent() throws {
         let rt = try lanRuntime()
+        let (start, first) = (rt.snapshot().timeNs, rt.snapshot().eventCount) // converged: 30 s of BPDUs and state changes
         try rt.handle(.setMode(.simulation))
         try rt.handle(.ping(node: "a", target: "10.0.0.2"))
         rt.advance(wallMs: 100)
         var s = rt.snapshot()
-        #expect(s.mode == .simulation && !s.running && s.timeNs == 0 && s.eventCount == 0)
+        #expect(s.mode == .simulation && !s.running && s.timeNs == start && s.eventCount == first)
         try rt.handle(.step)
         s = rt.snapshot()
-        #expect(s.eventCount == 1)
-        #expect(rt.events(from: 0).map { "\($0.kind.rawValue) \($0.node) \($0.proto.rawValue)" } == ["tx a arp"])
+        #expect(s.eventCount == first + 1)
+        #expect(rt.events(from: first).map { "\($0.kind.rawValue) \($0.node) \($0.proto.rawValue)" } == ["tx a arp"])
         try rt.handle(.step) // the request reaches the switch, which floods it in the same instant
-        #expect(rt.events(from: 1).map { "\($0.kind.rawValue) \($0.node)" } == ["rx s", "tx s"])
-        #expect(rt.snapshot().timeNs == 1172)
+        #expect(rt.events(from: first + 1).map { "\($0.kind.rawValue) \($0.node)" } == ["rx s", "tx s"])
+        #expect(rt.snapshot().timeNs == start + 1172)
         try rt.handle(.setMode(.realtime))
         #expect(rt.snapshot().running)
     }
@@ -196,7 +198,8 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         runFor(rt, wallMs: 500)
         let events = rt.events(from: 0)
         #expect(events.map(\.id) == Array(0..<events.count))
-        #expect(events[0].info == "Chi ha 10.0.0.2? Rispondi a 10.0.0.1" && events[0].bytes == 42)
+        let request = try #require(events.first { $0.proto == .arp }) // after the convergence's BPDUs and state changes
+        #expect(request.info == "Chi ha 10.0.0.2? Rispondi a 10.0.0.1" && request.bytes == 42)
         let echo = try #require(events.first { $0.proto == .icmp && $0.kind == .tx && $0.node == "a" })
         #expect(echo.info.hasPrefix("10.0.0.1 → 10.0.0.2 Echo request id=") && echo.info.hasSuffix(" seq=1 ttl=64"))
         #expect(echo.bytes == 98)
@@ -266,14 +269,15 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(t.nodes[0].powered)
     }
 
+    /// Two hubs cabled twice (STP breaks a switch loop).
     @Test func reportsAnL2LoopAsAWarningAndBoundsTheWorkPerTick() throws {
         let rt = Runtime()
         try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
-        try rt.handle(.addNode(id: "s1", kind: .switch, name: "SW1"))
-        try rt.handle(.addNode(id: "s2", kind: .switch, name: "SW2"))
-        try rt.handle(.connect(id: "x", a: IfaceRef(node: "s1", iface: "Gi0/1"), b: IfaceRef(node: "s2", iface: "Gi0/1")))
-        try rt.handle(.connect(id: "y", a: IfaceRef(node: "s1", iface: "Gi0/2"), b: IfaceRef(node: "s2", iface: "Gi0/2")))
-        try rt.handle(.connect(id: "z", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "s1", iface: "Gi0/3")))
+        try rt.handle(.addNode(id: "s1", kind: .hub, name: "HUB1"))
+        try rt.handle(.addNode(id: "s2", kind: .hub, name: "HUB2"))
+        try rt.handle(.connect(id: "x", a: IfaceRef(node: "s1", iface: "p1"), b: IfaceRef(node: "s2", iface: "p1")))
+        try rt.handle(.connect(id: "y", a: IfaceRef(node: "s1", iface: "p2"), b: IfaceRef(node: "s2", iface: "p2")))
+        try rt.handle(.connect(id: "z", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "s1", iface: "p3")))
         try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "10.0.0.1/24"))
         try rt.handle(.ping(node: "a", target: "10.0.0.9"))
         runFor(rt, wallMs: 300)
