@@ -122,6 +122,12 @@ final class Stp {
         if isRoot && !wasRoot { becameRoot() }
     }
 
+    /// 802.1D set_path_cost: a cable changed bandwidth; roles are recomputed at once.
+    func pathCostChanged() {
+        configurationUpdate()
+        portStateSelection()
+    }
+
     /// PortFast turned on for `p`: listening or learning, it forwards now.
     func portfastOn(_ p: Interface) {
         guard portfast(p), let state = state(p), state == .listening || state == .learning else { return }

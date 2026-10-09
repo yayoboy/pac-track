@@ -136,6 +136,16 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         #expect(b.got.count == 1)
     }
 
+    /// 802.1D set_path_cost: a slower root-port cable moves the root port at once, not at the next BPDU.
+    @Test func aBandwidthChangeRecomputesTheRootPortAtOnce() throws {
+        let sim = Sim()
+        let (_, sw2, l1, _, _) = try twoCables(sim)
+        sim.run(31 * S)
+        try l1.update(LinkOptions(bandwidthBps: 100e6)) // cost 19 on Gi0/1, 4 on Gi0/2
+        #expect(tree(sw2) == ["Gi0/1 blocked blocking", "Gi0/2 root listening", "Gi0/3 designated forwarding"])
+        #expect(sw2.stp[1]?.rootCost == 4)
+    }
+
     @Test func anIndirectFailureWaitsForMaxAgeBeforeTheBlockedPortStartsOver() throws {
         let sim = Sim()
         let (sw1, sw2, sw3, l12, _, _) = try triangle(sim)

@@ -85,6 +85,7 @@ final class Link {
     func update(_ opts: LinkOptions) throws {
         try validateLinkOptions(opts)
         self.opts = opts
+        notify() // a new bandwidth is a new STP path cost
     }
 
     /// Pulls the cable: both interfaces become free, frames in flight are lost.

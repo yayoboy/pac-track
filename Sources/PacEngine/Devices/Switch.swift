@@ -95,6 +95,8 @@ final class Switch: Node {
 
     override func linkChanged(_ iface: Interface) {
         syncStp()
+        // The cable may have changed bandwidth, hence path cost (recomputing an unchanged tree changes nothing).
+        for vlan in stp.keys.sorted() { stp[vlan]?.pathCostChanged() }
     }
 
     override func powerOn() {
