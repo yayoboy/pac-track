@@ -118,6 +118,8 @@ public enum Command: Sendable {
     case setPorts(id: String, count: Int)
     /// A switch port's 802.1Q role and VLANs (switches only); the addresses the port learned are flushed.
     case setSwitchport(node: String, iface: String, config: PortConfig)
+    /// IOS `spanning-tree vlan <n> priority <p>` (switches only): 0…61440 in steps of 4096.
+    case setStpPriority(node: String, vlan: Int, priority: Int)
     /// Router subinterface "<physical>.<VLAN>" (IOS `interface Gi0/0.10` + `encapsulation dot1q 10`), routers only.
     case addSubinterface(node: String, iface: String)
     /// Refused while NAT or a firewall rule names it.
@@ -157,6 +159,7 @@ public enum Command: Sendable {
         case .setPower: "setPower"
         case .setPorts: "setPorts"
         case .setSwitchport: "setSwitchport"
+        case .setStpPriority: "setStpPriority"
         case .addSubinterface: "addSubinterface"
         case .removeSubinterface: "removeSubinterface"
         case .updateLink: "updateLink"
@@ -636,3 +639,5 @@ public struct Topology: Codable, Equatable, Sendable {
 public let SPEEDS: [Double] = [0.1, 0.5, 1, 2, 5, 10, 100]
 /// Switch sizes offered in the Porte tab (spec §5.5).
 public let SWITCH_PORTS = [8, 24, 48]
+/// Bridge priorities offered in the switch's Servizi tab (spec M7 §5): multiples of 4096, the low 12 bits being the VLAN.
+public let STP_PRIORITIES = Array(stride(from: 0, through: 61440, by: 4096))

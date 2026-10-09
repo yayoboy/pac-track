@@ -12,6 +12,8 @@ final class Switch: Node {
     private var table: [MacKey: (iface: Interface, seen: Int)] = [:]
     /// PVST+ instances by VLAN: one for each VLAN of the network that an up port of this switch carries.
     private(set) var stp: [Int: Stp] = [:]
+    /// IOS `spanning-tree vlan <n> priority`, for the VLANs where it is not the default 32768.
+    private(set) var stpPriority: [Int: Int] = [:]
 
     init(sim: Sim, id: String, ports: Int = 8) {
         super.init(sim: sim, id: id)
@@ -34,6 +36,15 @@ final class Switch: Node {
         port.switchport = try Switchport(c)
         table = table.filter { $0.value.iface !== port }
         sim.syncStp()
+        // PortFast turned on: a port still on its way to forwarding gets there now (turned off, it waits for the next recomputation).
+        if c.portfast { for vlan in stp.keys.sorted() { stp[vlan]?.portfastOn(port) } }
+    }
+
+    func setStpPriority(_ vlan: Int, _ priority: Int) throws {
+        try checkVlan(vlan)
+        guard STP_PRIORITIES.contains(priority) else { throw EngineError("STP priority must be a multiple of 4096 between 0 and 61440") }
+        stpPriority[vlan] = priority == STP_PRIORITY ? nil : priority
+        stp[vlan]?.setPriority(priority)
     }
 
     func lookup(_ mac: Mac, vlan: Int) -> Interface? {

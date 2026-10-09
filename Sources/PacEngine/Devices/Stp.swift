@@ -49,7 +49,7 @@ final class Stp {
     init(sw: Switch, vlan: Int, members: [Interface]) {
         self.sw = sw
         self.vlan = vlan
-        bridge = BridgeId(priority: STP_PRIORITY, vlan: vlan, mac: sw.interfaces[0].mac)
+        bridge = BridgeId(priority: sw.stpPriority[vlan] ?? STP_PRIORITY, vlan: vlan, mac: sw.interfaces[0].mac)
         root = bridge
         for p in members { enable(p) }
         configBpduGeneration()
@@ -109,6 +109,24 @@ final class Stp {
                 tcnDue = nil
             }
         }
+    }
+
+    /// 802.1D set_bridge_priority: a better bridge ID can take the root at once.
+    func setPriority(_ priority: Int) {
+        let wasRoot = isRoot
+        let old = bridge
+        bridge.priority = priority
+        for p in members where self[p].designatedBridge == old && self[p].designatedPort == portId(p) { self[p].designatedBridge = bridge }
+        configurationUpdate()
+        portStateSelection()
+        if isRoot && !wasRoot { becameRoot() }
+    }
+
+    /// PortFast turned on for `p`: listening or learning, it forwards now.
+    func portfastOn(_ p: Interface) {
+        guard portfast(p), let state = state(p), state == .listening || state == .learning else { return }
+        setState(p, .forwarding)
+        self[p].fdDue = nil
     }
 
     // MARK: 802.1D procedures

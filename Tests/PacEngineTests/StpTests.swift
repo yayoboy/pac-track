@@ -232,4 +232,77 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         #expect(tree(sw2) == ["Gi0/1 root forwarding", "Gi0/2 designated forwarding"])
         #expect(tree(sw3) == ["Gi0/1 root forwarding", "Gi0/2 blocked blocking"])
     }
+
+    @Test func aPortFastPortForwardsAtOnceAndNeverSendsATcn() throws {
+        let sim = Sim()
+        let sw1 = Switch(sim: sim, id: "SW1")
+        let sw2 = Switch(sim: sim, id: "SW2")
+        _ = try Link(sim: sim, try sw1.iface("Gi0/1"), try sw2.iface("Gi0/1"))
+        try sw2.setSwitchport("Gi0/2", PortConfig(portfast: true))
+        try sw2.setSwitchport("Gi0/5", PortConfig(mode: .trunk, portfast: true)) // PortFast acts on access ports only
+        sim.run(31 * S)
+        let t = sim.now
+        let a = Probe(sim: sim, id: "A")
+        let c = Probe(sim: sim, id: "C")
+        let d = Probe(sim: sim, id: "D")
+        let fast = try Link(sim: sim, try a.iface("eth0"), try sw2.iface("Gi0/2"))
+        _ = try Link(sim: sim, try c.iface("eth0"), try sw2.iface("Gi0/4"))
+        _ = try Link(sim: sim, try d.iface("eth0"), try sw2.iface("Gi0/5"))
+        #expect(tree(sw2) == ["Gi0/1 root forwarding", "Gi0/2 designated forwarding", "Gi0/4 designated listening", "Gi0/5 designated listening"])
+        sim.run(5 * S)
+        try sw2.setSwitchport("Gi0/4", PortConfig(portfast: true)) // turned on while listening: forwarding at once
+        #expect(sw2.stp[1]?.state(try sw2.iface("Gi0/4")) == .forwarding)
+        fast.up = false
+        sim.run(S)
+        fast.up = true
+        sim.run(S)
+        #expect(tcns(sim, since: t).isEmpty)
+        sim.run(30 * S)
+        #expect(tcns(sim, since: t) == ["SW2 Gi0/1"]) // Gi0/5, a trunk, went the slow way and announced it
+    }
+
+    @Test func eachVlanElectsItsOwnRootAndBlocksItsOwnPort() throws {
+        let sim = Sim()
+        let sw1 = Switch(sim: sim, id: "SW1")
+        let sw2 = Switch(sim: sim, id: "SW2")
+        for sw in [sw1, sw2] {
+            for port in ["Gi0/1", "Gi0/2"] { try sw.setSwitchport(port, PortConfig(mode: .trunk)) }
+            try sw.setSwitchport("Gi0/3", PortConfig(vlan: 10))
+            try sw.setSwitchport("Gi0/4", PortConfig(vlan: 20))
+        }
+        try sw2.setStpPriority(20, 4096)
+        _ = try Link(sim: sim, try sw1.iface("Gi0/1"), try sw2.iface("Gi0/1"))
+        _ = try Link(sim: sim, try sw1.iface("Gi0/2"), try sw2.iface("Gi0/2"))
+        sim.run(31 * S)
+        #expect(sw1.stp.keys.sorted() == [1, 10, 20])
+        #expect(sw1.stp[10]?.isRoot == true && sw2.stp[20]?.isRoot == true)
+        #expect(sw1.stp[20]?.root.text == "4096/20/\(try sw2.iface("Gi0/1").mac)")
+        #expect(tree(sw2, 10) == ["Gi0/1 root forwarding", "Gi0/2 blocked blocking"])
+        #expect(tree(sw1, 20) == ["Gi0/1 root forwarding", "Gi0/2 blocked blocking"])
+        let tags = sim.log.all.filter { $0.kind == .tx && $0.node == "SW1" && $0.iface == "Gi0/1" && $0.frame?.dst == SSTP_MAC }.map { $0.frame?.vlan ?? 0 }
+        #expect(Set(tags) == [0, 10, 20]) // VLAN 1 is native: untagged
+    }
+
+    @Test func aLowerPriorityTakesTheRootAtOnce() throws {
+        let sim = Sim()
+        let (sw1, sw2, _, _, _) = try twoCables(sim)
+        sim.run(31 * S)
+        try sw2.setStpPriority(1, 28672)
+        #expect(sw2.stp[1]?.isRoot == true)
+        sim.run(MS)
+        #expect(sw1.stp[1]?.root == sw2.stp[1]?.bridge)
+        #expect(tree(sw1) == ["Gi0/1 root forwarding", "Gi0/2 blocked blocking", "Gi0/3 designated forwarding"])
+    }
+
+    @Test func refusesPrioritiesThatAreNotMultiplesOf4096() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "s", kind: .switch, name: "SW1"))
+        try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
+        for p in [1000, -4096, 65536] {
+            expectError("STP priority must be a multiple of 4096 between 0 and 61440") { try rt.handle(.setStpPriority(node: "s", vlan: 10, priority: p)) }
+        }
+        expectError("VLAN must be between 1 and 4094") { try rt.handle(.setStpPriority(node: "s", vlan: 0, priority: 4096)) }
+        expectError("PC1 does not run spanning tree") { try rt.handle(.setStpPriority(node: "a", vlan: 1, priority: 4096)) }
+        try rt.handle(.setStpPriority(node: "s", vlan: 10, priority: 0))
+    }
 }

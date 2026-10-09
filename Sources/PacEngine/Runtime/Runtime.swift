@@ -237,6 +237,10 @@ public final class Runtime {
             let n = try get(node)
             guard let sw = n as? Switch else { throw EngineError("\(n.name) has no switch ports") }
             try sw.setSwitchport(iface, config)
+        case let .setStpPriority(node, vlan, priority):
+            let n = try get(node)
+            guard let sw = n as? Switch else { throw EngineError("\(n.name) does not run spanning tree") }
+            try sw.setStpPriority(vlan, priority)
         case let .addSubinterface(node, iface):
             try router(node).addSubinterface(iface)
         case let .removeSubinterface(node, iface):
