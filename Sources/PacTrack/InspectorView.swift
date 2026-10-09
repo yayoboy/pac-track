@@ -160,6 +160,16 @@ private struct NodeInspector: View {
             if node.kind == .switch {
                 TableSection(title: "Tabella MAC", head: ["VLAN", "MAC", "Porta", "Età"],
                              rows: node.mac.map { ["\($0.vlan)", $0.mac, $0.iface, "\($0.ageS)s"] })
+                ForEach(node.stp, id: \.vlan) { st in
+                    VStack(alignment: .leading, spacing: 4) {
+                        TableSection(title: "Spanning Tree VLAN \(st.vlan)", head: ["Porta", "Ruolo", "Stato"],
+                                     rows: st.ports.map { [$0.iface, $0.role.rawValue, $0.state.rawValue] })
+                        Text("Root \(st.root) · costo \(st.cost) · " + (st.rootPort.map { "root port \($0)" } ?? "questo switch è la root"))
+                            .font(Theme.small)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else {
                 TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
                              rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
@@ -183,7 +193,7 @@ private struct NodeInspector: View {
     }
 }
 
-/// A switch port's VLAN role (spec M7 §5): Access with its VLAN, or Trunk with the allowed VLANs and the native one; errors under the field.
+/// A switch port's VLAN role (spec M7 §5): Access with its VLAN and PortFast, or Trunk with the allowed VLANs and the native one; errors under the field.
 private struct SwitchportFields: View {
     let node: String
     let iface: String
@@ -192,19 +202,32 @@ private struct SwitchportFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Picker("", selection: Binding(get: { port.mode }, set: { mode in
-                var c = port
-                c.mode = mode
-                Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
-            })) {
-                Text("Access").tag(PortMode.access)
-                Text("Trunk").tag(PortMode.trunk)
+            HStack(spacing: 12) {
+                Picker("", selection: Binding(get: { port.mode }, set: { mode in
+                    var c = port
+                    c.mode = mode
+                    Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
+                })) {
+                    Text("Access").tag(PortMode.access)
+                    Text("Trunk").tag(PortMode.trunk)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityIdentifier("port-mode-\(iface)")
+                if port.mode == .access {
+                    Toggle("PortFast", isOn: Binding(get: { port.portfast }, set: { on in
+                        var c = port
+                        c.portfast = on
+                        Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
+                    }))
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .help("Forwarding subito, senza TCN: per le porte verso PC e server")
+                    .accessibilityIdentifier("portfast-\(iface)")
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-            .accessibilityIdentifier("port-mode-\(iface)")
             HStack(alignment: .top) {
                 ForEach(port.mode == .access ? [PortField.vlan] : [.allowed, .native], id: \.self) { field in
                     CommitField(label: field.label, value: field.format(port), errorKey: "port:\(node):\(iface):\(field.rawValue)", editor: editor) {

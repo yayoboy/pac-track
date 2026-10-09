@@ -40,7 +40,7 @@ public enum InspectorTab: String, CaseIterable, Sendable {
 
 public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     switch kind {
-    case .switch: [.ports, .tables]
+    case .switch: [.ports, .services, .tables]
     case .hub: [.ports]
     case .router, .server, .cloud: [.interfaces, .routing, .services, .tables, .app]
     case .pc, .laptop: [.interfaces, .routing, .tables, .app]
@@ -319,6 +319,13 @@ public func isTrunk(_ link: LinkView, in nodes: [NodeView]) -> Bool {
     [link.a, link.b].contains { end in
         nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.switchport?.mode == .trunk
     }
+}
+
+/// The dot at a cable end (spec M7 §5): blocking if the port blocks in any VLAN, else listening or learning if it is on its way
+/// in any; nil once it forwards in all of them (or is no switch port).
+public func stpDot(_ end: IfaceRef, in nodes: [NodeView]) -> StpState? {
+    let states = nodes.first { $0.id == end.node }?.stp.compactMap { $0.ports.first { $0.iface == end.iface }?.state } ?? []
+    return states.contains(.blocking) ? .blocking : states.first { $0 != .forwarding }
 }
 
 public func leaseRows(_ leases: [LeaseRow]) -> [[String]] {

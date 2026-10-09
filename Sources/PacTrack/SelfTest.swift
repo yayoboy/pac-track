@@ -84,6 +84,7 @@ enum SelfTest {
         failures += await exportScenario(output: output)
         failures += await vlanScenario(output: output)
         failures += await stickScenario(output: output)
+        failures += await stpScenario(output: output)
         return failures
     }
 
@@ -412,6 +413,49 @@ enum SelfTest {
         editor.select(.node(id("R1")))
         editor.inspectorTab = .interfaces
         if !render(editor, to: sibling(output, "m7a-stick")) { failures.append("could not write the M7a router-on-a-stick image") }
+        return failures
+    }
+
+    /// M7b: SW1 and SW2 cabled twice, PC1 on a PortFast port of SW1, PC2 on SW2. Once converged SW2 blocks its second cable (red dot)
+    /// and the ping crosses; SW1's Porte tab with PortFast, SW2's Spanning Tree table and priorities, an STP PDU.
+    private static func stpScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 460, y: 160))
+        await editor.addDevice(.switch, at: Pos(x: 760, y: 160))
+        await editor.addDevice(.pc, at: Pos(x: 460, y: 380))
+        await editor.addDevice(.pc, at: Pos(x: 760, y: 380))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("SW1"), id("SW2")) // Gi0/1 — Gi0/1
+        await editor.connect(id("SW1"), id("SW2")) // Gi0/2 — Gi0/2
+        await editor.connect(id("SW1"), id("PC1")) // SW1 Gi0/3
+        await editor.connect(id("SW2"), id("PC2")) // SW2 Gi0/3
+        await editor.edit(.setSwitchport(node: id("SW1"), iface: "Gi0/3", config: PortConfig(portfast: true)))
+        for (name, cidr) in [("PC1", "10.0.0.1/24"), ("PC2", "10.0.0.2/24")] {
+            await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
+        }
+        await converge(editor)
+        await editor.run(.ping(node: id("PC1"), target: "10.0.0.2"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") { failures.append("ping across the tree \(lines)") }
+        let tree = editor.snapshot.nodes.first { $0.name == "SW2" }?.stp.first?.ports.map { "\($0.iface) \($0.role.rawValue) \($0.state.rawValue)" }
+        if tree != ["Gi0/1 root forwarding", "Gi0/2 blocked blocking", "Gi0/3 designated forwarding"] { failures.append("SW2 tree \(tree ?? [])") }
+        if stpDot(IfaceRef(node: id("SW2"), iface: "Gi0/2"), in: editor.snapshot.nodes) != .blocking { failures.append("no red dot on SW2 Gi0/2") }
+        if let bpdu = editor.events.last(where: { $0.proto == .stp && $0.kind == .tx && $0.node == id("SW1") }) {
+            await editor.selectEvent(bpdu.id)
+            if editor.pdu?.map(\.title) != ["IEEE 802.3 Ethernet", "LLC/SNAP", "STP"] { failures.append("BPDU PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no BPDU sent by SW1")
+        }
+        editor.select(.node(id("SW1")))
+        editor.inspectorTab = .ports
+        if !render(editor, to: sibling(output, "m7b-ports")) { failures.append("could not write the M7b ports image") }
+        editor.select(.node(id("SW2")))
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m7b-stp")) { failures.append("could not write the M7b STP table image") }
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m7b-services")) { failures.append("could not write the M7b services image") }
         return failures
     }
 

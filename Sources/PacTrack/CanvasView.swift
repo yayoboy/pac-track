@@ -271,6 +271,19 @@ struct CanvasView: View {
                 .padding(.horizontal, 3)
                 .background(Theme.bg)
                 .position(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            // STP at each end (spec M7 §5): red blocking, amber listening/learning, nothing while forwarding.
+            ForEach([link.a, link.b], id: \.self) { end in
+                if let state = stpDot(end, in: editor.snapshot.nodes) {
+                    let from = end == link.a ? a : b
+                    let to = end == link.a ? b : a
+                    let length = max(hypot(to.x - from.x, to.y - from.y), 1)
+                    let r = 62 * zoom // just outside the device box
+                    Circle()
+                        .fill(state == .blocking ? Theme.err : Theme.warn)
+                        .frame(width: 8, height: 8)
+                        .position(x: from.x + (to.x - from.x) / length * r, y: from.y + (to.y - from.y) / length * r)
+                }
+            }
         }
         .contentShape(line.strokedPath(StrokeStyle(lineWidth: 12)))
         .onTapGesture { editor.select(.link(link.id)) }

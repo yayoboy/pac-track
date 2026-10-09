@@ -111,4 +111,18 @@ import Testing
         let r = exportBounds([Pos(x: 100, y: 100), Pos(x: 300, y: 200)], nodeSize: CGSize(width: 104, height: 46), margin: 40)
         #expect(r == CGRect(x: 8, y: 37, width: 384, height: 226))
     }
+
+    @Test func cableEndsShowTheLeastAdvancedStpStateOfTheirPort() throws {
+        let rt = Runtime()
+        for (id, name) in [("s1", "SW1"), ("s2", "SW2")] { try rt.handle(.addNode(id: id, kind: .switch, name: name)) }
+        for (id, port) in [("x", "Gi0/1"), ("y", "Gi0/2")] {
+            try rt.handle(.connect(id: id, a: IfaceRef(node: "s1", iface: port), b: IfaceRef(node: "s2", iface: port)))
+        }
+        rt.advance(wallMs: 100)
+        let dot = { (node: String, port: String) in stpDot(IfaceRef(node: node, iface: port), in: rt.snapshot().nodes) }
+        #expect(dot("s1", "Gi0/1") == .listening && dot("s2", "Gi0/2") == .blocking)
+        for _ in 0..<300 { rt.advance(wallMs: 100) }
+        #expect(dot("s1", "Gi0/1") == nil && dot("s2", "Gi0/1") == nil && dot("s2", "Gi0/2") == .blocking)
+        #expect(EventKind.state.label == "STATO")
+    }
 }

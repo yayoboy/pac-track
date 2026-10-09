@@ -2,7 +2,7 @@ import PacEngine
 import PacKit
 import SwiftUI
 
-/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), NAT and firewall (routers): settings plus live tables (spec §7.1 ④).
+/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
 struct ServicesTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -19,13 +19,17 @@ struct ServicesTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if node.kind == .cloud { internet }
-            dhcp
-            if node.kind == .server || node.kind == .cloud { dns }
-            if node.kind == .server { sink }
-            if node.kind == .router {
-                nat
-                firewall
+            if node.kind == .switch {
+                spanningTree
+            } else {
+                if node.kind == .cloud { internet }
+                dhcp
+                if node.kind == .server || node.kind == .cloud { dns }
+                if node.kind == .server { sink }
+                if node.kind == .router {
+                    nat
+                    firewall
+                }
             }
         }
     }
@@ -35,6 +39,35 @@ struct ServicesTab: View {
             .font(Theme.small)
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// PVST+ (spec M7 §5): one bridge priority per active VLAN; the lowest bridge ID becomes the root.
+    private var spanningTree: some View {
+        let key = "stp:\(node.id)"
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Spanning Tree (PVST+)").foregroundStyle(Theme.fgStrong)
+            if node.stp.isEmpty { Text("Nessuna VLAN attiva: collega una porta.").font(Theme.small).foregroundStyle(Theme.muted) }
+            ForEach(node.stp, id: \.vlan) { st in
+                HStack {
+                    Text("VLAN \(st.vlan)").font(Theme.mono)
+                    Spacer()
+                    Picker("", selection: Binding(get: { st.priority }, set: { priority in
+                        Task { await editor.edit(.setStpPriority(node: node.id, vlan: st.vlan, priority: priority), key: key) }
+                    })) {
+                        ForEach(STP_PRIORITIES, id: \.self) { Text(String($0)).tag($0) } // 32768, not a localized 32.768
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                    .accessibilityIdentifier("stp-priority-\(st.vlan)")
+                }
+            }
+            ErrorLine(editor: editor, key: key)
+            Text("Priorità del bridge per VLAN: vince la più bassa, a parità il MAC minore. Il valore effettivo aggiunge il numero di VLAN.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var nat: some View {
