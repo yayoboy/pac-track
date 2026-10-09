@@ -102,6 +102,25 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         #expect(sim.log.all.filter { $0.reason == .stpDiscarding }.map { "\($0.iface ?? "") \($0.frame?.id == toB.id)" } == ["Gi0/2 false", "Gi0/2 true"])
     }
 
+    /// Without PortFast a DHCP client waits for the tree: its DISCOVERs at 0, 4, 12 and 28 s die on ports still listening or
+    /// learning; the one at 60 s (backoff 4, 8, 16, 32 s) crosses ports forwarding since 30 s.
+    @Test func aDhcpClientOnAPortWithoutPortFastGetsItsLeaseOnceTheTreeHasConverged() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW1")
+        let srv = Host(sim: sim, id: "S")
+        let pc = Host(sim: sim, id: "C")
+        _ = try Link(sim: sim, try srv.iface("eth0"), try sw.iface("Gi0/1"))
+        _ = try Link(sim: sim, try pc.iface("eth0"), try sw.iface("Gi0/2"))
+        try srv.setIp("eth0", "10.0.0.1/24")
+        try srv.configureDhcpServer(DhcpConfig(start: "10.0.0.100", end: "10.0.0.199"))
+        try pc.setDhcp(true)
+        sim.run(59 * S)
+        #expect(pc.interfaces[0].ipv4 == nil)
+        #expect(drops(sim, .stpDiscarding) == 4)
+        sim.run(3 * S)
+        #expect(pc.interfaces[0].ipv4.map { formatIp($0.addr) } == "10.0.0.100")
+    }
+
     @Test func twoSwitchesCabledTwiceBlockOnePortAndABroadcastCrossesOnce() throws {
         let sim = Sim()
         let (sw1, sw2, _, a, b) = try twoCables(sim)
