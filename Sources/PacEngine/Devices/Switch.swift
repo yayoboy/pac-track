@@ -130,7 +130,14 @@ final class Switch: Node {
             return
         }
         if !isGroupMac(frame.dst), let out = lookup(frame.dst, vlan: vlan) {
-            if out !== inIf && instance.state(out) == .forwarding { forward(frame, vlan, to: out) }
+            if out !== inIf {
+                if instance.state(out) == .forwarding {
+                    forward(frame, vlan, to: out)
+                } else {
+                    // Learned on a port that does not forward (yet): 802.1D filters the frame there.
+                    sim.emit(.drop, node: id, iface: out.name, frame: frame, reason: .stpDiscarding)
+                }
+            }
             return
         }
         for i in interfaces where i !== inIf && instance.state(i) == .forwarding { forward(frame, vlan, to: i) }

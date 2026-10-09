@@ -85,6 +85,23 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         #expect(b.got.count == 1)
     }
 
+    @Test func aUnicastToAPortStillLearningIsDroppedThereWithAReason() throws {
+        let sim = Sim()
+        let sw = Switch(sim: sim, id: "SW1")
+        try sw.setSwitchport("Gi0/1", PortConfig(portfast: true))
+        let a = Probe(sim: sim, id: "A")
+        let b = Probe(sim: sim, id: "B")
+        _ = try Link(sim: sim, try a.iface("eth0"), try sw.iface("Gi0/1"))
+        _ = try Link(sim: sim, try b.iface("eth0"), try sw.iface("Gi0/2"))
+        sim.run(20 * S) // Gi0/2 learning
+        try b.sendRaw() // learned on Gi0/2, dropped there on the way in
+        sim.run(MS)
+        let toB = try a.sendRaw(try b.iface("eth0").mac) // learned port not forwarding yet: dropped on the way out
+        sim.run(MS)
+        #expect(b.got.isEmpty)
+        #expect(sim.log.all.filter { $0.reason == .stpDiscarding }.map { "\($0.iface ?? "") \($0.frame?.id == toB.id)" } == ["Gi0/2 false", "Gi0/2 true"])
+    }
+
     @Test func twoSwitchesCabledTwiceBlockOnePortAndABroadcastCrossesOnce() throws {
         let sim = Sim()
         let (sw1, sw2, _, a, b) = try twoCables(sim)
