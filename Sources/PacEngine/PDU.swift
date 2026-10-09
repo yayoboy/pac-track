@@ -21,6 +21,13 @@ let PORT_DISCARD: UInt16 = 9
 let DNS_NXDOMAIN: UInt8 = 3
 /// iperf3's default UDP payload: with UDP, IPv4 and Ethernet headers the frame stays within a 1500-byte MTU.
 let TRAFFIC_DATAGRAM = 1470
+/// Cisco Shared Spanning Tree Protocol group address: PVST+ BPDUs go here (spec M7 §4).
+let SSTP_MAC: Mac = "01:00:0c:cc:cc:cd"
+/// 802.1D timers, Cisco defaults (not configurable): hello, max age, forward delay, and how long the root flags a topology change.
+let STP_HELLO_NS = 2 * S
+let STP_MAX_AGE_NS = 20 * S
+let STP_FORWARD_DELAY_NS = 15 * S
+let STP_TC_NS = STP_MAX_AGE_NS + STP_FORWARD_DELAY_NS
 
 struct ArpPacket: Equatable, Sendable {
     var op: UInt16
@@ -198,9 +205,52 @@ struct Ipv4Packet: Equatable, Sendable {
     var size: Int { 20 + payload.size }
 }
 
+/// 802.1D bridge identifier with Cisco's extended system ID: priority (a multiple of 4096) plus VLAN, then the switch MAC.
+struct BridgeId: Comparable, Sendable {
+    var priority: Int
+    var vlan: Int
+    var mac: Mac
+
+    static func < (a: BridgeId, b: BridgeId) -> Bool {
+        (a.priority + a.vlan, a.mac) < (b.priority + b.vlan, b.mac)
+    }
+
+    /// Wireshark's notation: priority/VLAN/MAC.
+    var text: String { "\(priority)/\(vlan)/\(mac)" }
+}
+
+/// An 802.1D configuration BPDU as PVST+ sends it: the sender's view of the tree (max age, hello and forward delay are the STP_* defaults).
+struct StpConfig: Equatable, Sendable {
+    var root: BridgeId
+    var cost: Int
+    var bridge: BridgeId
+    /// Port ID: priority 128 in the high byte, port number in the low byte (0x8001 is 128.1).
+    var port: Int
+    /// Seconds since the root sent it: one more per bridge on the way.
+    var messageAge: Int
+    var tc = false
+    var tca = false
+}
+
+enum Bpdu: Equatable, Sendable {
+    case config(StpConfig)
+    /// Topology change notification, sent toward the root.
+    case tcn
+
+    /// LLC/SNAP (8 B) + BPDU: a configuration (35 B) with Cisco's PVID TLV (7 B), or a TCN (4 B). It is also the 802.3 length field.
+    var size: Int {
+        switch self {
+        case .config: 50
+        case .tcn: 12
+        }
+    }
+}
+
 enum L3: Equatable, Sendable {
     case arp(ArpPacket)
     case ipv4(Ipv4Packet)
+    /// PVST+ BPDU, in an IEEE 802.3 frame with LLC/SNAP (`EthernetFrame.etherType` holds the 802.3 length).
+    case bpdu(Bpdu)
 }
 
 struct EthernetFrame: Equatable, Sendable {
@@ -218,6 +268,7 @@ struct EthernetFrame: Equatable, Sendable {
         switch payload {
         case .arp: return header + 28
         case .ipv4(let p): return header + p.size
+        case .bpdu(let b): return header + b.size
         }
     }
 

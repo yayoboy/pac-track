@@ -72,4 +72,38 @@ private func echo(_ length: Int = 56) -> IcmpMessage {
         #expect(layers[1].fields.map { "\($0.name): \($0.value)" } == ["Priorità (PCP): 0", "DEI: 0", "VLAN ID: 20", "EtherType: 0x0800 (IPv4)"])
         #expect(eventView(e).bytes == 102)
     }
+
+    @Test func aPvstConfigurationBpduIsA64ByteFrameDecodedAsStp() {
+        let root = BridgeId(priority: 4096, vlan: 10, mac: "02:00:00:00:00:01")
+        let me = BridgeId(priority: 32768, vlan: 10, mac: "02:00:00:00:00:09")
+        let bpdu = Bpdu.config(StpConfig(root: root, cost: 4, bridge: me, port: 0x8002, messageAge: 1, tc: true))
+        let f = EthernetFrame(id: 1, src: "02:00:00:00:00:0a", dst: SSTP_MAC, etherType: UInt16(bpdu.size), payload: .bpdu(bpdu), vlan: 10)
+        #expect(f.size == 68)
+        let e = SimEvent(time: 0, kind: .tx, node: "SW2", iface: "Gi0/2", frame: f)
+        #expect(eventView(e).proto == .stp)
+        #expect(eventView(e).info == "Conf. root = 4096/10/02:00:00:00:00:01 costo = 4 porta = 0x8002 TC")
+        let layers = pduLayers(e)
+        #expect(layers.map(\.title) == ["IEEE 802.3 Ethernet", "802.1Q", "LLC/SNAP", "STP"])
+        #expect(layers.map(\.bytes) == [68, 4, 8, 42])
+        #expect(layers[0].fields.last == PduField(name: "EtherType", value: "0x8100 (802.1Q)"))
+        #expect(layers[1].fields.last == PduField(name: "Lunghezza", value: "50 B"))
+        #expect(layers[2].fields.map(\.value) == ["0xaa (SNAP)", "0xaa (SNAP)", "0x03 (UI)", "0x00000c (Cisco)", "0x010b (PVST+)"])
+        #expect(layers[3].fields.map { "\($0.name): \($0.value)" } == [
+            "ID protocollo: 0x0000", "Versione: 0 (STP)", "Tipo BPDU: 0x00 (configurazione)", "Flag: 0x01 (TC)",
+            "Root ID: 4096/10/02:00:00:00:00:01", "Costo verso la root: 4", "Bridge ID: 32768/10/02:00:00:00:00:09", "Port ID: 0x8002",
+            "Message age: 1 s", "Max age: 20 s", "Hello time: 2 s", "Forward delay: 15 s", "VLAN di origine (PVID): 10",
+        ])
+    }
+
+    @Test func aTcnIsA26ByteFrame() {
+        let f = EthernetFrame(id: 1, src: "02:00:00:00:00:0a", dst: SSTP_MAC, etherType: UInt16(Bpdu.tcn.size), payload: .bpdu(.tcn))
+        #expect(f.size == 26)
+        let e = SimEvent(time: 0, kind: .tx, node: "SW2", iface: "Gi0/1", frame: f)
+        #expect(eventView(e).info == "Topology Change Notification")
+        let layers = pduLayers(e)
+        #expect(layers.map(\.title) == ["IEEE 802.3 Ethernet", "LLC/SNAP", "STP"])
+        #expect(layers.map(\.bytes) == [26, 8, 4])
+        #expect(layers[0].fields.last == PduField(name: "Lunghezza", value: "12 B"))
+        #expect(layers[2].fields.last == PduField(name: "Tipo BPDU", value: "0x80 (TCN)"))
+    }
 }

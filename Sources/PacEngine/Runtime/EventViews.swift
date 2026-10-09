@@ -41,6 +41,11 @@ private func dnsSummary(_ m: DnsMessage) -> String {
     return "Risposta \(id) A \(m.name) → " + m.answers.map { formatIp($0.addr) }.joined(separator: ", ")
 }
 
+private func describe(_ b: Bpdu) -> String {
+    guard case .config(let c) = b else { return "Topology Change Notification" }
+    return "Conf. root = \(c.root.text) costo = \(c.cost) porta = \(hex(c.port, digits: 4))" + (c.tc ? " TC" : "") + (c.tca ? " TCA" : "")
+}
+
 private func proto(of p: Ipv4Packet) -> Proto {
     switch p.payload {
     case .icmp: .icmp
@@ -86,6 +91,7 @@ func eventView(_ e: SimEvent) -> EventView {
     let (proto, info): (Proto, String) = switch l3(e) {
     case .arp(let a)?: (.arp, describe(a))
     case .ipv4(let p)?: (proto(of: p), describe(p))
+    case .bpdu(let b)?: (.stp, describe(b))
     case nil: (.arp, "") // every logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,
@@ -161,6 +167,36 @@ private func dnsLayer(_ m: DnsMessage) -> PduLayer {
     return PduLayer(title: "DNS", bytes: m.size, fields: fields)
 }
 
+/// Wireshark's layout of a Cisco PVST+ BPDU: LLC/SNAP, then the 802.1D BPDU with the PVID TLV.
+private func bpduLayers(_ b: Bpdu) -> [PduLayer] {
+    let llc = PduLayer(title: "LLC/SNAP", bytes: 8, fields: [
+        field("DSAP", "0xaa (SNAP)"),
+        field("SSAP", "0xaa (SNAP)"),
+        field("Controllo", "0x03 (UI)"),
+        field("OUI", "0x00000c (Cisco)"),
+        field("PID", "0x010b (PVST+)"),
+    ])
+    var fields = [field("ID protocollo", "0x0000"), field("Versione", "0 (STP)")]
+    guard case .config(let c) = b else {
+        return [llc, PduLayer(title: "STP", bytes: 4, fields: fields + [field("Tipo BPDU", "0x80 (TCN)")])]
+    }
+    let flags = [(c.tca, 0x80, "TCA"), (c.tc, 0x01, "TC")].filter(\.0)
+    fields += [
+        field("Tipo BPDU", "0x00 (configurazione)"),
+        field("Flag", hex(flags.reduce(0) { $0 | $1.1 }, digits: 2) + (flags.isEmpty ? "" : " (\(flags.map(\.2).joined(separator: ", ")))")),
+        field("Root ID", c.root.text),
+        field("Costo verso la root", "\(c.cost)"),
+        field("Bridge ID", c.bridge.text),
+        field("Port ID", hex(c.port, digits: 4)),
+        field("Message age", "\(c.messageAge) s"),
+        field("Max age", "\(STP_MAX_AGE_NS / S) s"),
+        field("Hello time", "\(STP_HELLO_NS / S) s"),
+        field("Forward delay", "\(STP_FORWARD_DELAY_NS / S) s"),
+        field("VLAN di origine (PVID)", "\(c.bridge.vlan)"),
+    ]
+    return [llc, PduLayer(title: "STP", bytes: b.size - 8, fields: fields)]
+}
+
 private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
     let ip = PduLayer(title: "IPv4", bytes: p.size, fields: [
         field("Versione", "4"),
@@ -224,11 +260,14 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
 func pduLayers(_ e: SimEvent) -> [PduLayer] {
     var layers: [PduLayer] = []
     if let f = e.frame {
-        let type = hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : " (IPv4)")
-        layers.append(PduLayer(title: "Ethernet II", bytes: f.size, fields: [
+        // A BPDU rides an IEEE 802.3 frame: a length where Ethernet II has its EtherType.
+        let bpdu = if case .bpdu = f.payload { true } else { false }
+        let typeName = bpdu ? "Lunghezza" : "EtherType"
+        let type = bpdu ? "\(f.etherType) B" : hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : " (IPv4)")
+        layers.append(PduLayer(title: bpdu ? "IEEE 802.3 Ethernet" : "Ethernet II", bytes: f.size, fields: [
             field("Destinazione", f.dst),
             field("Sorgente", f.src),
-            field("EtherType", f.vlan == nil ? type : "0x8100 (802.1Q)"),
+            f.vlan == nil ? field(typeName, type) : field("EtherType", "0x8100 (802.1Q)"),
         ]))
         // Wireshark's layout: the tag (TCI) is its own 4-byte header, which carries the payload's EtherType.
         if let vid = f.vlan {
@@ -236,13 +275,14 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
                 field("Priorità (PCP)", "0"),
                 field("DEI", "0"),
                 field("VLAN ID", "\(vid)"),
-                field("EtherType", type),
+                field(typeName, type),
             ]))
         }
     }
     switch l3(e) {
     case .arp(let a)?: layers.append(arpLayer(a))
     case .ipv4(let p)?: layers += ipLayers(p)
+    case .bpdu(let b)?: layers += bpduLayers(b)
     case nil: break
     }
     return layers

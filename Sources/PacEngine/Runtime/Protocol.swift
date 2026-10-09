@@ -55,7 +55,7 @@ public struct PortConfig: Codable, Equatable, Sendable {
 }
 
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, dhcp, dns, udp, tcp
+    case arp, icmp, dhcp, dns, udp, tcp, stp
 }
 
 public enum Command: Sendable {
