@@ -306,6 +306,17 @@ private func triangle(_ sim: Sim, sw13: LinkOptions = LinkOptions()) throws
         try rt.handle(.setStpPriority(node: "s", vlan: 10, priority: 0))
     }
 
+    @Test func removingTheLastSwitchThatUsesAVlanEndsItsTreeElsewhere() throws {
+        let rt = Runtime()
+        for (id, name) in [("s1", "SW1"), ("s2", "SW2"), ("s3", "SW3")] { try rt.handle(.addNode(id: id, kind: .switch, name: name)) }
+        try rt.handle(.setSwitchport(node: "s1", iface: "Gi0/1", config: PortConfig(vlan: 10))) // the only user of VLAN 10
+        for sw in ["s2", "s3"] { try rt.handle(.setSwitchport(node: sw, iface: "Gi0/1", config: PortConfig(mode: .trunk))) }
+        try rt.handle(.connect(id: "x", a: IfaceRef(node: "s2", iface: "Gi0/1"), b: IfaceRef(node: "s3", iface: "Gi0/1")))
+        #expect(rt.snapshot().nodes[1].stp.map(\.vlan) == [1, 10])
+        try rt.handle(.removeNode(id: "s1"))
+        #expect(rt.snapshot().nodes.map { $0.stp.map(\.vlan) } == [[1], [1]])
+    }
+
     @Test func theSnapshotListsEachVlanTreeAndTheConfiguredPriorities() throws {
         let rt = Runtime()
         for (id, name) in [("s1", "SW1"), ("s2", "SW2")] { try rt.handle(.addNode(id: id, kind: .switch, name: name)) }

@@ -123,6 +123,8 @@ public final class Runtime {
             node.name = name
             nodes[id] = (node, kind)
             nodeOrder.append(id)
+            // Its ports' VLAN 1 may be new to the network.
+            if node is Switch { sim.syncStp() }
         case let .removeNode(id):
             let node = try get(id)
             for linkId in linkOrder where links[linkId]!.a.node === node || links[linkId]!.b.node === node {
@@ -135,6 +137,7 @@ public final class Runtime {
             // Nothing keeps running on a removed device (its DHCP client would broadcast forever).
             node.powered = false
             node.reset()
+            sim.remove(node)
             nodes[id] = nil
             nodeOrder.removeAll { $0 == id }
         case let .rename(id, name):
