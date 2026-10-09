@@ -43,8 +43,8 @@ struct CanvasView: View {
                         ZStack(alignment: .topLeading) {
                             ForEach(editor.flights) { flight in
                                 if let link = editor.snapshot.links.first(where: { $0.id == flight.link }) {
-                                    let a = center(flight.from)
-                                    let b = center(link.a.node == flight.from ? link.b.node : link.a.node)
+                                    let e = ends(link)
+                                    let (a, b) = link.a.node == flight.from ? (e.a, e.b) : (e.b, e.a)
                                     let t = flightProgress(flight, now: now)
                                     PduTag(proto: flight.proto).position(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
                                 }
@@ -253,9 +253,23 @@ struct CanvasView: View {
         .accessibilityIdentifier("minimap")
     }
 
-    private func cable(_ link: LinkView) -> some View {
+    /// A cable's ends on screen: cables between the same two devices are spread 28 pt apart, perpendicular to them.
+    private func ends(_ link: LinkView) -> (a: CGPoint, b: CGPoint, slot: Double) {
         let a = center(link.a.node)
         let b = center(link.b.node)
+        let slot = cableSlot(link, in: editor.snapshot.links)
+        guard slot != 0 else { return (a, b, 0) }
+        // The normal is taken from the lower node id to the other, so cables plugged in either direction spread the same way.
+        let (p, q) = link.a.node < link.b.node ? (a, b) : (b, a)
+        let length = max(hypot(q.x - p.x, q.y - p.y), 1)
+        let shift = slot * 28 * zoom
+        let d = CGSize(width: -(q.y - p.y) / length * shift, height: (q.x - p.x) / length * shift)
+        return (CGPoint(x: a.x + d.width, y: a.y + d.height), CGPoint(x: b.x + d.width, y: b.y + d.height), slot)
+    }
+
+    private func cable(_ link: LinkView) -> some View {
+        let (a, b, slot) = ends(link)
+        let mid = 0.5 + slot * 0.2 // labels of parallel cables staggered along them, so they never sit side by side
         let selected = editor.selection == .link(link.id)
         let line = Path { p in
             p.move(to: a)
@@ -270,7 +284,7 @@ struct CanvasView: View {
                 .foregroundStyle(Theme.muted)
                 .padding(.horizontal, 3)
                 .background(Theme.bg)
-                .position(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+                .position(x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid)
             // STP at each end (spec M7 §5): red blocking, amber listening/learning, nothing while forwarding.
             ForEach([link.a, link.b], id: \.self) { end in
                 if let state = stpDot(end, in: editor.snapshot.nodes) {

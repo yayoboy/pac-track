@@ -321,6 +321,14 @@ public func isTrunk(_ link: LinkView, in nodes: [NodeView]) -> Bool {
     }
 }
 
+/// Where a cable sits among those joining the same two devices (in cable order): 0 alone, else -(k-1)/2 … (k-1)/2, so the
+/// canvas can spread parallel cables apart.
+public func cableSlot(_ link: LinkView, in links: [LinkView]) -> Double {
+    let pair = Set([link.a.node, link.b.node])
+    let same = links.filter { Set([$0.a.node, $0.b.node]) == pair }
+    return Double(same.firstIndex { $0.id == link.id } ?? 0) - Double(same.count - 1) / 2
+}
+
 /// The dot at a cable end (spec M7 §5): blocking if the port blocks in any VLAN, else listening or learning if it is on its way
 /// in any; nil once it forwards in all of them (or is no switch port).
 public func stpDot(_ end: IfaceRef, in nodes: [NodeView]) -> StpState? {

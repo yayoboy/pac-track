@@ -125,4 +125,10 @@ import Testing
         #expect(dot("s1", "Gi0/1") == nil && dot("s2", "Gi0/1") == nil && dot("s2", "Gi0/2") == .blocking)
         #expect(EventKind.state.label == "STATO")
     }
+
+    @Test func parallelCablesBetweenTheSameDevicesGetSymmetricSlots() {
+        let cable = { (id: String, a: String, b: String) in LinkView(id: id, a: IfaceRef(node: a, iface: "x"), b: IfaceRef(node: b, iface: "y")) }
+        let links = [cable("1", "s1", "s2"), cable("2", "s1", "p"), cable("3", "s2", "s1"), cable("4", "s1", "s2")]
+        #expect(links.map { cableSlot($0, in: links) } == [-1, 0, 0, 1])
+    }
 }
