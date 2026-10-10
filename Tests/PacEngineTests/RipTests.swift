@@ -308,6 +308,32 @@ private func pingTtl(_ sim: Sim, _ h: Host, _ dst: String) throws -> UInt8? {
         expectError("Gi0/0.10 takes part in RIP") { try r1.removeSubinterface("Gi0/0.10") }
     }
 
+    @Test func routesLearnedThroughAnInterfaceGoWhenItsAddressChangesOrItLeavesRip() throws {
+        let (sim, _, _, r1, _) = try pair()
+        sim.run(1 * MS)
+        try r1.setIp("Gi0/1", "10.0.99.1/30")
+        r1.rip?.refresh() // as Runtime does after .setIp
+        #expect(try route(r1, "192.168.2.0/24") == nil) // 10.0.12.2 is no longer on a connected network
+        let (sim2, _, _, r3, _) = try pair()
+        sim2.run(1 * MS)
+        try r3.configureRip(RipConfig(interfaces: ["Gi0/0"]))
+        #expect(try route(r3, "192.168.2.0/24") == nil) // Gi0/1 no longer takes part
+    }
+
+    @Test func aRouterSavedPoweredOffSaysNothingWhenTheFileOpens() throws {
+        let rip = RipConfig(interfaces: ["Gi0/0"])
+        let t = Topology(nodes: [
+            TopologyNode(id: "r1", kind: .router, name: "R1", pos: Pos(x: 0, y: 0), ifaces: [TopologyIface(name: "Gi0/0", cidr: "10.0.12.1/30")],
+                         routes: [], rip: rip),
+            TopologyNode(id: "r2", kind: .router, name: "R2", pos: Pos(x: 0, y: 0), ifaces: [TopologyIface(name: "Gi0/0", cidr: "10.0.12.2/30")],
+                         routes: [], powered: false, rip: rip),
+        ], links: [LinkView(id: "l1", a: IfaceRef(node: "r1", iface: "Gi0/0"), b: IfaceRef(node: "r2", iface: "Gi0/0"))])
+        let rt = Runtime()
+        try rt.handle(.load(t))
+        rt.advance(wallMs: 100)
+        #expect(!rt.events(from: 0).contains { $0.node == "r2" && $0.kind == .tx })
+    }
+
     @Test func theRuntimeRunsRipOnRoutersOnlyAndFollowsAddressChanges() throws {
         let rt = Runtime()
         let devices: [(String, DeviceKind, String)] = [("r1", .router, "R1"), ("r2", .router, "R2"), ("p", .pc, "PC1"), ("c", .cloud, "ISP")]

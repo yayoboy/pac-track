@@ -41,6 +41,9 @@ final class Rip {
     /// Sorted by network and prefix, so updates list them in a stable order.
     private(set) var routes: [RipRoute] = []
     private var updateDue: Int?
+    /// The first requests and update leave from the scheduler, so a router switched off in the same instant (a file opening
+    /// with it off, undo) never sends them.
+    private var startDue: Int?
     private var triggerDue: Int?
     private var quietUntil = 0
     /// Unbinds UDP 520; nil while stopped (RIP off or the router powered off).
@@ -61,7 +64,7 @@ final class Rip {
             if case .rip(let m) = u.payload, let iface { receive(m, from: p.src, port: u.srcPort, on: iface) }
         }
         updateDue = arm(now + RIP_UPDATE_NS)
-        refresh()
+        startDue = arm(now)
     }
 
     /// RIP off or power off: everything learned is forgotten at once and nothing is sent (IOS `no router rip`).
@@ -70,6 +73,7 @@ final class Rip {
         unbind = nil
         routes = []
         updateDue = nil
+        startDue = nil
         triggerDue = nil
         quietUntil = 0
         node.routes.learned = []
@@ -86,7 +90,10 @@ final class Rip {
         }
         for k in routes.indices where routes[k].metric < RIP_INFINITY {
             let r = routes[k]
-            let stays = r.nextHop == nil ? wanted.contains { $0.network == r.network && $0.prefix == r.prefix && $0.iface === r.iface } : r.iface.lineUp
+            // A learned route also goes when its interface leaves RIP or its next hop is no longer on the interface's subnet.
+            let stays = r.nextHop.map { hop in
+                r.iface.lineUp && config.interfaces.contains(r.iface.name) && (r.iface.ipv4.map { inSubnet(hop, $0.addr, $0.prefix) } ?? false)
+            } ?? wanted.contains { $0.network == r.network && $0.prefix == r.prefix && $0.iface === r.iface }
             if !stays { poison(k) }
         }
         for w in wanted {
@@ -172,6 +179,10 @@ final class Rip {
     }
 
     private func expire(_ due: Int) {
+        if startDue == due {
+            startDue = nil
+            refresh()
+        }
         if updateDue == due {
             updateDue = arm(due + RIP_UPDATE_NS)
             send(changedOnly: false)
