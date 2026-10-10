@@ -26,22 +26,30 @@ struct EventsPanel: View {
 
     private func filters(count: Int) -> some View {
         HStack(spacing: 6) {
-            ForEach(Proto.allCases, id: \.self) { p in
-                let on = protos.contains(p)
-                Button {
-                    if on { protos.remove(p) } else { protos.insert(p) }
-                } label: {
-                    Text(p.label)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Theme.proto(p).opacity(on ? 0.22 : 0)))
-                        .overlay(Capsule().stroke(Theme.proto(p).opacity(on ? 1 : 0.35)))
-                        .foregroundStyle(on ? Theme.proto(p) : Theme.muted)
+            // Chips never wrap: when the panel is narrower than all of them, the row scrolls sideways.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Proto.allCases, id: \.self) { p in
+                        let on = protos.contains(p)
+                        Button {
+                            if on { protos.remove(p) } else { protos.insert(p) }
+                        } label: {
+                            Text(p.label)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                                .fixedSize()
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Theme.proto(p).opacity(on ? 0.22 : 0)))
+                                .overlay(Capsule().stroke(Theme.proto(p).opacity(on ? 1 : 0.35)))
+                                .foregroundStyle(on ? Theme.proto(p) : Theme.muted)
+                        }
+                        .buttonStyle(.plain)
+                        .help(on ? "Nascondi \(p.label)" : "Mostra \(p.label)")
+                        .accessibilityIdentifier("filter-\(p.rawValue)")
+                    }
                 }
-                .buttonStyle(.plain)
-                .help(on ? "Nascondi \(p.label)" : "Mostra \(p.label)")
-                .accessibilityIdentifier("filter-\(p.rawValue)")
+                .padding(.vertical, 1) // room for the capsule strokes
             }
             Picker("Nodo", selection: $node) {
                 Text("Tutti i nodi").tag(String?.none)
@@ -49,8 +57,7 @@ struct EventsPanel: View {
             }
             .labelsHidden()
             .frame(width: 140)
-            Spacer()
-            Text("\(count) eventi").font(Theme.small).foregroundStyle(Theme.muted)
+            Text("\(count) eventi").font(Theme.small).foregroundStyle(Theme.muted).fixedSize()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
