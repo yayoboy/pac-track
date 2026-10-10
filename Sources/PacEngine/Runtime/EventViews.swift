@@ -80,6 +80,59 @@ private func proto(of p: Ipv4Packet) -> Proto {
     }
 }
 
+private func proto(of p: Ipv6Packet) -> Proto {
+    switch p.payload {
+    case .icmp: .icmp
+    case .ndp: .ndp
+    case .udp: .udp
+    }
+}
+
+private func icmp6Name(_ m: IcmpMessage) -> String {
+    switch m.type {
+    case ICMP6_ECHO_REQUEST: "Echo request"
+    case ICMP6_ECHO_REPLY: "Echo reply"
+    case ICMP6_TIME_EXCEEDED: "Time exceeded (hop limit)"
+    case ICMP6_PACKET_TOO_BIG: "Packet too big (MTU \(Int(m.id) << 16 | Int(m.seq)))"
+    case ICMP6_DEST_UNREACH:
+        switch m.code {
+        case UNREACH6_NO_ROUTE: "Destination unreachable (no route)"
+        case UNREACH6_ADDRESS: "Destination unreachable (address)"
+        case UNREACH6_PORT: "Destination unreachable (port)"
+        default: "Destination unreachable (code \(m.code))"
+        }
+    default: "Type \(m.type)"
+    }
+}
+
+private func isEcho6(_ m: IcmpMessage) -> Bool {
+    m.type == ICMP6_ECHO_REQUEST || m.type == ICMP6_ECHO_REPLY
+}
+
+private func naFlags(_ router: Bool, _ solicited: Bool, _ override: Bool) -> String {
+    [(router, "R"), (solicited, "S"), (override, "O")].filter(\.0).map(\.1).joined(separator: ", ")
+}
+
+private func describe(_ n: NdpMessage, from src: UInt128) -> String {
+    switch n.body {
+    case .rs: "RS"
+    case .ra(let ra):
+        "RA " + (ra.prefixes.isEmpty ? "senza prefissi" : ra.prefixes.map { "\(formatIp6($0.prefix))/\($0.length)" }.joined(separator: ", "))
+            + ", lifetime \(ra.lifetime) s"
+    case .ns(let target, _): src == 0 ? "NS DAD \(formatIp6(target))" : "NS chi ha \(formatIp6(target))?"
+    case .na(let target, let r, let s, let o, let tlla): "NA \(formatIp6(target)) è \(tlla) [\(naFlags(r, s, o))]"
+    }
+}
+
+private func describe(_ p: Ipv6Packet) -> String {
+    let ends = "\(formatIp6(p.src)) → \(formatIp6(p.dst))"
+    switch p.payload {
+    case .icmp(let m): return "\(ends) ICMPv6 \(icmp6Name(m))" + (isEcho6(m) ? " id=\(m.id) seq=\(m.seq)" : "") + " hlim=\(p.hopLimit)"
+    case .ndp(let n): return "\(ends) NDP " + describe(n, from: p.src)
+    case .udp(let u): return "\(ends) UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)"
+    }
+}
+
 private let TCP_FLAG_NAMES: [(TcpFlags, String)] = [(.fin, "FIN"), (.syn, "SYN"), (.rst, "RST"), (.ack, "ACK")]
 
 /// Wireshark order, lowest bit first: "SYN, ACK".
@@ -108,20 +161,21 @@ private func describe(_ p: Ipv4Packet) -> String {
     }
 }
 
-/// Frame payload, or the bare packet of an L3 drop (no route, TTL, ARP timeout).
+/// Frame payload, or the bare packet of an L3 drop (no route, TTL, ARP or ND timeout).
 private func l3(_ e: SimEvent) -> L3? {
-    e.frame?.payload ?? e.packet.map(L3.ipv4)
+    e.frame?.payload ?? e.packet.map(L3.ipv4) ?? e.packet6.map(L3.ipv6)
 }
 
 func eventView(_ e: SimEvent) -> EventView {
     let (proto, info): (Proto, String) = switch l3(e) {
     case .arp(let a)?: (.arp, describe(a))
     case .ipv4(let p)?: (proto(of: p), describe(p))
+    case .ipv6(let p)?: (proto(of: p), describe(p))
     case .bpdu(let b)?: (.stp, describe(b))
     case nil: (e.proto ?? .stp, e.note ?? "") // a state change (spanning tree, or the protocol it names); every other logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,
-                     frameId: e.frame?.id, bytes: e.frame?.size ?? e.packet?.size ?? 0, info: info, reason: e.reason?.rawValue)
+                     frameId: e.frame?.id, bytes: e.frame?.size ?? e.packet?.size ?? e.packet6?.size ?? 0, info: info, reason: e.reason?.rawValue)
 }
 
 private func field(_ name: String, _ value: String) -> PduField {
@@ -301,6 +355,23 @@ private func bpduLayers(_ b: Bpdu) -> [PduLayer] {
     return [llc, PduLayer(title: "STP", bytes: b.size - 8, fields: fields)]
 }
 
+private func udpLayer(_ u: UdpDatagram) -> PduLayer {
+    let body: String = switch u.payload {
+    case .raw(let data): "\(data.count) B"
+    case .dhcp(let m): "\(m.size) B (DHCP)"
+    case .dns(let m): "\(m.size) B (DNS)"
+    case .rip(let m): "\(m.size) B (RIP)"
+    case .traffic(let d): "\(TRAFFIC_DATAGRAM) B (generatore di traffico, seq \(d.seq))"
+    }
+    return PduLayer(title: "UDP", bytes: u.size, fields: [
+        field("Porta sorgente", "\(u.srcPort)"),
+        field("Porta destinazione", "\(u.dstPort)"),
+        field("Lunghezza", "\(u.size) B"),
+        field("Checksum", hex(Int(u.checksum), digits: 4) + (u.checksum == 0 ? " (non calcolato)" : "")),
+        field("Dati", body),
+    ])
+}
+
 private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
     let ip = PduLayer(title: "IPv4", bytes: p.size, fields: [
         field("Versione", "4"),
@@ -324,20 +395,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         fields.append(field("Dati", isEcho(m) ? "\(m.data.count) B" : "\(m.data.count) B (header IP + 8 B del pacchetto originale)"))
         return [ip, PduLayer(title: "ICMP", bytes: m.size, fields: fields)]
     case .udp(let u):
-        let body: String = switch u.payload {
-        case .raw(let data): "\(data.count) B"
-        case .dhcp(let m): "\(m.size) B (DHCP)"
-        case .dns(let m): "\(m.size) B (DNS)"
-        case .rip(let m): "\(m.size) B (RIP)"
-        case .traffic(let d): "\(TRAFFIC_DATAGRAM) B (generatore di traffico, seq \(d.seq))"
-        }
-        let udp = PduLayer(title: "UDP", bytes: u.size, fields: [
-            field("Porta sorgente", "\(u.srcPort)"),
-            field("Porta destinazione", "\(u.dstPort)"),
-            field("Lunghezza", "\(u.size) B"),
-            field("Checksum", hex(Int(u.checksum), digits: 4) + (u.checksum == 0 ? " (non calcolato)" : "")),
-            field("Dati", body),
-        ])
+        let udp = udpLayer(u)
         switch u.payload {
         case .raw, .traffic: return [ip, udp]
         case .dhcp(let m): return [ip, udp, dhcpLayer(m)]
@@ -364,6 +422,63 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
     }
 }
 
+private func ndpLayer(_ n: NdpMessage) -> PduLayer {
+    let names = [ND_RS: "Router Solicitation", ND_RA: "Router Advertisement", ND_NS: "Neighbor Solicitation", ND_NA: "Neighbor Advertisement"]
+    var fields = [field("Tipo", "\(n.type) (\(names[n.type] ?? "?"))"), field("Codice", "0"), field("Checksum", hex(Int(n.checksum), digits: 4))]
+    switch n.body {
+    case .rs(let slla):
+        fields.append(field("Riservato", "0"))
+        if let slla { fields.append(field("Opzione 1", "Source link-layer address \(slla)")) }
+    case .ra(let ra):
+        fields += [
+            field("Cur hop limit", "\(ra.hopLimit)"),
+            field("Flag", "0x00 (M=0, O=0)"),
+            field("Router lifetime", "\(ra.lifetime) s"),
+            field("Reachable time", "0 (non specificato)"),
+            field("Retrans timer", "0 (non specificato)"),
+            field("Opzione 1", "Source link-layer address \(ra.slla)"),
+            field("Opzione 5", "MTU \(ra.mtu)"),
+        ]
+        for p in ra.prefixes {
+            fields.append(field("Opzione 3", "Prefisso \(formatIp6(p.prefix))/\(p.length), L=1 A=1, valid \(p.valid) s, preferred \(p.preferred) s"))
+        }
+    case .ns(let target, let slla):
+        fields += [field("Riservato", "0"), field("Target", formatIp6(target))]
+        if let slla { fields.append(field("Opzione 1", "Source link-layer address \(slla)")) }
+    case .na(let target, let r, let s, let o, let tlla):
+        let bits = (r ? 0x80 : 0) | (s ? 0x40 : 0) | (o ? 0x20 : 0)
+        fields += [
+            field("Flag", hex(bits, digits: 2) + " (\(naFlags(r, s, o)))"),
+            field("Target", formatIp6(target)),
+            field("Opzione 2", "Target link-layer address \(tlla)"),
+        ]
+    }
+    return PduLayer(title: "ICMPv6", bytes: n.size, fields: fields)
+}
+
+private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
+    let ip = PduLayer(title: "IPv6", bytes: p.size, fields: [
+        field("Versione", "6"),
+        field("Traffic class", "0x00"),
+        field("Flow label", "0x00000"),
+        field("Lunghezza payload", "\(p.payload.size) B"),
+        field("Next header", p.payload.nextHeader == IPPROTO_UDP ? "17 (UDP)" : "58 (ICMPv6)"),
+        field("Hop limit", "\(p.hopLimit)"),
+        field("Sorgente", formatIp6(p.src)),
+        field("Destinazione", formatIp6(p.dst)),
+    ])
+    switch p.payload {
+    case .icmp(let m):
+        var fields = [field("Tipo", "\(m.type) (\(icmp6Name(m)))"), field("Codice", "\(m.code)"), field("Checksum", hex(Int(m.checksum), digits: 4))]
+        if isEcho6(m) { fields += [field("Identificatore", "\(m.id)"), field("Sequenza", "\(m.seq)")] }
+        if m.type == ICMP6_PACKET_TOO_BIG { fields.append(field("MTU", "\(Int(m.id) << 16 | Int(m.seq))")) }
+        fields.append(field("Dati", isEcho6(m) ? "\(m.data.count) B" : "\(m.data.count) B (inizio del pacchetto originale)"))
+        return [ip, PduLayer(title: "ICMPv6", bytes: m.size, fields: fields)]
+    case .ndp(let n): return [ip, ndpLayer(n)]
+    case .udp(let u): return [ip, udpLayer(u)]
+    }
+}
+
 /// Header-by-header view of the frame (or packet) an event logged, with real field values.
 func pduLayers(_ e: SimEvent) -> [PduLayer] {
     var layers: [PduLayer] = []
@@ -371,7 +486,8 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
         // A BPDU rides an IEEE 802.3 frame: a length where Ethernet II has its EtherType.
         let bpdu = if case .bpdu = f.payload { true } else { false }
         let typeName = bpdu ? "Lunghezza" : "EtherType"
-        let type = bpdu ? "\(f.etherType) B" : hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : " (IPv4)")
+        let type = bpdu ? "\(f.etherType) B"
+            : hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : f.etherType == ETHERTYPE_IPV6 ? " (IPv6)" : " (IPv4)")
         layers.append(PduLayer(title: bpdu ? "IEEE 802.3 Ethernet" : "Ethernet II", bytes: f.size, fields: [
             field("Destinazione", f.dst),
             field("Sorgente", f.src),
@@ -390,6 +506,7 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
     switch l3(e) {
     case .arp(let a)?: layers.append(arpLayer(a))
     case .ipv4(let p)?: layers += ipLayers(p)
+    case .ipv6(let p)?: layers += ipv6Layers(p)
     case .bpdu(let b)?: layers += bpduLayers(b)
     case nil: break
     }

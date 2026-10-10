@@ -53,7 +53,7 @@ func inSubnet(_ addr: UInt32, _ network: UInt32, _ prefix: Int) -> Bool {
     networkOf(addr, prefix) == networkOf(network, prefix)
 }
 
-private func hex2(_ b: Int) -> String {
+func hex2(_ b: Int) -> String {
     let h = String(b, radix: 16)
     return h.count == 1 ? "0" + h : h
 }

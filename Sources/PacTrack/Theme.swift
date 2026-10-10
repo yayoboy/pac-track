@@ -28,6 +28,7 @@ enum Theme {
         case .stp: Color(hex: 0xD6C95E)
         case .rip: Color(hex: 0xCC7F52)
         case .ospf: Color(hex: 0xD47FD6)
+        case .ndp: Color(hex: 0x9BC53D)
         }
     }
 }

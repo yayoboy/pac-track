@@ -280,6 +280,8 @@ enum Bpdu: Equatable, Sendable {
 enum L3: Equatable, Sendable {
     case arp(ArpPacket)
     case ipv4(Ipv4Packet)
+    /// IPv6 (spec M9), EtherType 0x86DD.
+    case ipv6(Ipv6Packet)
     /// PVST+ BPDU, in an IEEE 802.3 frame with LLC/SNAP (`EthernetFrame.etherType` holds the 802.3 length).
     case bpdu(Bpdu)
 }
@@ -299,6 +301,7 @@ struct EthernetFrame: Equatable, Sendable {
         switch payload {
         case .arp: return header + 28
         case .ipv4(let p): return header + p.size
+        case .ipv6(let p): return header + p.size
         case .bpdu(let b): return header + b.size
         }
     }

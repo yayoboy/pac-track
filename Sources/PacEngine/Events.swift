@@ -39,6 +39,8 @@ struct SimEvent: Sendable {
     var note: String? = nil
     /// The protocol of a state change (nil: spanning tree).
     var proto: Proto? = nil
+    /// An IPv6 packet dropped above the link (no route, hop limit, address resolution), like `packet` for IPv4.
+    var packet6: Ipv6Packet? = nil
 }
 
 /// Ring buffer: keeps the latest `capacity` events.

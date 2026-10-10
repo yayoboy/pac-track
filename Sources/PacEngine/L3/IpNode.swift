@@ -223,6 +223,7 @@ class IpNode: Node {
         switch frame.payload {
         case .arp(let a): arp.handle(a, on: to)
         case .ipv4(let p): input(p, on: to)
+        case .ipv6: break // nothing listens until an interface turns IPv6 on (spec M9 §2)
         case .bpdu: break // never reached: the MAC filter above already left out the PVST+ group address
         }
     }

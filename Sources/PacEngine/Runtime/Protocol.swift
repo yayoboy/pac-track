@@ -128,7 +128,7 @@ public struct StpPriority: Codable, Equatable, Sendable {
 }
 
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, dhcp, dns, udp, tcp, stp, rip, ospf
+    case arp, icmp, dhcp, dns, udp, tcp, stp, rip, ospf, ndp
 }
 
 public enum Command: Sendable {
