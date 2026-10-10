@@ -141,6 +141,8 @@ public enum Command: Sendable {
     case setNat(node: String, config: NatConfig?)
     /// Firewall rules and default policy (routers only); nil turns it off. Any change forgets the tracked flows.
     case setFirewall(node: String, config: FirewallConfig?)
+    /// RIPv2 interfaces and passive ones (routers only); nil turns RIP off and forgets what it learned.
+    case setRip(node: String, config: RipConfig?)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -184,6 +186,7 @@ public enum Command: Sendable {
         case .trafficUdp: "trafficUdp"
         case .setNat: "setNat"
         case .setFirewall: "setFirewall"
+        case .setRip: "setRip"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -368,6 +371,8 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let stp: [StpView]
     /// Switches: the bridge priorities set away from 32768, by VLAN.
     public let stpPriorities: [StpPriority]
+    /// Routers: RIP's interfaces; nil while RIP is off.
+    public let rip: RipConfig?
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -632,9 +637,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var nat: NatConfig?
     public var firewall: FirewallConfig?
     public var stpPriorities: [StpPriority]?
+    public var rip: RipConfig?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
-                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil) {
+                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -649,9 +655,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.nat = nat
         self.firewall = firewall
         self.stpPriorities = stpPriorities
+        self.rip = rip
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -668,6 +675,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         nat = try c.decodeIfPresent(NatConfig.self, forKey: .nat)
         firewall = try c.decodeIfPresent(FirewallConfig.self, forKey: .firewall)
         stpPriorities = try c.decodeIfPresent([StpPriority].self, forKey: .stpPriorities)
+        rip = try c.decodeIfPresent(RipConfig.self, forKey: .rip)
     }
 }
 

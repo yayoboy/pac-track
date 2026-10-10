@@ -307,4 +307,29 @@ private func pingTtl(_ sim: Sim, _ h: Host, _ dst: String) throws -> UInt8? {
         try r1.configureRip(RipConfig(interfaces: ["Gi0/0", "Gi0/0.10"]))
         expectError("Gi0/0.10 takes part in RIP") { try r1.removeSubinterface("Gi0/0.10") }
     }
+
+    @Test func theRuntimeRunsRipOnRoutersOnlyAndFollowsAddressChanges() throws {
+        let rt = Runtime()
+        let devices: [(String, DeviceKind, String)] = [("r1", .router, "R1"), ("r2", .router, "R2"), ("p", .pc, "PC1"), ("c", .cloud, "ISP")]
+        for (id, kind, name) in devices {
+            try rt.handle(.addNode(id: id, kind: kind, name: name))
+        }
+        expectError("PC1 cannot run RIP") { try rt.handle(.setRip(node: "p", config: RipConfig())) }
+        expectError("ISP cannot run RIP") { try rt.handle(.setRip(node: "c", config: RipConfig())) }
+        try rt.handle(.connect(id: "l1", a: IfaceRef(node: "r1", iface: "Gi0/0"), b: IfaceRef(node: "r2", iface: "Gi0/0")))
+        try rt.handle(.connect(id: "l2", a: IfaceRef(node: "r2", iface: "Gi0/1"), b: IfaceRef(node: "p", iface: "eth0")))
+        try rt.handle(.setIp(node: "r1", iface: "Gi0/0", cidr: "10.0.12.1/30"))
+        try rt.handle(.setIp(node: "r2", iface: "Gi0/0", cidr: "10.0.12.2/30"))
+        try rt.handle(.setIp(node: "r2", iface: "Gi0/1", cidr: "192.168.2.1/24"))
+        try rt.handle(.setRip(node: "r1", config: RipConfig(interfaces: ["Gi0/0"])))
+        try rt.handle(.setRip(node: "r2", config: RipConfig(interfaces: ["Gi0/0", "Gi0/1"], passive: ["Gi0/1"])))
+        #expect(rt.snapshot().nodes[1].rip == RipConfig(interfaces: ["Gi0/0", "Gi0/1"], passive: ["Gi0/1"]))
+        rt.advance(wallMs: 100)
+        #expect(rt.snapshot().nodes[0].routes.last == RouteRow(dest: "192.168.2.0/24", nextHop: "10.0.12.2", iface: "Gi0/0", isStatic: false, metric: 1))
+        try rt.handle(.setIp(node: "r2", iface: "Gi0/1", cidr: "192.168.3.1/24"))
+        for _ in 0..<12 { rt.advance(wallMs: 100) } // past the 1 s between triggered updates
+        #expect(rt.snapshot().nodes[0].routes.filter { $0.metric != nil }.map(\.dest) == ["192.168.3.0/24"])
+        try rt.handle(.setRip(node: "r2", config: nil))
+        #expect(rt.snapshot().nodes[1].rip == nil)
+    }
 }

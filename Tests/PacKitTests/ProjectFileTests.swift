@@ -44,6 +44,24 @@ import Testing
         try rt.handle(.load(t))
         #expect(rt.snapshot().nodes[0].ifaces[0].switchport?.portfast == false && rt.snapshot().nodes[0].stpPriorities.isEmpty)
     }
+
+    @Test func ripSurvivesSavingAndAnM7FileOpensWithRipOff() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        try rt.handle(.setIp(node: "r", iface: "Gi0/1", cidr: "10.0.12.1/30"))
+        try rt.handle(.setRip(node: "r", config: RipConfig(interfaces: ["Gi0/0", "Gi0/1"], passive: ["Gi0/0"])))
+        let t = try ProjectFile.decode(try ProjectFile.encode(makeTopology(rt.snapshot(), [:])))
+        #expect(t.nodes[0].rip == RipConfig(interfaces: ["Gi0/0", "Gi0/1"], passive: ["Gi0/0"]))
+        let reopened = Runtime()
+        try reopened.handle(.load(t))
+        #expect(reopened.snapshot().nodes[0].rip == t.nodes[0].rip)
+        let json = #"{"version":1,"seed":1,"links":[],"nodes":[{"id":"r","kind":"router","name":"R1","pos":{"x":0,"y":0},"routes":[],"ifaces":[{"name":"Gi0/0","cidr":"10.0.0.1/24"}]}]}"#
+        let m7 = try ProjectFile.decode(Data(json.utf8))
+        #expect(m7.nodes[0].rip == nil)
+        let opened = Runtime()
+        try opened.handle(.load(m7))
+        #expect(opened.snapshot().nodes[0].rip == nil)
+    }
 }
 
 func expectError(_ fragment: String, sourceLocation: SourceLocation = #_sourceLocation, _ body: () throws -> Void) {

@@ -161,6 +161,8 @@ public final class Runtime {
             } else {
                 try ip.iface(iface).ipv4 = nil
             }
+            // RIP advertises the new network and withdraws the old one.
+            ip.rip?.refresh()
         case let .addRoute(node, cidr, nextHop):
             try ipNode(node).routes.addStatic(cidr.trimmingCharacters(in: .whitespaces), nextHop.trimmingCharacters(in: .whitespaces))
         case let .removeRoute(node, cidr):
@@ -214,6 +216,10 @@ public final class Runtime {
             let n = try ipNode(node)
             guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run a firewall") }
             n.firewall = try config.map { try Firewall(node: n, config: $0) }
+        case let .setRip(node, config):
+            let n = try ipNode(node)
+            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run RIP") }
+            try n.configureRip(config)
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -412,7 +418,8 @@ public final class Runtime {
                     StpView(vlan: vlan, priority: st.bridge.priority, root: st.root.text, cost: st.rootCost, rootPort: st.rootPort?.name,
                             ports: st.rows.map { StpPortRow(iface: $0.port, role: $0.role, state: $0.state) })
                 } ?? [],
-                stpPriorities: sw?.stpPriority.sorted { $0.key < $1.key }.map { StpPriority(vlan: $0.key, priority: $0.value) } ?? []
+                stpPriorities: sw?.stpPriority.sorted { $0.key < $1.key }.map { StpPriority(vlan: $0.key, priority: $0.value) } ?? [],
+                rip: ip?.rip?.config
             )
         }
         let linkViews = linkOrder.map { id in
@@ -517,6 +524,7 @@ public final class Runtime {
             if n.sink { try next.handle(.setSink(node: n.id, on: true)) }
             if let nat = n.nat { try next.handle(.setNat(node: n.id, config: nat)) }
             if let firewall = n.firewall { try next.handle(.setFirewall(node: n.id, config: firewall)) }
+            if let rip = n.rip { try next.handle(.setRip(node: n.id, config: rip)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }
