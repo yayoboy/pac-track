@@ -36,8 +36,10 @@ struct RipRoute {
 /// expiry does nothing if its deadline was moved or cleared since.
 // ponytail: linear scans of a sorted array; a lab has tens of routes
 final class Rip {
+    /// "Send me your whole table" (RFC 2453 §3.9.1).
+    private static let wholeTable = RipEntry(afi: 0, network: 0, prefix: 0, metric: RIP_INFINITY)
     unowned let node: IpNode
-    var config: RipConfig
+    private(set) var config: RipConfig
     /// Sorted by network and prefix, so updates list them in a stable order.
     private(set) var routes: [RipRoute] = []
     private var updateDue: Int?
@@ -103,11 +105,21 @@ final class Rip {
             } else {
                 insert(w)
             }
-            if !config.passive.contains(w.iface.name) {
-                multicast(RIP_REQUEST, [RipEntry(afi: 0, network: 0, prefix: 0, metric: RIP_INFINITY)], on: w.iface)
-            }
+            if !config.passive.contains(w.iface.name) { multicast(RIP_REQUEST, [Self.wholeTable], on: w.iface) }
         }
         commit()
+    }
+
+    /// A new configuration; an interface that stops being passive asks its neighbours and announces the whole table at once.
+    func reconfigure(_ new: RipConfig) {
+        let woken = new.interfaces.filter { config.passive.contains($0) && !new.passive.contains($0) }
+        config = new
+        refresh()
+        for name in woken {
+            guard unbind != nil, let i = try? node.iface(name), i.ipv4 != nil, i.lineUp else { continue }
+            multicast(RIP_REQUEST, [Self.wholeTable], on: i)
+            multicast(RIP_RESPONSE, entries(out: i, changedOnly: false), on: i)
+        }
     }
 
     /// RFC 2453 §3.9: only from a neighbour on the subnet of an interface taking part (a passive one too); responses only from port 520.

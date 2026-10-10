@@ -117,8 +117,7 @@ class IpNode: Node {
             throw EngineError("\(bad) is passive but does not take part in RIP")
         }
         if let rip {
-            rip.config = config
-            rip.refresh()
+            rip.reconfigure(config)
         } else {
             let started = Rip(node: self, config: config)
             rip = started

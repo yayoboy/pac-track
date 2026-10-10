@@ -320,6 +320,15 @@ private func pingTtl(_ sim: Sim, _ h: Host, _ dst: String) throws -> UInt8? {
         #expect(try route(r3, "192.168.2.0/24") == nil) // Gi0/1 no longer takes part
     }
 
+    @Test func aPassiveInterfaceMadeActiveAsksAndAnnouncesAtOnce() throws {
+        let (sim, _, _, r1, _) = try pair(passiveLans: true)
+        sim.run(5 * S)
+        try r1.configureRip(RipConfig(interfaces: ["Gi0/0", "Gi0/1"]))
+        sim.run(1 * MS)
+        #expect(ripTx(sim, "R1").filter { $0.iface == "Gi0/0" }.map { "\($0.time / MS) \($0.command) \($0.entries)" }
+                == ["5000 1 [\"0.0.0.0/0 16\"]", "5000 2 [\"10.0.12.0/30 1\", \"192.168.2.0/24 2\"]"])
+    }
+
     @Test func aRouterSavedPoweredOffSaysNothingWhenTheFileOpens() throws {
         let rip = RipConfig(interfaces: ["Gi0/0"])
         let t = Topology(nodes: [
