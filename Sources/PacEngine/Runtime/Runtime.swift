@@ -15,6 +15,23 @@ private func secondsLeft(_ ns: Int) -> Int {
     (ns + S - 1) / S
 }
 
+/// One line per IPv6 address of an interface, with its origin and, unless in use, its DAD state (spec M9 §8).
+private func addressLines(_ i: Interface) -> [String] {
+    (i.v6?.addrs ?? []).map { a in
+        let origin = switch a.origin {
+        case .linkLocal: "link-local"
+        case .manual: "manuale"
+        case .slaac: "SLAAC"
+        }
+        let state = switch a.state {
+        case .tentative: " · tentativo"
+        case .preferred: ""
+        case .duplicate: " · duplicato"
+        }
+        return "\(formatIp6(a.addr))/\(a.prefix) · \(origin)\(state)"
+    }
+}
+
 /// Totals → one 100 ms point of a cable direction.
 // ponytail: a frame's serialisation counts whole in the interval it starts in (capped at 100%)
 private func directionSample(_ c: LinkCounters, since last: LinkCounters) -> DirectionSample {
@@ -165,9 +182,19 @@ public final class Runtime {
             ip.rip?.refresh()
             ip.ospf?.refresh()
         case let .addRoute(node, cidr, nextHop):
-            try ipNode(node).routes.addStatic(cidr.trimmingCharacters(in: .whitespaces), nextHop.trimmingCharacters(in: .whitespaces))
+            let (c, hop) = (cidr.trimmingCharacters(in: .whitespaces), nextHop.trimmingCharacters(in: .whitespaces))
+            // A destination with ':' is IPv6 (spec M9 §9).
+            if c.contains(":") {
+                try ipNode(node).v6.addStatic(c, hop)
+            } else {
+                try ipNode(node).routes.addStatic(c, hop)
+            }
         case let .removeRoute(node, cidr):
-            try ipNode(node).routes.removeStatic(cidr)
+            if cidr.contains(":") {
+                try ipNode(node).v6.removeStatic(cidr)
+            } else {
+                try ipNode(node).routes.removeStatic(cidr)
+            }
         case let .ping(node, target, options):
             let t = target.trimmingCharacters(in: .whitespaces)
             start(node, "ping \(t)", .ping(try Ping(node: try liveIpNode(node), target: t, options: options)))
@@ -225,6 +252,14 @@ public final class Runtime {
             let n = try ipNode(node)
             guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run OSPF") }
             try n.configureOspf(config)
+        case let .setIpv6(node, iface, config):
+            let n = try ipNode(node)
+            guard config?.autoconfig != true || n is Host else { throw EngineError("\(n.name) cannot use SLAAC: only hosts autoconfigure") }
+            try n.v6.configure(iface, config)
+        case let .setIpv6Routing(node, on):
+            let n = try ipNode(node)
+            guard !on || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot route IPv6") }
+            n.v6.setRouting(on)
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -389,11 +424,14 @@ public final class Runtime {
                 powered: node.powered,
                 ifaces: node.interfaces.map {
                     IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: ($0.dot1q?.parent ?? $0).link != nil,
-                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil)
+                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil,
+                              ipv6Config: $0.v6?.config, ipv6: addressLines($0))
                 },
-                routes: ip?.routes.view().map {
-                    RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
-                             isStatic: $0.isStatic, dhcp: $0.dhcp, metric: $0.metric, ospf: $0.ospf)
+                routes: ip.map { ip in
+                    ip.routes.view().map {
+                        RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
+                                 isStatic: $0.isStatic, dhcp: $0.dhcp, metric: $0.metric, ospf: $0.ospf)
+                    } + ip.v6.routes()
                 } ?? [],
                 arp: ip?.arp.entries().map {
                     ArpRow(ip: formatIp($0.ip), mac: $0.mac, iface: $0.iface, ttlS: ($0.expiresAt - now + S - 1) / S)
@@ -439,6 +477,10 @@ public final class Runtime {
                         OspfLsaRow(type: Int(e.lsa.header.type), linkId: formatIp(e.lsa.header.id),
                                    advRouter: formatIp(e.lsa.header.adv), ageS: o.age(e), seq: String(format: "0x%08x", UInt32(bitPattern: e.lsa.header.seq)))
                     }
+                } ?? [],
+                ipv6Routing: ip?.v6.routing ?? false,
+                neighbors6: ip?.v6.neighbors.view().map {
+                    NeighborRow(addr: formatIp6($0.addr), mac: $0.mac ?? "-", state: $0.state.rawValue, iface: $0.iface)
                 } ?? []
             )
         }
@@ -534,7 +576,13 @@ public final class Runtime {
             if !l.up { try next.handle(.setLinkUp(id: l.id, up: false)) }
         }
         for n in t.nodes {
-            for r in n.routes { try next.ipNode(n.id).routes.addStatic(r.cidr, r.nextHop, requireReachable: false) }
+            for r in n.routes {
+                if r.cidr.contains(":") {
+                    try next.ipNode(n.id).v6.addStatic(r.cidr, r.nextHop, requireReachable: false)
+                } else {
+                    try next.ipNode(n.id).routes.addStatic(r.cidr, r.nextHop, requireReachable: false)
+                }
+            }
         }
         for n in t.nodes {
             for i in n.ifaces where i.mode == .dhcp { try next.handle(.setIfaceMode(node: n.id, iface: i.name, mode: .dhcp)) }
@@ -546,6 +594,8 @@ public final class Runtime {
             if let firewall = n.firewall { try next.handle(.setFirewall(node: n.id, config: firewall)) }
             if let rip = n.rip { try next.handle(.setRip(node: n.id, config: rip)) }
             if let ospf = n.ospf { try next.handle(.setOspf(node: n.id, config: ospf)) }
+            for i in n.ifaces { if let c = i.ipv6 { try next.handle(.setIpv6(node: n.id, iface: i.name, config: c)) } }
+            if n.ipv6Routing { try next.handle(.setIpv6Routing(node: n.id, on: true)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }

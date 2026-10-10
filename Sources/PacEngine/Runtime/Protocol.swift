@@ -165,6 +165,10 @@ public enum Command: Sendable {
     case setRip(node: String, config: RipConfig?)
     /// OSPF in area 0 (routers only); nil turns it off and forgets neighbours, database and routes.
     case setOspf(node: String, config: OspfConfig?)
+    /// IPv6 on an interface with its manual address and, on hosts, SLAAC; nil turns it off (spec M9 §2).
+    case setIpv6(node: String, iface: String, config: Ipv6Config?)
+    /// IOS `ipv6 unicast-routing` (routers only): forwarding and Router Advertisements (spec M9 §5).
+    case setIpv6Routing(node: String, on: Bool)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -210,6 +214,8 @@ public enum Command: Sendable {
         case .setFirewall: "setFirewall"
         case .setRip: "setRip"
         case .setOspf: "setOspf"
+        case .setIpv6: "setIpv6"
+        case .setIpv6Routing: "setIpv6Routing"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -236,6 +242,10 @@ public struct IfaceView: Equatable, Sendable {
     public let mode: IfaceMode
     /// Switch ports only: the 802.1Q role.
     public let switchport: PortConfig?
+    /// IPv6 settings; nil while IPv6 is off.
+    public let ipv6Config: Ipv6Config?
+    /// Every IPv6 address with its origin and state: "2001:db8:1::10/64 · SLAAC · tentativo" (spec M9 §8).
+    public let ipv6: [String]
 }
 
 public struct RouteRow: Equatable, Sendable {
@@ -249,6 +259,16 @@ public struct RouteRow: Equatable, Sendable {
     public var metric: Int? = nil
     /// An OSPF route (shown as O [110/metric]).
     public var ospf = false
+    /// The default route from a Router Advertisement (shown as ND [2/0]).
+    public var ra = false
+}
+
+/// One IPv6 neighbour as `show ipv6 neighbors` lists it (spec M9 §8); state INCMP, REACH, STALE, DELAY or PROBE.
+public struct NeighborRow: Equatable, Sendable {
+    public let addr: String
+    public let mac: String
+    public let state: String
+    public let iface: String
 }
 
 public struct ArpRow: Equatable, Sendable {
@@ -404,6 +424,10 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let ospfRouterId: String?
     public let ospfNeighbors: [OspfNeighborRow]
     public let ospfDatabase: [OspfLsaRow]
+    /// Routers: IOS `ipv6 unicast-routing`.
+    public let ipv6Routing: Bool
+    /// The IPv6 neighbour cache.
+    public let neighbors6: [NeighborRow]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -524,20 +548,24 @@ public struct TopologyIface: Codable, Equatable, Sendable {
     public var mode: IfaceMode
     /// Switch ports whose VLAN role is not the default (access, VLAN 1); nil otherwise.
     public var switchport: PortConfig?
-    public init(name: String, cidr: String?, mode: IfaceMode = .`static`, switchport: PortConfig? = nil) {
+    /// IPv6 settings; nil while IPv6 is off (spec M9 §9).
+    public var ipv6: Ipv6Config?
+    public init(name: String, cidr: String?, mode: IfaceMode = .`static`, switchport: PortConfig? = nil, ipv6: Ipv6Config? = nil) {
         self.name = name
         self.cidr = cidr
         self.mode = mode
         self.switchport = switchport
+        self.ipv6 = ipv6
     }
 
-    /// Files written before M3 have no `mode`, before M7 no `switchport`.
+    /// Files written before M3 have no `mode`, before M7 no `switchport`, before M9a no `ipv6`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         cidr = try c.decodeIfPresent(String.self, forKey: .cidr)
         mode = try c.decodeIfPresent(IfaceMode.self, forKey: .mode) ?? .`static`
         switchport = try c.decodeIfPresent(PortConfig.self, forKey: .switchport)
+        ipv6 = try c.decodeIfPresent(Ipv6Config.self, forKey: .ipv6)
     }
 }
 
@@ -709,10 +737,12 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var stpPriorities: [StpPriority]?
     public var rip: RipConfig?
     public var ospf: OspfConfig?
+    /// Routers: IOS `ipv6 unicast-routing` (spec M9 §9).
+    public var ipv6Routing: Bool
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
                 nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil,
-                ospf: OspfConfig? = nil) {
+                ospf: OspfConfig? = nil, ipv6Routing: Bool = false) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -729,9 +759,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.stpPriorities = stpPriorities
         self.rip = rip
         self.ospf = ospf
+        self.ipv6Routing = ipv6Routing
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`, before M9a no `ipv6Routing`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -750,6 +781,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         stpPriorities = try c.decodeIfPresent([StpPriority].self, forKey: .stpPriorities)
         rip = try c.decodeIfPresent(RipConfig.self, forKey: .rip)
         ospf = try c.decodeIfPresent(OspfConfig.self, forKey: .ospf)
+        ipv6Routing = try c.decodeIfPresent(Bool.self, forKey: .ipv6Routing) ?? false
     }
 }
 

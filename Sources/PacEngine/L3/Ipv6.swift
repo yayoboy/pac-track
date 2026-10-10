@@ -351,6 +351,24 @@ final class Ipv6 {
         statics.removeAll { $0.network == networkOf6(c.addr, c.prefix) && $0.prefix == c.prefix }
     }
 
+    /// `show ipv6 route` (spec M9 §6): the connected prefixes, the static routes, then the defaults from RAs still valid.
+    func routes() -> [RouteRow] {
+        var rows: [RouteRow] = []
+        for i in node.interfaces where i.up {
+            for a in i.v6?.addrs ?? [] where a.origin != .linkLocal && a.state != .duplicate {
+                let row = RouteRow(dest: "\(formatIp6(networkOf6(a.addr, a.prefix)))/\(a.prefix)", nextHop: nil, iface: i.name, isStatic: false)
+                if !rows.contains(row) { rows.append(row) }
+            }
+        }
+        let statics = statics.map {
+            RouteRow(dest: "\(formatIp6($0.network))/\($0.prefix)", nextHop: formatIp6($0.nextHop), iface: connected($0.nextHop)?.iface.name ?? "-", isStatic: true)
+        }
+        let learned = defaults.filter { $0.expiresAt > now }.map {
+            RouteRow(dest: "::/0", nextHop: formatIp6($0.addr), iface: $0.iface.name, isStatic: false, ra: true)
+        }
+        return rows + statics + learned
+    }
+
     /// The interface whose address prefix holds `addr`, longest prefix first; link-local and duplicate addresses do not count.
     private func connected(_ addr: UInt128) -> (iface: Interface, prefix: Int)? {
         var best: (iface: Interface, prefix: Int)?
