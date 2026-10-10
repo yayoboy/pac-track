@@ -256,6 +256,8 @@ class IpNode: Node {
             }
         case .tcp(let t):
             tcp.input(p, t)
+        case .ospf:
+            break // no OSPF process yet: dropped like an unknown protocol
         }
     }
 

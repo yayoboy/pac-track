@@ -61,6 +61,7 @@ private func checksumsHold(_ sim: Sim) -> Bool {
             return internetChecksum(serialize(m)) == 0 && (quotedEndpoints(m) == nil || internetChecksum(Array(m.data[0..<20])) == 0)
         case .tcp(let t): return makeTcp(t, src: p.src, dst: p.dst).checksum == t.checksum
         case .udp(let u): return u.checksum == 0
+        case .ospf(let o): return internetChecksum(serialize(o)) == 0
         }
     }
 }

@@ -210,12 +210,14 @@ enum L4: Equatable, Sendable {
     case icmp(IcmpMessage)
     case udp(UdpDatagram)
     case tcp(TcpSegment)
+    case ospf(OspfPacket)
 
     var size: Int {
         switch self {
         case .icmp(let m): m.size
         case .udp(let u): u.size
         case .tcp(let t): t.size
+        case .ospf(let o): o.size
         }
     }
 }
@@ -320,8 +322,8 @@ func internetChecksum(_ bytes: [UInt8]) -> UInt16 {
     return ~UInt16(sum)
 }
 
-private func u16(_ n: UInt16) -> [UInt8] { [UInt8(n >> 8), UInt8(n & 0xFF)] }
-private func u32(_ n: UInt32) -> [UInt8] { [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] }
+func u16(_ n: UInt16) -> [UInt8] { [UInt8(n >> 8), UInt8(n & 0xFF)] }
+func u32(_ n: UInt32) -> [UInt8] { [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] }
 
 func serialize(_ m: IcmpMessage) -> [UInt8] {
     var b: [UInt8] = [m.type, m.code]
@@ -374,6 +376,7 @@ func serializeL4(_ p: Ipv4Packet) -> [UInt8] {
     case .icmp(let m): serialize(m)
     case .udp(let u): serialize(u)
     case .tcp(let t): serialize(t)
+    case .ospf(let o): serialize(o)
     }
 }
 
@@ -416,6 +419,7 @@ func makeIpv4(src: UInt32, dst: UInt32, ttl: UInt8, id: UInt16, payload: L4, tos
     case .icmp: IPPROTO_ICMP
     case .udp: IPPROTO_UDP
     case .tcp: IPPROTO_TCP
+    case .ospf: IPPROTO_OSPF
     }
     return withChecksum(Ipv4Packet(tos: tos, id: id, dontFragment: dontFragment, ttl: ttl, proto: proto,
                                    checksum: 0, src: src, dst: dst, payload: payload))
@@ -452,6 +456,7 @@ func endpoints(_ p: Ipv4Packet) -> Endpoints? {
     case .icmp(let m) where m.type == ICMP_ECHO_REPLY:
         return Endpoints(proto: IPPROTO_ICMP, src: p.src, srcPort: 0, dst: p.dst, dstPort: m.id)
     case .icmp: return nil
+    case .ospf: return nil // no ports: NAT and stateful filtering leave it alone
     }
 }
 
@@ -485,6 +490,8 @@ func rewritten(_ p: Ipv4Packet, src: UInt32? = nil, srcPort: UInt16? = nil, dst:
     case .icmp(let m):
         let id = (m.type == ICMP_ECHO_REQUEST ? srcPort : m.type == ICMP_ECHO_REPLY ? dstPort : nil) ?? m.id
         q.payload = .icmp(makeIcmp(type: m.type, code: m.code, id: id, seq: m.seq, data: m.data))
+    case .ospf:
+        break // NAT never rewrites routing protocol packets
     }
     return withChecksum(q)
 }

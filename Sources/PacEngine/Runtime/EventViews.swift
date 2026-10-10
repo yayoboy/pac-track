@@ -46,6 +46,25 @@ private func describe(_ b: Bpdu) -> String {
     return "Conf. root = \(c.root.text) costo = \(c.cost) porta = \(hex(c.port, digits: 4))" + (c.tc ? " TC" : "") + (c.tca ? " TCA" : "")
 }
 
+private func lsaName(_ k: LsaKey) -> String {
+    "\(k.type == 1 ? "router" : "network") \(formatIp(k.id))"
+}
+
+private func seqText(_ seq: Int32) -> String {
+    hex(Int(UInt32(bitPattern: seq)), digits: 8)
+}
+
+private func ospfSummary(_ o: OspfPacket) -> String {
+    switch o.body {
+    case .hello(let h): "Hello DR \(formatIp(h.dr)) BDR \(formatIp(h.bdr)) vicini \(h.neighbors.count)"
+    case .dbd(let d):
+        "DBD seq \(d.seq)" + [(d.initial, " I"), (d.more, " M"), (d.master, " MS")].filter(\.0).map(\.1).joined() + " (\(d.headers.count) LSA)"
+    case .request(let keys): "LS Request " + keys.map(lsaName).joined(separator: ", ")
+    case .update(let lsas): "LS Update " + lsas.map { "\(lsaName($0.header.key)) seq \(seqText($0.header.seq))" }.joined(separator: ", ")
+    case .ack(let headers): "LS Ack " + headers.map { lsaName($0.key) }.joined(separator: ", ")
+    }
+}
+
 private func proto(of p: Ipv4Packet) -> Proto {
     switch p.payload {
     case .icmp: .icmp
@@ -57,6 +76,7 @@ private func proto(of p: Ipv4Packet) -> Proto {
         case .raw, .traffic: .udp
         }
     case .tcp: .tcp
+    case .ospf: .ospf
     }
 }
 
@@ -83,6 +103,8 @@ private func describe(_ p: Ipv4Packet) -> String {
     case .tcp(let t):
         return "\(ends) TCP \(t.srcPort) → \(t.dstPort) [\(flagNames(t.flags))] seq=\(t.seq)" + (t.flags.contains(.ack) ? " ack=\(t.ack)" : "")
             + " win=\(t.window) len=\(t.dataLength)" + (t.mss.map { " mss=\($0)" } ?? "")
+    case .ospf(let o):
+        return "\(ends) OSPF " + ospfSummary(o)
     }
 }
 
@@ -184,6 +206,71 @@ private func ripLayer(_ m: RipMessage) -> PduLayer {
     return PduLayer(title: "RIPv2", bytes: m.size, fields: fields)
 }
 
+private func lsaHeaderText(_ h: LsaHeader) -> String {
+    "\(h.type == 1 ? "router-LSA" : "network-LSA") \(formatIp(h.id)) da \(formatIp(h.adv)), seq \(seqText(h.seq)), età \(h.age) s, "
+        + "checksum \(hex(Int(h.checksum), digits: 4)), \(h.length) B"
+}
+
+private func ospfLayer(_ o: OspfPacket) -> PduLayer {
+    let names = ["Hello", "Database Description", "LS Request", "LS Update", "LS Acknowledgment"]
+    var fields = [
+        field("Versione", "2"),
+        field("Tipo", "\(o.body.type) (\(names[Int(o.body.type) - 1]))"),
+        field("Lunghezza", "\(o.size) B"),
+        field("Router ID", formatIp(o.routerId)),
+        field("Area", "0.0.0.0"),
+        field("Checksum", hex(Int(o.checksum), digits: 4)),
+        field("Autenticazione", "0 (nessuna)"),
+    ]
+    switch o.body {
+    case .hello(let h):
+        fields += [
+            field("Maschera", formatIp(prefixMask(h.prefix))),
+            field("Hello interval", "\(OSPF_HELLO_S) s"),
+            field("Opzioni", "0x02 (E)"),
+            field("Priorità", "\(h.priority)"),
+            field("Dead interval", "\(OSPF_DEAD_S) s"),
+            field("DR", formatIp(h.dr)),
+            field("BDR", formatIp(h.bdr)),
+        ]
+        for (i, n) in h.neighbors.enumerated() { fields.append(field("Vicino \(i + 1)", formatIp(n))) }
+    case .dbd(let d):
+        let flags = [(d.initial, 4, "I"), (d.more, 2, "M"), (d.master, 1, "MS")].filter(\.0)
+        fields += [
+            field("MTU", "1500"),
+            field("Opzioni", "0x02 (E)"),
+            field("Flag", hex(flags.reduce(0) { $0 | $1.1 }, digits: 2) + (flags.isEmpty ? "" : " (\(flags.map(\.2).joined(separator: ", ")))")),
+            field("Sequenza DD", "\(d.seq)"),
+        ]
+        for (i, h) in d.headers.enumerated() { fields.append(field("LSA \(i + 1)", lsaHeaderText(h))) }
+    case .request(let keys):
+        for (i, k) in keys.enumerated() {
+            fields.append(field("Richiesta \(i + 1)", "\(k.type == 1 ? "router-LSA" : "network-LSA") \(formatIp(k.id)) da \(formatIp(k.adv))"))
+        }
+    case .update(let lsas):
+        fields.append(field("Numero di LSA", "\(lsas.count)"))
+        for (i, l) in lsas.enumerated() {
+            fields.append(field("LSA \(i + 1)", lsaHeaderText(l.header)))
+            switch l.body {
+            case .router(let links):
+                for (j, k) in links.enumerated() {
+                    let text = switch k.type {
+                    case LINK_P2P: "point-to-point verso \(formatIp(k.id)), dati \(formatIp(k.data))"
+                    case LINK_TRANSIT: "transit, DR \(formatIp(k.id)), dati \(formatIp(k.data))"
+                    default: "stub \(formatIp(k.id)) maschera \(formatIp(k.data))"
+                    }
+                    fields.append(field("LSA \(i + 1) link \(j + 1)", "\(text), costo \(k.metric)"))
+                }
+            case .network(let prefix, let routers):
+                fields.append(field("LSA \(i + 1) rete", "maschera \(formatIp(prefixMask(prefix))), router " + routers.map(formatIp).joined(separator: ", ")))
+            }
+        }
+    case .ack(let headers):
+        for (i, h) in headers.enumerated() { fields.append(field("LSA \(i + 1)", lsaHeaderText(h))) }
+    }
+    return PduLayer(title: "OSPF", bytes: o.size, fields: fields)
+}
+
 /// Wireshark's layout of a Cisco PVST+ BPDU: LLC/SNAP, then the 802.1D BPDU with the PVID TLV.
 private func bpduLayers(_ b: Bpdu) -> [PduLayer] {
     let llc = PduLayer(title: "LLC/SNAP", bytes: 8, fields: [
@@ -224,7 +311,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         field("Flag", p.dontFragment ? "0x2 (DF)" : "0x0"),
         field("Offset frammento", "0"),
         field("TTL", "\(p.ttl)"),
-        field("Protocollo", p.proto == IPPROTO_ICMP ? "1 (ICMP)" : p.proto == IPPROTO_TCP ? "6 (TCP)" : "17 (UDP)"),
+        field("Protocollo", p.proto == IPPROTO_ICMP ? "1 (ICMP)" : p.proto == IPPROTO_TCP ? "6 (TCP)" : p.proto == IPPROTO_OSPF ? "89 (OSPF)" : "17 (UDP)"),
         field("Checksum header", hex(Int(p.checksum), digits: 4)),
         field("Sorgente", formatIp(p.src)),
         field("Destinazione", formatIp(p.dst)),
@@ -272,6 +359,8 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         if let mss = t.mss { fields.append(field("Opzione MSS", "\(mss) B")) }
         fields.append(field("Dati", "\(t.dataLength) B"))
         return [ip, PduLayer(title: "TCP", bytes: t.size, fields: fields)]
+    case .ospf(let o):
+        return [ip, ospfLayer(o)]
     }
 }
 
