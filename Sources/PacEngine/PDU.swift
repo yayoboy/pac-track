@@ -21,6 +21,8 @@ let PORT_DISCARD: UInt16 = 9
 let DNS_NXDOMAIN: UInt8 = 3
 /// iperf3's default UDP payload: with UDP, IPv4 and Ethernet headers the frame stays within a 1500-byte MTU.
 let TRAFFIC_DATAGRAM = 1470
+/// The same over IPv6, whose header is 20 B longer: the packet stays at 1498 B (spec M9 §10).
+let TRAFFIC_DATAGRAM6 = 1450
 /// Cisco Shared Spanning Tree Protocol group address: PVST+ BPDUs go here (spec M7 §4).
 let SSTP_MAC: Mac = "01:00:0c:cc:cc:cd"
 /// 802.1D timers, Cisco defaults (not configurable): hello, max age, forward delay, and how long the root flags a topology change.
@@ -135,6 +137,8 @@ struct TrafficData: Equatable, Sendable {
     var flow: Int
     var seq: Int
     var sentAt: Int
+    /// The payload's size: smaller over IPv6.
+    var bytes = TRAFFIC_DATAGRAM
 }
 
 /// One RIPv2 route entry (20 B: AFI, route tag 0, address, mask, next hop 0.0.0.0, metric). A whole-table request is a single
@@ -166,7 +170,7 @@ enum UdpPayload: Equatable, Sendable {
         case .raw(let bytes): bytes.count
         case .dhcp(let m): m.size
         case .dns(let m): m.size
-        case .traffic: TRAFFIC_DATAGRAM
+        case .traffic(let d): d.bytes
         case .rip(let m): m.size
         }
     }

@@ -31,6 +31,12 @@ private func resolutionError(_ target: String, _ r: Resolution) -> String {
     "iperf3: error - unable to resolve host \(target): " + (r == .nxdomain ? "Name or service not known" : "Temporary failure in name resolution")
 }
 
+/// A target as typed: an IPv4 or IPv6 address, or nil for a host name. No link-local or multicast IPv6 targets, as for ping.
+private func literalAddr(_ target: String) throws -> IpAddr? {
+    if let a = try ipv6Target(target, tool: "Traffic") { return .v6(a) }
+    return try literalIp(target).map(IpAddr.v4)
+}
+
 /// iperf3-style TCP client: connects to the discard port, sends `bytes`, closes, and reports goodput and retransmissions.
 /// The connection's timers keep it alive; it learns of every state change through `onChange` (captured weak).
 final class TcpFlow {
@@ -47,7 +53,7 @@ final class TcpFlow {
         self.node = node
         self.target = target
         self.bytes = bytes
-        let literal = try literalIp(target)
+        let literal = try literalAddr(target)
         let name = literal == nil ? normalizeHostName(target) : nil
         guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         if let literal {
@@ -78,13 +84,13 @@ final class TcpFlow {
 
     private func resolved(_ r: Resolution) {
         guard !result.done else { return }
-        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(.v4(first)) }
         result.lines = [resolutionError(target, r)]
         result.done = true
     }
 
-    private func begin(_ ip: UInt32) {
-        result.lines = ["Connecting to host \(formatIp(ip)), port \(PORT_DISCARD)"]
+    private func begin(_ ip: IpAddr) {
+        result.lines = ["Connecting to host \(ip.text), port \(PORT_DISCARD)"]
         do {
             let c = try node.tcp.connect(to: ip, port: PORT_DISCARD, sending: bytes)
             c.onChange = { [weak self] in self?.update() }
@@ -123,11 +129,14 @@ final class UdpFlow {
     private let node: IpNode
     private let target: String
     private let seconds: Int
-    private let interval: Int
-    private let count: Int
+    private let rate: Double
+    private var interval = 0
+    private var count = 0
+    /// The datagram's payload: 1450 B over IPv6.
+    private var datagram = TRAFFIC_DATAGRAM
     private let flow: Int
     private let srcPort: UInt16
-    private var dst: UInt32 = 0
+    private var dst: IpAddr = .v4(0)
     private var startedAt = 0
     private var sent = 0
     private var received = 0
@@ -144,9 +153,8 @@ final class UdpFlow {
         self.node = node
         self.target = target
         self.seconds = seconds
-        interval = Int((Double(TRAFFIC_DATAGRAM * 8) * Double(S) / bitsPerSecond).rounded())
-        count = (seconds * S + interval - 1) / interval
-        let literal = try literalIp(target)
+        rate = bitsPerSecond
+        let literal = try literalAddr(target)
         let name = literal == nil ? normalizeHostName(target) : nil
         guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         flow = node.sim.nextId()
@@ -169,7 +177,7 @@ final class UdpFlow {
 
     /// After the end, one last point if datagrams arrived since the previous one.
     func sample(at time: Int) {
-        let bytes = received * TRAFFIC_DATAGRAM
+        let bytes = received * datagram
         guard sent > 0, !result.done || bytes != lastBytes else { return }
         let loss = highest < 0 ? 0 : Double(highest + 1 - received) / Double(highest + 1) * 100
         keep(FlowSample(timeNs: time, bitsPerSecond: bitsPerSecond(bytes - lastBytes), delayNs: delayCount == 0 ? nil : delaySum / delayCount,
@@ -181,20 +189,23 @@ final class UdpFlow {
 
     private func resolved(_ r: Resolution) {
         guard !result.done else { return }
-        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(.v4(first)) }
         result.lines = [resolutionError(target, r)]
         result.done = true
     }
 
-    private func begin(_ ip: UInt32) {
+    private func begin(_ ip: IpAddr) {
         dst = ip
+        if case .v6 = ip { datagram = TRAFFIC_DATAGRAM6 }
+        interval = Int((Double(datagram * 8) * Double(S) / rate).rounded())
+        count = (seconds * S + interval - 1) / interval
         startedAt = node.sim.now
-        result.lines = ["Connecting to host \(formatIp(ip)), port \(PORT_DISCARD)"]
-        guard let src = node.sourceFor(ip) else {
+        result.lines = ["Connecting to host \(ip.text), port \(PORT_DISCARD)"]
+        guard let src = node.source(for: ip) else {
             result.lines.append("iperf3: error - unable to connect to server: Network is unreachable")
             return finish()
         }
-        result.lines.append("[  1] local \(formatIp(src)) port \(srcPort) connected to \(formatIp(ip)) port \(PORT_DISCARD)")
+        result.lines.append("[  1] local \(src.text) port \(srcPort) connected to \(ip.text) port \(PORT_DISCARD)")
         node.sim.flows[flow] = { [weak self] d in self?.arrived(d) }
         send(0)
         node.sim.sched.after(seconds * S + UDP_REPORT_DELAY) { [self] in report() }
@@ -202,7 +213,7 @@ final class UdpFlow {
 
     private func send(_ seq: Int) {
         guard !result.done else { return }
-        node.sendUdp(dst, srcPort: srcPort, dstPort: PORT_DISCARD, payload: .traffic(TrafficData(flow: flow, seq: seq, sentAt: node.sim.now)))
+        node.sendUdp(dst, srcPort: srcPort, dstPort: PORT_DISCARD, payload: .traffic(TrafficData(flow: flow, seq: seq, sentAt: node.sim.now, bytes: datagram)))
         sent += 1
         if seq + 1 < count { node.sim.sched.after(interval) { [self] in send(seq + 1) } }
     }
@@ -222,7 +233,7 @@ final class UdpFlow {
     private func report() {
         guard !result.done else { return }
         let elapsed = Double(min(node.sim.now - startedAt, seconds * S)) / Double(S)
-        let bytes = received * TRAFFIC_DATAGRAM
+        let bytes = received * datagram
         let lost = sent - received
         let pct = Int((Double(lost) / Double(sent) * 100).rounded())
         let rate = elapsed == 0 ? 0 : Double(bytes) * 8 / elapsed / 1e6

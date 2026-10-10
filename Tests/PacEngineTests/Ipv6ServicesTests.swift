@@ -93,4 +93,20 @@ private func checksumHolds(_ p: Ipv6Packet) -> Bool {
             expectError("Invalid IPv6 address: \"fe80::zz\"") { _ = try Ping(node: a, target: "fe80::zz%eth0") } // the address part is parsed first
         }
     }
+
+    @Test func theTrafficGeneratorRunsTcpAndUdpToAnIpv6Address() throws {
+        let (sim, pc, srv, _) = try lab()
+        try srv.configureSink(true)
+        let tcp = try TcpFlow(node: pc, target: "2001:db8:2::53", bytes: 100_000)
+        let udp = try UdpFlow(node: pc, target: "2001:DB8:2::53", bitsPerSecond: 1e6, seconds: 1)
+        sim.run(4 * S)
+        #expect(tcp.result.lines.first == "Connecting to host 2001:db8:2::53, port 9")
+        #expect(tcp.result.lines[1].hasPrefix("[  1] local \(PC) port ") && tcp.result.lines[1].hasSuffix(" connected to 2001:db8:2::53 port 9"))
+        #expect(tcp.result.lines.last == "iperf Done.")
+        #expect(udp.result.lines.contains { $0.hasSuffix("0/87 (0%)") }) // 1450 B every 11.6 ms for 1 s
+        #expect(udp.result.lines.last == "iperf Done.")
+        #expect(sim.log.all.contains { $0.kind == .rx && $0.node == "H2" && $0.frame?.size == 1512 }) // 14 + 40 + 8 + 1450
+        #expect(drops(sim, .mtuExceeded) == 0)
+        expectError("Traffic to link-local or multicast addresses is not supported") { _ = try TcpFlow(node: pc, target: "fe80::1", bytes: 1) }
+    }
 }

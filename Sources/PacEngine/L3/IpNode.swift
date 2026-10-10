@@ -212,6 +212,19 @@ class IpNode: Node {
         sendPacket(dst, .udp(makeUdp(srcPort: srcPort, dstPort: dstPort, payload: payload)), ttl: ttl)
     }
 
+    /// UDP over either stack, from `src` if given. False without a route.
+    @discardableResult
+    func sendUdp(_ dst: IpAddr, srcPort: UInt16, dstPort: UInt16, payload: UdpPayload, src: IpAddr? = nil) -> Bool {
+        let u = makeUdp(srcPort: srcPort, dstPort: dstPort, payload: payload)
+        switch (dst, src) {
+        case let (.v4(d), .v4(s)?): return sendPacket(d, .udp(u), src: s)
+        case let (.v4(d), nil): return sendPacket(d, .udp(u))
+        case let (.v6(d), .v6(s)?): return v6.send(d, .udp(u), src: s)
+        case let (.v6(d), nil): return v6.send(d, .udp(u))
+        default: return false // a source of the other version
+        }
+    }
+
     /// Limited broadcast (255.255.255.255) straight out of one interface, without routing: DHCP before the node has an address.
     func broadcast(on iface: Interface, src: UInt32, _ payload: L4) {
         sendFrame(iface, to: BROADCAST_MAC, etherType: ETHERTYPE_IPV4,

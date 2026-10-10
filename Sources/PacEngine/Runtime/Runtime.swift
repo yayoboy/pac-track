@@ -373,11 +373,12 @@ public final class Runtime {
         linkCounters[id] = nil
     }
 
-    /// netstat -ant: listening ports, then connections in the order they were opened.
+    /// netstat -ant: listening ports, then connections in the order they were opened; an IPv6 end is "[address]:port" (spec M9 §10).
     private func tcpRows(_ n: IpNode) -> [TcpRow] {
-        n.tcp.listening.map { TcpRow(local: "0.0.0.0:\($0)", remote: "0.0.0.0:*", state: "LISTEN") }
+        let end = { (a: IpAddr, port: UInt16) -> String in if case .v6 = a { "[\(a.text)]:\(port)" } else { "\(a.text):\(port)" } }
+        return n.tcp.listening.map { TcpRow(local: "0.0.0.0:\($0)", remote: "0.0.0.0:*", state: "LISTEN") }
             + n.tcp.connections.map {
-                TcpRow(local: "\($0.localIp.text):\($0.localPort)", remote: "\($0.remoteIp.text):\($0.remotePort)", state: $0.state.rawValue)
+                TcpRow(local: end($0.localIp, $0.localPort), remote: end($0.remoteIp, $0.remotePort), state: $0.state.rawValue)
             }
     }
 

@@ -369,7 +369,7 @@ private func udpLayer(_ u: UdpDatagram) -> PduLayer {
     case .dhcp(let m): "\(m.size) B (DHCP)"
     case .dns(let m): "\(m.size) B (DNS)"
     case .rip(let m): "\(m.size) B (RIP)"
-    case .traffic(let d): "\(TRAFFIC_DATAGRAM) B (generatore di traffico, seq \(d.seq))"
+    case .traffic(let d): "\(d.bytes) B (generatore di traffico, seq \(d.seq))"
     }
     return PduLayer(title: "UDP", bytes: u.size, fields: [
         field("Porta sorgente", "\(u.srcPort)"),
