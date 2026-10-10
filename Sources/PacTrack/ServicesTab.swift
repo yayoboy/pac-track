@@ -2,7 +2,7 @@ import PacEngine
 import PacKit
 import SwiftUI
 
-/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
+/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), RIP, NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
 struct ServicesTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -27,6 +27,7 @@ struct ServicesTab: View {
                 if node.kind == .server || node.kind == .cloud { dns }
                 if node.kind == .server { sink }
                 if node.kind == .router {
+                    rip
                     nat
                     firewall
                 }
@@ -64,6 +65,42 @@ struct ServicesTab: View {
             }
             ErrorLine(editor: editor, key: key)
             Text("Priorità del bridge per VLAN: vince la più bassa, a parità il MAC minore. Il valore effettivo aggiunge il numero di VLAN.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// RIPv2 (spec M8 §5): on/off and each interface's part.
+    private var rip: some View {
+        let key = "rip:\(node.id)"
+        return VStack(alignment: .leading, spacing: 6) {
+            Toggle("RIP v2", isOn: Binding(get: { node.rip != nil }, set: { on in
+                Task { await editor.enableRip(node.id, on) }
+            }))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .accessibilityIdentifier("rip-enabled")
+            if node.rip != nil {
+                ForEach(node.ifaces, id: \.name) { iface in
+                    HStack {
+                        Text(iface.name).font(Theme.mono)
+                        Spacer()
+                        Picker("", selection: Binding(get: { ripRole(node.rip, iface.name) }, set: { role in
+                            Task { await editor.setRipRole(node.id, iface: iface.name, role) }
+                        })) {
+                            ForEach(RipRole.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
+                        .accessibilityIdentifier("rip-\(iface.name)")
+                    }
+                }
+            }
+            ErrorLine(editor: editor, key: key)
+            Text(node.rip == nil ? "Spento." : "Update ogni 30 s verso 224.0.0.9 dalle interfacce attive; una passiva fa annunciare la sua rete ma non manda nulla. Route apprese in Tabelle.")
                 .font(Theme.small)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)

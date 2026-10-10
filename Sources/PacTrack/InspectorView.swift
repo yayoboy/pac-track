@@ -171,8 +171,7 @@ private struct NodeInspector: View {
                     }
                 }
             } else {
-                TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
-                             rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
+                TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."], rows: node.routes.map(routeColumns))
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
                 TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
                 if node.nat != nil {

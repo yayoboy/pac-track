@@ -558,6 +558,28 @@ public final class Editor {
         }
     }
 
+    /// RIP on with every interface that has an address taking part (spec M8 §2), or off. Errors show under RIP.
+    public func enableRip(_ id: String, _ on: Bool) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }) else { return }
+            let config = on ? RipConfig(interfaces: node.ifaces.filter { $0.cidr != nil }.map(\.name)) : nil
+            await self.editNow([.setRip(node: id, config: config)], key: "rip:\(id)")
+        }
+    }
+
+    /// Gives a router interface its part in RIP, keeping the interfaces in the router's order. Errors show under RIP.
+    public func setRipRole(_ id: String, iface: String, _ role: RipRole) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), var c = node.rip else { return }
+            let names = node.ifaces.map(\.name)
+            let active = c.interfaces.filter { $0 != iface } + (role == .off ? [] : [iface])
+            let passive = c.passive.filter { $0 != iface } + (role == .passive ? [iface] : [])
+            c.interfaces = names.filter(active.contains)
+            c.passive = names.filter(passive.contains)
+            await self.editNow([.setRip(node: id, config: c)], key: "rip:\(id)")
+        }
+    }
+
     /// Appends a rule typed in the Servizi tab (blank addresses: any; blank port: any port). Returns false, with the error under
     /// the rule form, if refused.
     @discardableResult
