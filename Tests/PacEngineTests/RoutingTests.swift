@@ -79,4 +79,25 @@ private func hop(_ rt: RoutingTable, _ dst: String) throws -> String? {
         #expect(try hop(rt, "10.0.2.1") == nil)
         #expect(rows().count == 2)
     }
+
+    @Test func aLearnedRouteLosesToConnectedAndStaticOnesOfTheSamePrefixAndBeatsTheDhcpDefault() throws {
+        let (_, node, rt) = try setup()
+        let eth1 = try node.iface("eth1")
+        let via = try parseIp("10.0.12.2")
+        rt.learned = [
+            LearnedRoute(network: try parseIp("10.0.2.0"), prefix: 24, nextHop: via, iface: eth1, metric: 1),
+            LearnedRoute(network: try parseIp("10.0.3.0"), prefix: 24, nextHop: via, iface: eth1, metric: 2),
+            LearnedRoute(network: try parseIp("10.0.1.0"), prefix: 24, nextHop: via, iface: eth1, metric: 1),
+            LearnedRoute(network: 0, prefix: 0, nextHop: via, iface: eth1, metric: 4),
+        ]
+        rt.dhcpGateway = try parseIp("10.0.1.254")
+        try rt.addStatic("10.0.3.0/24", "10.0.1.253")
+        #expect(try hop(rt, "10.0.2.9") == "eth1 via 10.0.12.2")
+        #expect(try hop(rt, "10.0.3.9") == "eth0 via 10.0.1.253") // static: distance 1 < 120
+        #expect(try hop(rt, "10.0.1.9") == "eth0 via 10.0.1.9") // connected: distance 0
+        #expect(try hop(rt, "8.8.8.8") == "eth1 via 10.0.12.2") // RIP 120 beats the DHCP default's 254
+        #expect(rt.view().filter { $0.metric != nil }.map { "\(formatIp($0.network))/\($0.prefix) \($0.metric!)" } == ["10.0.2.0/24 1", "0.0.0.0/0 4"])
+        let (n1, n2, n3) = (try parseIp("10.0.1.0"), try parseIp("10.0.2.0"), try parseIp("10.0.3.0"))
+        #expect(rt.shadows(n3, 24) && rt.shadows(n1, 24) && !rt.shadows(n2, 24))
+    }
 }

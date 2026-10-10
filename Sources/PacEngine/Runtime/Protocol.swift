@@ -219,6 +219,8 @@ public struct RouteRow: Equatable, Sendable {
     public let isStatic: Bool
     /// Default route learned from DHCP.
     public var dhcp = false
+    /// Hops of a RIP route (shown as [120/n]); nil for the others.
+    public var metric: Int? = nil
 }
 
 public struct ArpRow: Equatable, Sendable {
