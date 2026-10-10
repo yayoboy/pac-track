@@ -227,8 +227,8 @@ final class Ipv6 {
                 advertise(iface)
             }
         case .ra(let ra):
-            // Hosts only (spec M9 §5), from a router's link-local address (RFC 4861 §6.1.2).
-            guard node is Host, isLinkLocal6(p.src) else { return }
+            // Hosts and the Cloud only (spec M9 §5–§6), from a router's link-local address (RFC 4861 §6.1.2).
+            guard actsAsHost, isLinkLocal6(p.src) else { return }
             neighbors.learn(p.src, ra.slla, on: iface)
             if ra.hopLimit != 0 { hopLimit = ra.hopLimit }
             iface.v6!.rsDue = nil
@@ -381,6 +381,9 @@ final class Ipv6 {
         return best
     }
 
+    /// Hosts, and the Cloud, which never routes IPv6 (spec M9 §6), look for routers and learn their default route from RAs.
+    private var actsAsHost: Bool { node is Host || node is Cloud }
+
     private func usableLinkLocal(_ iface: Interface) -> UInt128? {
         iface.v6?.addrs.first { $0.origin == .linkLocal && $0.state == .preferred }?.addr
     }
@@ -427,7 +430,7 @@ final class Ipv6 {
 
     /// The link-local address passed DAD: a host looks for routers, a router that routes advertises.
     private func linkLocalReady(_ iface: Interface) {
-        if node is Host {
+        if actsAsHost {
             solicit(iface)
         } else if routing {
             advertise(iface)
@@ -503,6 +506,10 @@ final class Ipv6 {
                     i.v6!.addrs[k].probed = true
                     i.v6!.addrs[k].dadDue = arm(due + ND_RETRANS_NS)
                     sendNdp(.ns(target: a.addr, slla: nil), src: 0, dst: solicitedNode(a.addr), on: i)
+                } else if !i.lineUp {
+                    // The line went down during DAD: the address stays tentative until it comes back and DAD starts over (spec M9 §5).
+                    i.v6!.addrs[k].dadDue = nil
+                    i.v6!.addrs[k].probed = false
                 } else {
                     i.v6!.addrs[k].dadDue = nil
                     i.v6!.addrs[k].state = .preferred

@@ -70,13 +70,14 @@ private func frame(_ p: Ipv6Packet) -> EthernetFrame {
         #expect(u.checksum != 0) // mandatory over IPv6
     }
 
+    /// IPv6 rows name the message first: the event list cuts long lines, and two IPv6 addresses fill it (review M9a).
     @Test func theInspectorShowsIpv6IcmpV6AndNdp() throws {
         let ll = linkLocal(MAC)
         let target = try parseIp6("2001:db8::2")
         let event = { (p: Ipv6Packet) in SimEvent(time: 0, kind: .tx, node: "A", iface: "eth0", frame: frame(p)) }
         let ns = makeIpv6(src: ll, dst: solicitedNode(target), hopLimit: 255, payload: .ndp(NdpMessage(body: .ns(target: target, slla: MAC))))
         let view = eventView(event(ns))
-        #expect(view.proto == .ndp && view.bytes == 86 && view.info == "fe80::ff:fe00:1 → ff02::1:ff00:2 NDP NS chi ha 2001:db8::2?")
+        #expect(view.proto == .ndp && view.bytes == 86 && view.info == "NDP NS chi ha 2001:db8::2? · fe80::ff:fe00:1 → ff02::1:ff00:2")
         let layers = pduLayers(event(ns))
         #expect(layers.map(\.title) == ["Ethernet II", "IPv6", "ICMPv6"])
         #expect(layers[0].fields[2] == PduField(name: "EtherType", value: "0x86dd (IPv6)"))
@@ -85,24 +86,24 @@ private func frame(_ p: Ipv6Packet) -> EthernetFrame {
         #expect(layers[2].fields.contains(PduField(name: "Target", value: "2001:db8::2")))
         #expect(layers[2].fields.contains(PduField(name: "Opzione 1", value: "Source link-layer address 02:00:00:00:00:01")))
         let dad = makeIpv6(src: 0, dst: solicitedNode(target), hopLimit: 255, payload: .ndp(NdpMessage(body: .ns(target: target, slla: nil))))
-        #expect(eventView(event(dad)).info == ":: → ff02::1:ff00:2 NDP NS DAD 2001:db8::2")
+        #expect(eventView(event(dad)).info == "NDP NS DAD 2001:db8::2 · :: → ff02::1:ff00:2")
         let na = makeIpv6(src: target, dst: ALL_NODES, hopLimit: 255,
                           payload: .ndp(NdpMessage(body: .na(target: target, router: true, solicited: false, override: true, tlla: MAC))))
-        #expect(eventView(event(na)).info == "2001:db8::2 → ff02::1 NDP NA 2001:db8::2 è 02:00:00:00:00:01 [R, O]")
+        #expect(eventView(event(na)).info == "NDP NA 2001:db8::2 è 02:00:00:00:00:01 [R, O] · 2001:db8::2 → ff02::1")
         let ra = makeIpv6(src: ll, dst: ALL_NODES, hopLimit: 255, payload: .ndp(NdpMessage(body: .ra(RouterAdvert(
             slla: MAC, prefixes: [PrefixInfo(prefix: try parseIp6("2001:db8:1::"), length: 64)])))))
-        #expect(eventView(event(ra)).info == "fe80::ff:fe00:1 → ff02::1 NDP RA 2001:db8:1::/64, lifetime 1800 s")
+        #expect(eventView(event(ra)).info == "NDP RA 2001:db8:1::/64, lifetime 1800 s · fe80::ff:fe00:1 → ff02::1")
         #expect(pduLayers(event(ra))[2].fields.contains(PduField(name: "Router lifetime", value: "1800 s")))
         let echo = makeIpv6(src: ll, dst: target, hopLimit: 64, payload: .icmp(IcmpMessage(
             type: ICMP6_ECHO_REQUEST, code: 0, checksum: 0, id: 7, seq: 1, data: [UInt8](repeating: 0, count: 56))))
         let echoView = eventView(event(echo))
-        #expect(echoView.proto == .icmp && echoView.info == "fe80::ff:fe00:1 → 2001:db8::2 ICMPv6 Echo request id=7 seq=1 hlim=64")
+        #expect(echoView.proto == .icmp && echoView.info == "ICMPv6 Echo request id=7 seq=1 hlim=64 · fe80::ff:fe00:1 → 2001:db8::2")
         // An IPv6 packet dropped above the link (no frame) shows as a bare packet.
         let drop = SimEvent(time: 0, kind: .drop, node: "A", reason: .noRoute, packet6: echo)
         #expect(eventView(drop).bytes == 104 && pduLayers(drop).map(\.title) == ["IPv6", "ICMPv6"])
         let tooBig = makeIpv6(src: target, dst: ll, hopLimit: 64, payload: .icmp(IcmpMessage(
             type: ICMP6_PACKET_TOO_BIG, code: 0, checksum: 0, id: 0, seq: 1500, data: [])))
-        #expect(eventView(event(tooBig)).info == "2001:db8::2 → fe80::ff:fe00:1 ICMPv6 Packet too big (MTU 1500) hlim=64")
+        #expect(eventView(event(tooBig)).info == "ICMPv6 Packet too big (MTU 1500) hlim=64 · 2001:db8::2 → fe80::ff:fe00:1")
     }
 }
 

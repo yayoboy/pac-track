@@ -403,6 +403,34 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         #expect(states(h1).last == "2001:db8:10::ff:fe00:1 preferred") // the RS of 61 s got through
         #expect(sim.log.all.contains { $0.kind == .tx && $0.node == "R1" && $0.frame?.vlan == 10 && $0.frame?.etherType == ETHERTYPE_IPV6 })
     }
+
+    @Test func aLineThatGoesDownDuringDadLeavesTheAddressTentative() throws {
+        let sim = Sim()
+        let a = Host(sim: sim, id: "A")
+        let b = Host(sim: sim, id: "B")
+        let link = try Link(sim: sim, try a.iface("eth0"), try b.iface("eth0"))
+        try a.v6.configure("eth0", Ipv6Config(address: "2001:db8::1/64"))
+        sim.run(500 * MS)
+        link.up = false
+        sim.run(1 * S)
+        #expect(states(a).last == "2001:db8::1 tentative") // spec M9 §5: tentative until the line is up again
+        link.up = true
+        sim.run(1 * S)
+        #expect(states(a).last == "2001:db8::1 preferred")
+    }
+
+    @Test func aCloudLearnsItsDefaultRouterFromTheRaLikeAHost() throws {
+        let (sim, _, r1) = try edge(slaac: false)
+        let isp = Cloud(sim: sim, id: "ISP", ports: 1)
+        _ = try Link(sim: sim, try r1.iface("Gi0/1"), try isp.iface("Gi0/0"))
+        try r1.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:2::1/64"))
+        try isp.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:2::10/64"))
+        sim.run(3 * S)
+        #expect(isp.v6.lookup(ELSEWHERE).map { formatIp6($0.nextHop) } == "fe80::ff:fe00:3") // spec M9 §6: the Cloud acts as a host
+        let ping = try Ping(node: isp, target: "2001:db8:1::1", options: PingOptions(count: 1))
+        sim.run(1 * S)
+        #expect(ping.result.received == 1)
+    }
 }
 
 /// The payload as `makeIpv6` seals it for this packet's addresses (the checksum depends on them).

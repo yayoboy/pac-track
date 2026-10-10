@@ -124,13 +124,14 @@ private func describe(_ n: NdpMessage, from src: UInt128) -> String {
     }
 }
 
+/// The message first, then the addresses: the event list cuts long lines, and two IPv6 addresses would fill it.
 private func describe(_ p: Ipv6Packet) -> String {
-    let ends = "\(formatIp6(p.src)) → \(formatIp6(p.dst))"
-    switch p.payload {
-    case .icmp(let m): return "\(ends) ICMPv6 \(icmp6Name(m))" + (isEcho6(m) ? " id=\(m.id) seq=\(m.seq)" : "") + " hlim=\(p.hopLimit)"
-    case .ndp(let n): return "\(ends) NDP " + describe(n, from: p.src)
-    case .udp(let u): return "\(ends) UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)"
+    let what = switch p.payload {
+    case .icmp(let m): "ICMPv6 \(icmp6Name(m))" + (isEcho6(m) ? " id=\(m.id) seq=\(m.seq)" : "") + " hlim=\(p.hopLimit)"
+    case .ndp(let n): "NDP " + describe(n, from: p.src)
+    case .udp(let u): "UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)"
     }
+    return "\(what) · \(formatIp6(p.src)) → \(formatIp6(p.dst))"
 }
 
 private let TCP_FLAG_NAMES: [(TcpFlags, String)] = [(.fin, "FIN"), (.syn, "SYN"), (.rst, "RST"), (.ack, "ACK")]
