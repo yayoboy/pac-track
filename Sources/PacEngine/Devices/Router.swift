@@ -28,7 +28,18 @@ class Router: IpNode {
         guard sub.dot1q != nil else { throw EngineError("\(name) is not a subinterface") }
         if let nat, nat.config.inside.contains(name) || nat.config.outside == name { throw EngineError("\(name) has a NAT role") }
         if firewall?.config.rules.contains(where: { $0.iface == name }) == true { throw EngineError("\(name) has firewall rules") }
+        if rip?.config.interfaces.contains(name) == true { throw EngineError("\(name) takes part in RIP") }
         sub.up = false
         removeInterface(sub)
+    }
+
+    /// RIP starts again with the router (spec M8 §3).
+    override func powerOn() {
+        rip?.start()
+    }
+
+    /// A line going down or up changes RIP's connected networks and kills the routes learned through it at once (spec M8 §3).
+    override func linkChanged(_ iface: Interface) {
+        rip?.refresh()
     }
 }

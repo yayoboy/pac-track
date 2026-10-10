@@ -606,6 +606,17 @@ public struct FirewallConfig: Codable, Equatable, Sendable {
     }
 }
 
+/// RIPv2 on a router (spec M8 §2): the interfaces taking part (IOS `network`) and, among them, the passive ones (`passive-interface`).
+public struct RipConfig: Codable, Equatable, Sendable {
+    public var interfaces: [String]
+    public var passive: [String]
+
+    public init(interfaces: [String] = [], passive: [String] = []) {
+        self.interfaces = interfaces
+        self.passive = passive
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind

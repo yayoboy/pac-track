@@ -20,6 +20,8 @@ class IpNode: Node {
     var nat: Nat?
     /// Stateful firewall (routers).
     var firewall: Firewall?
+    /// RIPv2 (routers), spec M8 §3.
+    var rip: Rip?
     /// Turns the discard sink off again; nil while it is off.
     private var sinkStop: (() -> Void)?
 
@@ -103,6 +105,27 @@ class IpNode: Node {
         }
     }
 
+    /// RIP on or reconfigured, or off with nil (spec M8 §2). Off, it forgets what it learned and says nothing (IOS `no router rip`).
+    func configureRip(_ config: RipConfig?) throws {
+        guard let config else {
+            rip?.stop()
+            rip = nil
+            return
+        }
+        for name in config.interfaces { _ = try iface(name) }
+        if let bad = config.passive.first(where: { !config.interfaces.contains($0) }) {
+            throw EngineError("\(bad) is passive but does not take part in RIP")
+        }
+        if let rip {
+            rip.config = config
+            rip.refresh()
+        } else {
+            let started = Rip(node: self, config: config)
+            rip = started
+            if powered { started.start() }
+        }
+    }
+
     override func reset() {
         arp.reset()
         resolver.reset()
@@ -110,6 +133,7 @@ class IpNode: Node {
         tcp.reset()
         nat?.reset()
         firewall?.reset()
+        rip?.stop()
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
@@ -136,6 +160,11 @@ class IpNode: Node {
                   .ipv4(makeIpv4(src: src, dst: BROADCAST_IP, ttl: defaultTtl, id: nextIpId(), payload: payload)))
     }
 
+    /// Link-local multicast (224.0.0.0/24, TTL 1, never forwarded) straight out of one interface: routing protocol packets (spec M8 §2).
+    func multicast(on iface: Interface, src: UInt32, group: UInt32, mac: Mac, _ payload: L4) {
+        sendFrame(iface, to: mac, etherType: ETHERTYPE_IPV4, .ipv4(makeIpv4(src: src, dst: group, ttl: 1, id: nextIpId(), payload: payload)))
+    }
+
     func sendFrame(_ iface: Interface, to dst: Mac, etherType: UInt16, _ payload: L3) {
         iface.send(EthernetFrame(id: sim.nextId(), src: iface.mac, dst: dst, etherType: etherType, payload: payload))
     }
@@ -154,7 +183,8 @@ class IpNode: Node {
     }
 
     override func receive(_ frame: EthernetFrame, on iface: Interface) {
-        guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC else { return }
+        // The RIP-2 routers group only reaches a router running RIP, as if it had joined it.
+        guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC || (frame.dst == RIP_MAC && rip != nil) else { return }
         // 802.1Q, after the NIC's MAC filter: a tagged frame belongs to the subinterface for its VLAN; a host, or a router without one, drops it.
         var to = iface
         if let vlan = frame.vlan {
@@ -176,7 +206,7 @@ class IpNode: Node {
         // packets), then NAT inside → outside.
         let packet = nat?.inbound(p, on: iface) ?? p
         let subnetBroadcast = iface.ipv4.map { packet.dst == broadcastOf($0.addr, $0.prefix) } ?? false
-        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast {
+        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast || packet.dst == RIP_GROUP {
             guard firewall?.admits(packet, from: iface, to: nil) ?? true else { return }
             return deliver(packet, from: iface)
         }
