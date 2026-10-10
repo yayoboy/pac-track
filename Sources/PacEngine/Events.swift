@@ -24,6 +24,10 @@ enum DropReason: String, Sendable {
     case unknownVlan = "unknown-vlan"
     /// A switch port in blocking, listening or learning state discards what it receives (802.1D).
     case stpDiscarding = "stp-discarding"
+    /// An IPv6 neighbour never answered the NS (RFC 4861 §7.2.2), like `arp-timeout`.
+    case ndTimeout = "nd-timeout"
+    /// Packets already waiting for an IPv6 neighbour's address (at most 3, like ARP).
+    case ndPendingFull = "nd-pending-full"
 }
 
 struct SimEvent: Sendable {

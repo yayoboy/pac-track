@@ -47,6 +47,18 @@ private let ERROR_TEXT: [String: String] = [
     "11/0": "Time to live exceeded",
 ]
 
+/// iputils' wording for ICMPv6 errors (spec M9 §7).
+private func errorText6(_ m: IcmpMessage) -> String {
+    switch (m.type, m.code) {
+    case (ICMP6_DEST_UNREACH, UNREACH6_NO_ROUTE): "Destination unreachable: No route"
+    case (ICMP6_DEST_UNREACH, UNREACH6_ADDRESS): "Destination unreachable: Address unreachable"
+    case (ICMP6_DEST_UNREACH, UNREACH6_PORT): "Destination unreachable: Port unreachable"
+    case (ICMP6_PACKET_TOO_BIG, _): "Packet too big: mtu=\(Int(m.id) << 16 | Int(m.seq))"
+    case (ICMP6_TIME_EXCEEDED, 0): "Time exceeded: Hop limit"
+    default: "ICMPv6 type \(m.type) code \(m.code)"
+    }
+}
+
 /// Milliseconds with 3 decimals, rounding half up like JavaScript's toFixed (printf would round half to even).
 func formatMs(_ ns: Int) -> String {
     let us = (ns + 500) / 1000
@@ -62,6 +74,8 @@ final class Ping {
     private let node: IpNode
     private let target: String
     private var dst: UInt32 = 0
+    /// Set for an IPv6 target (spec M9 §7).
+    private var dst6: UInt128?
     private let opts: PingOptions
     private let id: UInt16
     private var sentAt: [Int: Int] = [:]
@@ -81,10 +95,16 @@ final class Ping {
         self.node = node
         self.target = target
         opts = o
-        let literal = try literalIp(target)
-        let name = literal == nil ? normalizeHostName(target) : nil
-        guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
+        let v6 = try target.contains(":") ? parseIp6(target) : nil
+        if let v6, isLinkLocal6(v6) || isMulticast6(v6) { throw EngineError("Ping to link-local or multicast addresses is not supported") }
+        let literal = try v6 == nil ? literalIp(target) : nil
+        let name = v6 == nil && literal == nil ? normalizeHostName(target) : nil
+        guard v6 != nil || literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         id = UInt16(node.sim.rng.int(0x10000))
+        if let v6 {
+            begin6(v6)
+            return
+        }
         if let literal {
             begin(literal)
             return
@@ -96,7 +116,18 @@ final class Ping {
     private func begin(_ ip: UInt32) {
         dst = ip
         result.lines = ["PING \(target) (\(formatIp(ip))) \(opts.size)(\(opts.size + 28)) bytes of data."]
-        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
+        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(from: formatIp(p.src), ttl: Int(p.ttl), m) }
+        schedule()
+    }
+
+    private func begin6(_ ip: UInt128) {
+        dst6 = ip
+        result.lines = ["PING \(target)(\(formatIp6(ip))) \(opts.size) data bytes"]
+        unlisten = node.v6.onIcmp { [weak self] p, m in self?.onIcmp(from: formatIp6(p.src), ttl: Int(p.hopLimit), m) }
+        schedule()
+    }
+
+    private func schedule() {
         for seq in 1...opts.count {
             node.sim.sched.after((seq - 1) * opts.intervalNs) { [self] in send(seq) }
         }
@@ -116,10 +147,16 @@ final class Ping {
 
     private func send(_ seq: Int) {
         guard !result.done else { return }
-        let payload = L4.icmp(makeIcmp(type: ICMP_ECHO_REQUEST, code: 0, id: id, seq: UInt16(truncatingIfNeeded: seq),
-                                       data: [UInt8](repeating: 0, count: opts.size)))
+        let data = [UInt8](repeating: 0, count: opts.size)
+        let s = UInt16(truncatingIfNeeded: seq)
+        let ttl = opts.ttl.map { UInt8($0) }
         sentAt[seq] = node.sim.now
-        guard node.sendPacket(dst, payload, ttl: opts.ttl.map { UInt8($0) }) else {
+        let sent = if let dst6 {
+            node.v6.send(dst6, .icmp(IcmpMessage(type: ICMP6_ECHO_REQUEST, code: 0, checksum: 0, id: id, seq: s, data: data)), hopLimit: ttl)
+        } else {
+            node.sendPacket(dst, .icmp(makeIcmp(type: ICMP_ECHO_REQUEST, code: 0, id: id, seq: s, data: data)), ttl: ttl)
+        }
+        guard sent else {
             sentAt[seq] = nil
             result.lines.append("ping: connect: Network is unreachable")
             return finish(stats: false)
@@ -127,25 +164,27 @@ final class Ping {
         result.transmitted += 1
     }
 
-    private func onIcmp(_ p: Ipv4Packet, _ m: IcmpMessage) {
-        if m.type == ICMP_ECHO_REPLY {
+    private func onIcmp(from: String, ttl: Int, _ m: IcmpMessage) {
+        let v6 = dst6 != nil
+        if m.type == (v6 ? ICMP6_ECHO_REPLY : ICMP_ECHO_REPLY) {
             let seq = Int(m.seq)
             guard m.id == id, let at = sentAt.removeValue(forKey: seq) else { return }
             let rtt = node.sim.now - at
             result.received += 1
-            result.replies.append(PingReply(seq: seq, from: formatIp(p.src), ttl: Int(p.ttl), rttNs: rtt))
-            result.lines.append("\(m.data.count + 8) bytes from \(formatIp(p.src)): icmp_seq=\(seq) ttl=\(p.ttl) time=\(formatMs(rtt)) ms")
+            result.replies.append(PingReply(seq: seq, from: from, ttl: ttl, rttNs: rtt))
+            result.lines.append("\(m.data.count + 8) bytes from \(from): icmp_seq=\(seq) ttl=\(ttl) time=\(formatMs(rtt)) ms")
             return settleIfComplete()
         }
-        guard m.type == ICMP_DEST_UNREACH || m.type == ICMP_TIME_EXCEEDED else { return }
-        // Quoted datagram: our IPv4 header (20 B) + first 8 B of our echo request.
+        guard v6 ? m.type < 128 : m.type == ICMP_DEST_UNREACH || m.type == ICMP_TIME_EXCEEDED else { return }
+        // Quoted datagram: our IP header (IPv4 20 B, IPv6 40 B) + the first 8 B of our echo request.
         let q = m.data
-        guard q.count >= 28, q[20] == ICMP_ECHO_REQUEST, UInt16(q[24]) << 8 | UInt16(q[25]) == id else { return }
-        let seq = Int(UInt16(q[26]) << 8 | UInt16(q[27]))
+        let at = v6 ? 40 : 20
+        guard q.count >= at + 8, q[at] == (v6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO_REQUEST), UInt16(q[at + 4]) << 8 | UInt16(q[at + 5]) == id else { return }
+        let seq = Int(UInt16(q[at + 6]) << 8 | UInt16(q[at + 7]))
         sentAt[seq] = nil
-        result.errors.append(PingError(seq: seq, from: formatIp(p.src), type: Int(m.type), code: Int(m.code)))
-        let text = ERROR_TEXT["\(m.type)/\(m.code)"] ?? "ICMP type \(m.type) code \(m.code)"
-        result.lines.append("From \(formatIp(p.src)) icmp_seq=\(seq) \(text)")
+        result.errors.append(PingError(seq: seq, from: from, type: Int(m.type), code: Int(m.code)))
+        let text = v6 ? errorText6(m) : ERROR_TEXT["\(m.type)/\(m.code)"] ?? "ICMP type \(m.type) code \(m.code)"
+        result.lines.append("From \(from) icmp_seq=\(seq) \(text)")
         settleIfComplete()
     }
 

@@ -49,8 +49,9 @@ final class Sim {
     }
 
     func emit(_ kind: EventKind, node: String, iface: String? = nil, frame: EthernetFrame? = nil,
-              packet: Ipv4Packet? = nil, reason: DropReason? = nil, note: String? = nil, proto: Proto? = nil) {
-        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason, note: note, proto: proto))
+              packet: Ipv4Packet? = nil, reason: DropReason? = nil, note: String? = nil, proto: Proto? = nil, packet6: Ipv6Packet? = nil) {
+        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason, note: note, proto: proto,
+                          packet6: packet6))
     }
 
     /// Hubs and switches report every frame they receive.

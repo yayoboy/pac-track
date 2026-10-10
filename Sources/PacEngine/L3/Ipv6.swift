@@ -13,6 +13,14 @@ enum DadState: Sendable {
     case tentative, preferred, duplicate
 }
 
+typealias Icmp6Listener = (Ipv6Packet, IcmpMessage) -> Void
+
+/// Where a packet leaves: the interface and the neighbour it goes to (the destination itself when it is on the link).
+struct NextHop6 {
+    let iface: Interface
+    let nextHop: UInt128
+}
+
 /// One IPv6 address of an interface with its DAD state (RFC 4862 §5.4).
 struct Addr6 {
     let addr: UInt128
@@ -38,6 +46,10 @@ struct Ipv6Iface {
 final class Ipv6 {
     unowned let node: IpNode
     var hopLimit = HOP_LIMIT6
+    private(set) lazy var neighbors = NeighborCache(stack: self)
+    /// Ordered (not a dictionary): listener order must be deterministic.
+    private var listeners: [(token: Int, listener: Icmp6Listener)] = []
+    private var nextToken = 0
 
     init(node: IpNode) {
         self.node = node
@@ -50,6 +62,7 @@ final class Ipv6 {
         let iface = try node.iface(name)
         guard let config else {
             iface.v6 = nil
+            neighbors.forget(iface)
             return
         }
         let manual = try config.address.map { try manualAddress($0, on: iface) }
@@ -107,18 +120,28 @@ final class Ipv6 {
         if owns(p.dst) { deliver(p, on: iface) }
     }
 
-    private func deliver(_ p: Ipv6Packet, on iface: Interface) {
+    /// A packet for this device; `iface` is nil when it sent the packet to itself.
+    private func deliver(_ p: Ipv6Packet, on iface: Interface?) {
         switch p.payload {
-        case .ndp(let n): receive(n, p, on: iface)
-        case .icmp, .udp: break
+        case .ndp(let n):
+            if let iface { receive(n, p, on: iface) }
+        case .icmp(let m):
+            if m.type == ICMP6_ECHO_REQUEST && !isMulticast6(p.dst) {
+                // From the address that was pinged, like Linux and IOS.
+                send(p.src, .icmp(IcmpMessage(type: ICMP6_ECHO_REPLY, code: 0, checksum: 0, id: m.id, seq: m.seq, data: m.data)), src: p.dst, via: iface)
+            }
+            for entry in listeners { entry.listener(p, m) }
+        case .udp:
+            // ponytail: no UDP service listens on IPv6 in M9a (spec M9 §3), so every datagram is refused; M9b adds the services
+            if !isMulticast6(p.dst) { error(p, type: ICMP6_DEST_UNREACH, code: UNREACH6_PORT, via: iface) }
         }
     }
 
-    /// NDP, only from the link itself (hop limit 255, RFC 4861 §6.1, §7.1): DAD (RFC 4862 §5.4.3–5.4.4).
+    /// NDP, only from the link itself (hop limit 255, RFC 4861 §6.1, §7.1): DAD (RFC 4862 §5.4.3–5.4.4) and address resolution.
     private func receive(_ n: NdpMessage, _ p: Ipv6Packet, on iface: Interface) {
         guard p.hopLimit == 255 else { return }
         switch n.body {
-        case .ns(let target, _):
+        case .ns(let target, let slla):
             guard let k = iface.v6!.addrs.firstIndex(where: { $0.addr == target }) else { return }
             switch iface.v6!.addrs[k].state {
             case .tentative:
@@ -126,13 +149,19 @@ final class Ipv6 {
             case .duplicate:
                 break
             case .preferred:
-                // Another node's DAD for an address in use here: the answer goes to every node (RFC 4861 §7.2.4).
-                if p.src == 0 {
-                    sendNdp(.na(target: target, router: false, solicited: false, override: true, tlla: iface.mac), src: target, dst: ALL_NODES, on: iface)
+                guard p.src != 0 else {
+                    // Another node's DAD for an address in use here: the answer goes to every node (RFC 4861 §7.2.4).
+                    return sendNdp(.na(target: target, router: false, solicited: false, override: true, tlla: iface.mac), src: target, dst: ALL_NODES, on: iface)
                 }
+                if let slla { neighbors.learn(p.src, slla, on: iface) }
+                sendNdp(.na(target: target, router: false, solicited: true, override: true, tlla: iface.mac), src: target, dst: p.src, on: iface)
             }
-        case .na(let target, _, _, _, _):
-            if let k = iface.v6!.addrs.firstIndex(where: { $0.addr == target }), iface.v6!.addrs[k].state == .tentative { duplicate(iface, k) }
+        case .na(let target, _, let solicited, let override, let tlla):
+            if let k = iface.v6!.addrs.firstIndex(where: { $0.addr == target }) {
+                if iface.v6!.addrs[k].state == .tentative { duplicate(iface, k) }
+                return
+            }
+            neighbors.advertised(target, tlla, solicited: solicited, override: override, on: iface)
         case .rs, .ra:
             break
         }
@@ -146,8 +175,83 @@ final class Ipv6 {
     }
 
     private func sendNdp(_ body: NdpBody, src: UInt128, dst: UInt128, on iface: Interface) {
-        let p = makeIpv6(src: src, dst: dst, hopLimit: 255, payload: .ndp(NdpMessage(body: body)))
-        node.sendFrame(iface, to: multicastMac6(dst), etherType: ETHERTYPE_IPV6, .ipv6(p))
+        transmit(makeIpv6(src: src, dst: dst, hopLimit: 255, payload: .ndp(NdpMessage(body: body))), on: iface, nextHop: dst)
+    }
+
+    /// Out of `iface` toward `nextHop`: multicast straight to the group's MAC, unicast through the neighbour cache.
+    private func transmit(_ p: Ipv6Packet, on iface: Interface, nextHop: UInt128) {
+        if isMulticast6(p.dst) { return node.sendFrame(iface, to: multicastMac6(p.dst), etherType: ETHERTYPE_IPV6, .ipv6(p)) }
+        neighbors.send(p, to: nextHop, on: iface)
+    }
+
+    @discardableResult
+    func onIcmp(_ listener: @escaping Icmp6Listener) -> () -> Void {
+        nextToken += 1
+        let token = nextToken
+        listeners.append((token, listener))
+        return { [weak self] in self?.listeners.removeAll { $0.token == token } }
+    }
+
+    /// Originates a packet (spec M9 §6): to an own address through loopback; a link-local destination leaves `via` the given
+    /// interface. False when there is no route or no usable source address.
+    @discardableResult
+    func send(_ dst: UInt128, _ payload: Ipv6Payload, hopLimit: UInt8? = nil, src: UInt128? = nil, via: Interface? = nil) -> Bool {
+        if owns(dst) {
+            let p = makeIpv6(src: dst, dst: dst, hopLimit: hopLimit ?? self.hopLimit, payload: payload)
+            node.sim.sched.after(0) { [self] in deliver(p, on: nil) }
+            return true
+        }
+        guard let hop = isLinkLocal6(dst) ? via.map({ NextHop6(iface: $0, nextHop: dst) }) : lookup(dst),
+              let from = src ?? source(for: dst, out: hop.iface) else { return false }
+        output(makeIpv6(src: from, dst: dst, hopLimit: hopLimit ?? self.hopLimit, payload: payload), via: hop)
+        return true
+    }
+
+    /// No fragmentation, not even at the source (spec M9 §3): a packet over the MTU is dropped with Packet Too Big.
+    private func output(_ p: Ipv6Packet, via hop: NextHop6) {
+        if p.size > hop.iface.mtu {
+            node.sim.emit(.drop, node: node.id, iface: hop.iface.name, reason: .mtuExceeded, packet6: p)
+            return error(p, type: ICMP6_PACKET_TOO_BIG, code: 0, mtu: hop.iface.mtu)
+        }
+        neighbors.send(p, to: hop.nextHop, on: hop.iface)
+    }
+
+    /// An ICMPv6 error about `orig` back to its source (RFC 4443 §2.4), quoting as much of it as fits in 1280 B. Never about an
+    /// error or NDP, a multicast destination (except Packet Too Big), or an unspecified or multicast source.
+    func error(_ orig: Ipv6Packet, type: UInt8, code: UInt8, mtu: Int = 0, via iface: Interface? = nil) {
+        if case .icmp(let m) = orig.payload, m.type < 128 { return }
+        if case .ndp = orig.payload { return }
+        guard orig.src != 0, !isMulticast6(orig.src), type == ICMP6_PACKET_TOO_BIG || !isMulticast6(orig.dst) else { return }
+        let quote = Array((serializeHeader(orig) + serializePayload(orig)).prefix(IPV6_MIN_MTU - 48))
+        // About a packet for this device: from the address it hit (traceroute's last hop); otherwise from the way back.
+        send(orig.src, .icmp(IcmpMessage(type: type, code: code, checksum: 0, id: UInt16(truncatingIfNeeded: mtu >> 16),
+                                          seq: UInt16(truncatingIfNeeded: mtu), data: quote)),
+             src: owns(orig.dst) ? orig.dst : nil, via: iface)
+    }
+
+    /// RFC 6724, simplified (spec M9 §6): the link-local address for a link-local destination; otherwise a usable global address
+    /// of the outgoing interface, else of the device.
+    func source(for dst: UInt128, out iface: Interface) -> UInt128? {
+        let usable = { (i: Interface) in (i.v6?.addrs ?? []).filter { $0.state == .preferred } }
+        if isLinkLocal6(dst) { return usable(iface).first { $0.origin == .linkLocal }?.addr }
+        return (usable(iface) + node.interfaces.flatMap(usable)).first { $0.origin != .linkLocal }?.addr
+    }
+
+    /// The interface and next hop toward `dst`: the longest connected prefix (spec M9 §6).
+    func lookup(_ dst: UInt128) -> NextHop6? {
+        connected(dst).map { NextHop6(iface: $0.iface, nextHop: dst) }
+    }
+
+    /// The interface whose address prefix holds `addr`, longest prefix first; link-local and duplicate addresses do not count.
+    private func connected(_ addr: UInt128) -> (iface: Interface, prefix: Int)? {
+        var best: (iface: Interface, prefix: Int)?
+        for i in node.interfaces where i.up {
+            for a in i.v6?.addrs ?? [] where a.origin != .linkLocal && a.state != .duplicate && inSubnet6(addr, a.addr, a.prefix)
+                && a.prefix > (best?.prefix ?? -1) {
+                best = (i, a.prefix)
+            }
+        }
+        return best
     }
 
     /// Starts DAD for every tentative address of `iface` not yet under way, if its line is up. The NS leaves from the scheduler,
@@ -187,6 +291,7 @@ final class Ipv6 {
             rewind(i)
             i.v6!.lineWasUp = false
         }
+        neighbors.reset()
         hopLimit = HOP_LIMIT6
     }
 
