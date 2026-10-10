@@ -37,6 +37,8 @@ struct SimEvent: Sendable {
     var reason: DropReason? = nil
     /// A spanning-tree state change: "VLAN 10: listening → learning".
     var note: String? = nil
+    /// The protocol of a state change (nil: spanning tree).
+    var proto: Proto? = nil
 }
 
 /// Ring buffer: keeps the latest `capacity` events.

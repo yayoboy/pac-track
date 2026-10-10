@@ -29,17 +29,20 @@ class Router: IpNode {
         if let nat, nat.config.inside.contains(name) || nat.config.outside == name { throw EngineError("\(name) has a NAT role") }
         if firewall?.config.rules.contains(where: { $0.iface == name }) == true { throw EngineError("\(name) has firewall rules") }
         if rip?.config.interfaces.contains(name) == true { throw EngineError("\(name) takes part in RIP") }
+        if ospf?.config.interfaces.contains(where: { $0.name == name }) == true { throw EngineError("\(name) takes part in OSPF") }
         sub.up = false
         removeInterface(sub)
     }
 
-    /// RIP starts again with the router (spec M8 §3).
+    /// RIP and OSPF start again with the router (spec M8 §3, §4).
     override func powerOn() {
         rip?.start()
+        ospf?.start()
     }
 
-    /// A line going down or up changes RIP's connected networks and kills the routes learned through it at once (spec M8 §3).
+    /// A line going down or up, or a new bandwidth, changes RIP's connected networks and OSPF's interfaces at once (spec M8 §3, §4).
     override func linkChanged(_ iface: Interface) {
         rip?.refresh()
+        ospf?.refresh()
     }
 }

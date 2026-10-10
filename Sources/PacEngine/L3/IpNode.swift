@@ -22,6 +22,8 @@ class IpNode: Node {
     var firewall: Firewall?
     /// RIPv2 (routers), spec M8 §3.
     var rip: Rip?
+    /// OSPFv2 in area 0 (routers), spec M8 §4.
+    var ospf: Ospf?
     /// Turns the discard sink off again; nil while it is off.
     private var sinkStop: (() -> Void)?
 
@@ -125,6 +127,31 @@ class IpNode: Node {
         }
     }
 
+    /// OSPF on or reconfigured, or off with nil (spec M8 §2, §4). Off, it forgets everything and says nothing.
+    func configureOspf(_ config: OspfConfig?) throws {
+        guard let config else {
+            ospf?.stop()
+            ospf = nil
+            return
+        }
+        for c in config.interfaces {
+            _ = try iface(c.name)
+            guard (0...255).contains(c.priority) else { throw EngineError("OSPF priority must be between 0 and 255") }
+        }
+        if let text = config.routerId {
+            guard let id = try? parseIp(text), id != 0 else { throw EngineError("Invalid router ID: \"\(text)\"") }
+        } else if !interfaces.contains(where: { $0.ipv4 != nil }) {
+            throw EngineError("\(name) needs an IPv4 address or a router ID for OSPF")
+        }
+        if let ospf {
+            ospf.reconfigure(config)
+        } else {
+            let started = Ospf(node: self, config: config)
+            ospf = started
+            if powered { started.start() }
+        }
+    }
+
     override func reset() {
         arp.reset()
         resolver.reset()
@@ -133,6 +160,7 @@ class IpNode: Node {
         nat?.reset()
         firewall?.reset()
         rip?.stop()
+        ospf?.stop()
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
@@ -182,8 +210,9 @@ class IpNode: Node {
     }
 
     override func receive(_ frame: EthernetFrame, on iface: Interface) {
-        // The RIP-2 routers group only reaches a router running RIP, as if it had joined it.
-        guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC || (frame.dst == RIP_MAC && rip != nil) else { return }
+        // The RIP-2 and OSPF groups only reach a router running that protocol, as if it had joined them.
+        let group = (frame.dst == RIP_MAC && rip != nil) || ((frame.dst == OSPF_ALL_ROUTERS_MAC || frame.dst == OSPF_ALL_DROUTERS_MAC) && ospf != nil)
+        guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC || group else { return }
         // 802.1Q, after the NIC's MAC filter: a tagged frame belongs to the subinterface for its VLAN; a host, or a router without one, drops it.
         var to = iface
         if let vlan = frame.vlan {
@@ -205,7 +234,7 @@ class IpNode: Node {
         // packets), then NAT inside → outside.
         let packet = nat?.inbound(p, on: iface) ?? p
         let subnetBroadcast = iface.ipv4.map { packet.dst == broadcastOf($0.addr, $0.prefix) } ?? false
-        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast || packet.dst == RIP_GROUP {
+        if ownsIp(packet.dst) || packet.dst == BROADCAST_IP || subnetBroadcast || [RIP_GROUP, OSPF_ALL_ROUTERS, OSPF_ALL_DROUTERS].contains(packet.dst) {
             guard firewall?.admits(packet, from: iface, to: nil) ?? true else { return }
             return deliver(packet, from: iface)
         }
@@ -256,8 +285,8 @@ class IpNode: Node {
             }
         case .tcp(let t):
             tcp.input(p, t)
-        case .ospf:
-            break // no OSPF process yet: dropped like an unknown protocol
+        case .ospf(let o):
+            if let iface { ospf?.receive(p, o, on: iface) }
         }
     }
 

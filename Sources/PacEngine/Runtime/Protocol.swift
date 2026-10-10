@@ -624,6 +624,33 @@ public struct RipConfig: Codable, Equatable, Sendable {
     }
 }
 
+/// One router interface in OSPF (spec M8 §4): passive (`passive-interface`), point-to-point (`ip ospf network point-to-point`) or
+/// broadcast, and its DR election priority (`ip ospf priority`, 0 = never DR or BDR).
+public struct OspfInterfaceConfig: Codable, Equatable, Sendable {
+    public var name: String
+    public var passive: Bool
+    public var pointToPoint: Bool
+    public var priority: Int
+
+    public init(name: String, passive: Bool = false, pointToPoint: Bool = false, priority: Int = 1) {
+        self.name = name
+        self.passive = passive
+        self.pointToPoint = pointToPoint
+        self.priority = priority
+    }
+}
+
+/// OSPF in area 0 on a router: a router ID typed by hand (nil: automatic) and the interfaces taking part.
+public struct OspfConfig: Codable, Equatable, Sendable {
+    public var routerId: String?
+    public var interfaces: [OspfInterfaceConfig]
+
+    public init(routerId: String? = nil, interfaces: [OspfInterfaceConfig] = []) {
+        self.routerId = routerId
+        self.interfaces = interfaces
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind
