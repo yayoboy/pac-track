@@ -236,8 +236,6 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
             try r1.configureOspf(OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/1", priority: 256)]))
         }
         expectError("Invalid router ID: \"1.2.3\"") { try r1.configureOspf(OspfConfig(routerId: "1.2.3")) }
-        let bare = Router(sim: sim, id: "R9", ports: 1)
-        expectError("R9 needs an IPv4 address or a router ID for OSPF") { try bare.configureOspf(OspfConfig()) }
         try r1.addSubinterface("Gi0/0.10")
         try r1.configureOspf(OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0.10")]))
         expectError("Gi0/0.10 takes part in OSPF") { try r1.removeSubinterface("Gi0/0.10") }
@@ -359,6 +357,61 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
         #expect(try route(r1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1") // 110 beats 120
         try r1.routes.addStatic("192.168.2.0/24", "10.0.12.2")
         #expect(try route(r1, "192.168.2.0/24") == "S via 10.0.12.2")
+    }
+
+    @Test func aCableSlowerThan1_5KbpsCostsTheIosMaximumInsteadOfCrashing() throws {
+        let (sim, _, _, r1, _) = try pair()
+        sim.run(46 * S)
+        try #require(try r1.iface("Gi0/1").link).update(LinkOptions(bandwidthBps: 1000)) // 100 Mb/s ÷ 1 kb/s = 100000
+        sim.run(1 * MS)
+        guard case .router(let links)? = r1.ospf?.lsdb.first(where: { $0.lsa.header.adv == r1.ospf!.routerId })?.lsa.body else {
+            Issue.record("no router-LSA")
+            return
+        }
+        #expect(links.map(\.metric).contains(65535))
+    }
+
+    @Test func aRouterWithoutAddressesWaitsIdleAndStartsWhenItGetsOne() throws {
+        let sim = Sim()
+        let r1 = Router(sim: sim, id: "R1", ports: 1)
+        let r2 = Router(sim: sim, id: "R2", ports: 1)
+        _ = try Link(sim: sim, try r1.iface("Gi0/0"), try r2.iface("Gi0/0"))
+        try r1.configureOspf(OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0")])) // no address yet, no router ID: accepted
+        sim.run(20 * S)
+        #expect(ospfTx(sim, "R1").isEmpty && r1.ospf?.routerId == 0)
+        try r1.setIp("Gi0/0", "10.0.12.1/30")
+        r1.ospf?.refresh() // as Runtime does after .setIp
+        sim.run(1 * MS)
+        #expect(formatIp(r1.ospf!.routerId) == "10.0.12.1" && ospfTx(sim, "R1").count == 1)
+    }
+
+    @Test func aRouterWhoseLastAddressWasRemovedStillSavesAndReopens() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        try rt.handle(.setIp(node: "r", iface: "Gi0/0", cidr: "10.0.0.1/24"))
+        try rt.handle(.setOspf(node: "r", config: OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0")])))
+        try rt.handle(.setIp(node: "r", iface: "Gi0/0", cidr: nil))
+        let s = rt.snapshot()
+        let t = Topology(seed: s.seed, nodes: [TopologyNode(id: "r", kind: .router, name: "R1", pos: Pos(x: 0, y: 0),
+                                                            ifaces: s.nodes[0].ifaces.map { TopologyIface(name: $0.name, cidr: $0.cidr) },
+                                                            routes: [], ospf: s.nodes[0].ospf)])
+        let reopened = Runtime()
+        try reopened.handle(.load(t))
+        #expect(reopened.snapshot().nodes[0].ospf == OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0")]))
+    }
+
+    @Test func anExchangeAfter50SimulatedDaysDoesNotOverflowTheDdSequence() throws {
+        let sim = Sim()
+        let r1 = Router(sim: sim, id: "R1", ports: 1)
+        let r2 = Router(sim: sim, id: "R2", ports: 1)
+        _ = try Link(sim: sim, try r1.iface("Gi0/0"), try r2.iface("Gi0/0"))
+        try r1.setIp("Gi0/0", "10.0.12.1/30")
+        try r2.setIp("Gi0/0", "10.0.12.2/30")
+        sim.run(50 * 86_400 * S) // past 2³² ms
+        try ospf(r1, pointToPoint: true)
+        try ospf(r2, pointToPoint: true)
+        sim.run(11 * S)
+        #expect(oi(r1, "Gi0/0")?.neighbors.first?.state == .full)
     }
 
     @Test func theRuntimeRunsOspfOnRoutersOnlyAndShowsNeighboursAndDatabase() throws {

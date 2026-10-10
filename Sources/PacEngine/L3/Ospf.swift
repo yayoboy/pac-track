@@ -23,9 +23,10 @@ struct LsdbEntry {
     var installedAt: Int
 }
 
-/// IOS cost (spec M8 §4): reference bandwidth 100 Mb/s over the cable's bandwidth, at least 1.
+/// IOS cost (spec M8 §4): reference bandwidth 100 Mb/s over the cable's bandwidth, at least 1 and at most 65535 (the 16-bit
+/// metric of a router-LSA link).
 func ospfCost(_ bandwidthBps: Double) -> Int {
-    max(1, Int(100e6 / bandwidthBps))
+    min(65535, max(1, Int(100e6 / bandwidthBps)))
 }
 
 /// RFC 2328 §10.1 neighbour states (Attempt only exists on NBMA networks).
@@ -146,19 +147,26 @@ final class Ospf {
         refresh()
     }
 
-    /// The configured router ID, else the highest address on an interface whose line is up, else on any interface.
+    /// The configured router ID, else the highest address on an interface whose line is up, else on any interface; with none
+    /// at all the process waits idle until an address appears (IOS NORTRID).
     private func boot() {
-        routerId = config.routerId.flatMap { try? parseIp($0) }
+        routerId = chooseRouterId()
+        refresh()
+    }
+
+    private func chooseRouterId() -> UInt32 {
+        config.routerId.flatMap { try? parseIp($0) }
             ?? node.interfaces.filter(\.lineUp).compactMap { $0.ipv4?.addr }.max()
             ?? node.interfaces.compactMap { $0.ipv4?.addr }.max()
-            ?? routerId
-        refresh()
+            ?? 0
     }
 
     /// Brings the interfaces in line with configuration, addresses and lines: one that left, lost its line or its address, or
     /// changed network type goes down with its neighbours (KillNbr); a new one comes up; priority and cost follow at once.
     func refresh() {
         guard running, startDue == nil else { return }
+        if routerId == 0 { routerId = chooseRouterId() }
+        guard routerId != 0 else { return }
         let wanted = config.interfaces.compactMap { c -> (Interface, OspfInterfaceConfig, Cidr)? in
             guard !c.passive, let i = try? node.iface(c.name), let a = i.ipv4, i.lineUp else { return nil }
             return (i, c, a)
@@ -272,7 +280,7 @@ final class Ospf {
         n.requests = []
         n.rxmt = []
         n.master = true
-        n.ddSeq = UInt32(now / MS)
+        n.ddSeq = UInt32(truncatingIfNeeded: now / MS)
         sendDbd(OspfDbd(initial: true, more: true, master: true, seq: n.ddSeq, headers: []), to: n, on: oi)
     }
 

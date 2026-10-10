@@ -140,8 +140,6 @@ class IpNode: Node {
         }
         if let text = config.routerId {
             guard let id = try? parseIp(text), id != 0 else { throw EngineError("Invalid router ID: \"\(text)\"") }
-        } else if !interfaces.contains(where: { $0.ipv4 != nil }) {
-            throw EngineError("\(name) needs an IPv4 address or a router ID for OSPF")
         }
         if let ospf {
             ospf.reconfigure(config)
