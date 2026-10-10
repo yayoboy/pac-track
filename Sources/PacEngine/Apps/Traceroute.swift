@@ -24,6 +24,8 @@ struct TracerouteResult: Sendable {
 }
 
 private let NOTES: [UInt8: String] = [0: "!N", 1: "!H", 4: "!F"]
+/// traceroute's marks for ICMPv6 destination unreachable: no route, administratively prohibited, address unreachable.
+private let NOTES6: [UInt8: String] = [0: "!N", 1: "!X", 3: "!H"]
 
 private func formatHop(_ hop: TraceHop) -> String {
     var line = (hop.ttl < 10 ? " " : "") + "\(hop.ttl) "
@@ -59,6 +61,8 @@ final class Traceroute {
     private(set) var result = TracerouteResult()
     private let node: IpNode
     private var dst: UInt32 = 0
+    /// Set for an IPv6 target (spec M9 §7).
+    private var dst6: UInt128?
     private let target: String
     private let opts: TracerouteOptions
     private let srcPort: UInt16
@@ -75,11 +79,17 @@ final class Traceroute {
         self.node = node
         self.target = target
         opts = o
-        let literal = try literalIp(target)
-        let name = literal == nil ? normalizeHostName(target) : nil
-        guard literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
+        let v6 = try target.contains(":") ? parseIp6(target) : nil
+        if let v6, isLinkLocal6(v6) || isMulticast6(v6) { throw EngineError("Traceroute to link-local or multicast addresses is not supported") }
+        let literal = try v6 == nil ? literalIp(target) : nil
+        let name = v6 == nil && literal == nil ? normalizeHostName(target) : nil
+        guard v6 != nil || literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
         srcPort = UInt16(33000 + node.sim.rng.int(10000))
         port = o.firstPort
+        if let v6 {
+            begin6(v6)
+            return
+        }
         if let literal {
             begin(literal)
             return
@@ -90,7 +100,15 @@ final class Traceroute {
     private func begin(_ ip: UInt32) {
         dst = ip
         result.lines = ["traceroute to \(target) (\(formatIp(ip))), \(opts.maxHops) hops max, 60 byte packets"]
-        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(p, m) }
+        unlisten = node.onIcmp { [weak self] p, m in self?.onIcmp(from: formatIp(p.src), m) }
+        node.sim.sched.after(0) { [self] in sendHop(1) }
+    }
+
+    /// Linux traceroute over IPv6: 40 B header + 8 B UDP + 32 B of data.
+    private func begin6(_ ip: UInt128) {
+        dst6 = ip
+        result.lines = ["traceroute to \(target) (\(formatIp6(ip))), \(opts.maxHops) hops max, 80 byte packets"]
+        unlisten = node.v6.onIcmp { [weak self] p, m in self?.onIcmp(from: formatIp6(p.src), m) }
         node.sim.sched.after(0) { [self] in sendHop(1) }
     }
 
@@ -115,7 +133,13 @@ final class Traceroute {
             let dport = UInt16(port)
             port += 1
             flight.sent[dport] = (i, node.sim.now)
-            guard node.sendUdp(dst, srcPort: srcPort, dstPort: dport, data: [UInt8](repeating: 0, count: 32), ttl: UInt8(ttl)) else {
+            let data = [UInt8](repeating: 0, count: 32)
+            let sent = if let dst6 {
+                node.v6.send(dst6, .udp(makeUdp(srcPort: srcPort, dstPort: dport, data: data)), hopLimit: UInt8(ttl))
+            } else {
+                node.sendUdp(dst, srcPort: srcPort, dstPort: dport, data: data, ttl: UInt8(ttl))
+            }
+            guard sent else {
                 result.lines.append("connect: Network is unreachable")
                 return finish()
             }
@@ -137,19 +161,30 @@ final class Traceroute {
         }
     }
 
-    private func onIcmp(_ p: Ipv4Packet, _ m: IcmpMessage) {
-        guard let flight = current, m.type == ICMP_TIME_EXCEEDED || m.type == ICMP_DEST_UNREACH else { return }
-        // Quoted datagram: original IPv4 header (20 B) + UDP header (8 B). Only our own probes count.
+    private func onIcmp(from: String, _ m: IcmpMessage) {
+        let v6 = dst6 != nil
+        let exceeded = v6 ? ICMP6_TIME_EXCEEDED : ICMP_TIME_EXCEEDED
+        let unreach = v6 ? ICMP6_DEST_UNREACH : ICMP_DEST_UNREACH
+        guard let flight = current, m.type == exceeded || m.type == unreach else { return }
+        // Quoted datagram: the original IP header (IPv4 20 B, IPv6 40 B) + UDP header (8 B). Only our own probes count.
         let q = m.data
-        guard q.count >= 28, q[9] == IPPROTO_UDP else { return }
-        let quotedDst = UInt32(q[16]) << 24 | UInt32(q[17]) << 16 | UInt32(q[18]) << 8 | UInt32(q[19])
-        let quotedSrcPort = UInt16(q[20]) << 8 | UInt16(q[21])
-        guard quotedDst == dst, quotedSrcPort == srcPort else { return }
-        let dport = UInt16(q[22]) << 8 | UInt16(q[23])
+        let at = v6 ? 40 : 20
+        guard q.count >= at + 8, q[v6 ? 6 : 9] == IPPROTO_UDP else { return }
+        let ours: Bool
+        if let dst6 {
+            ours = Array(q[24..<40]) == bytes16(dst6)
+        } else {
+            let quotedDst = UInt32(q[16]) << 24 | UInt32(q[17]) << 16 | UInt32(q[18]) << 8 | UInt32(q[19])
+            ours = quotedDst == dst
+        }
+        let quotedSrcPort = UInt16(q[at]) << 8 | UInt16(q[at + 1])
+        guard ours, quotedSrcPort == srcPort else { return }
+        let dport = UInt16(q[at + 2]) << 8 | UInt16(q[at + 3])
         guard let probe = flight.sent.removeValue(forKey: dport) else { return }
-        let note = m.type == ICMP_DEST_UNREACH && m.code != UNREACH_PORT ? NOTES[m.code] ?? "!<\(m.code)>" : nil
-        result.hops[flight.hopIndex].probes[probe.index] = TraceProbe(from: formatIp(p.src), rttNs: node.sim.now - probe.at, note: note)
-        if m.type == ICMP_DEST_UNREACH { result.reached = true }
+        let portUnreachable = v6 ? UNREACH6_PORT : UNREACH_PORT
+        let note = m.type == unreach && m.code != portUnreachable ? (v6 ? NOTES6 : NOTES)[m.code] ?? "!<\(m.code)>" : nil
+        result.hops[flight.hopIndex].probes[probe.index] = TraceProbe(from: from, rttNs: node.sim.now - probe.at, note: note)
+        if m.type == unreach { result.reached = true }
         flight.pending -= 1
         if flight.pending == 0 { closeHop() }
     }

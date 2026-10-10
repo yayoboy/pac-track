@@ -44,6 +44,20 @@ private func ndp(_ sim: Sim, by node: String, _ type: UInt8) -> [Int] {
 
 private let ELSEWHERE = UInt128(0x2001_0DB8_0009) << 80 | 1 // 2001:db8:9::1
 
+/// H1 — R1 (Gi0/0 2001:db8:1::1/64 | Gi0/1 2001:db8:2::1/64, `ipv6 unicast-routing`) — H2, dual stack (IPv4 from `routedPair`),
+/// both hosts on SLAAC, autoconfigured (t = 3 s). MACs: H1 …:01, H2 …:02, R1 Gi0/0 …:03, Gi0/1 …:04.
+private func routed() throws -> (sim: Sim, h1: Host, h2: Host, r1: Router) {
+    let (sim, h1, h2, r1) = try routedPair()
+    try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:1::1/64"))
+    try r1.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:2::1/64"))
+    r1.v6.setRouting(true)
+    for h in [h1, h2] { try h.v6.configure("eth0", Ipv6Config(autoconfig: true)) }
+    sim.run(3 * S)
+    return (sim, h1, h2, r1)
+}
+
+private let H2 = "2001:db8:2::ff:fe00:2"
+
 /// "address state" for every IPv6 address of an interface, in its order.
 private func states(_ n: IpNode, _ iface: String = "eth0") -> [String] {
     ((try? n.iface(iface))?.v6?.addrs ?? []).map { "\(formatIp6($0.addr)) \($0.state)" }
@@ -294,6 +308,100 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         sim.run(5 * S)
         #expect(ndp(sim, by: "R1", ND_RA).first == 1 * S)
         #expect(states(r2, "Gi0/0") == ["fe80::ff:fe00:2 preferred"] && r2.v6.lookup(ELSEWHERE) == nil)
+    }
+
+    @Test func pingsAndTracesAcrossTheRouterWhileIpv4KeepsWorking() throws {
+        let (sim, h1, _, _) = try routed()
+        let ping6 = try Ping(node: h1, target: H2)
+        let ping4 = try Ping(node: h1, target: "10.0.2.10")
+        sim.run(5 * S)
+        #expect(ping6.result.lines.last == "4 packets transmitted, 4 received, 0% packet loss" && ping6.result.replies.allSatisfy { $0.ttl == 63 })
+        #expect(ping4.result.lines.last == "4 packets transmitted, 4 received, 0% packet loss")
+        let trace = try Traceroute(node: h1, target: H2)
+        sim.run(5 * S)
+        #expect(trace.result.lines.first == "traceroute to \(H2) (\(H2)), 30 hops max, 80 byte packets")
+        #expect(trace.result.hops.map { $0.probes.map(\.from) } == [Array(repeating: "2001:db8:1::1", count: 3), Array(repeating: H2, count: 3)])
+        #expect(trace.result.reached && trace.result.done)
+    }
+
+    @Test func theRouterAnswersExpiredHopLimitsAndMissingRoutes() throws {
+        let (sim, h1, _, _) = try routed()
+        let expired = try Ping(node: h1, target: H2, options: PingOptions(count: 1, ttl: 1))
+        let nowhere = try Ping(node: h1, target: "2001:db8:9::1", options: PingOptions(count: 1))
+        sim.run(2 * S)
+        #expect(expired.result.lines.contains("From 2001:db8:1::1 icmp_seq=1 Time exceeded: Hop limit"))
+        #expect(nowhere.result.lines.contains("From 2001:db8:1::1 icmp_seq=1 Destination unreachable: No route"))
+        #expect(drops(sim, .ttlExpired) == 1 && drops(sim, .noRoute) == 1)
+    }
+
+    @Test func staticRoutesCarryTrafficBetweenTwoRouters() throws {
+        let (sim, h1, h2, r1, r2) = try twoRouters()
+        try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:1::1/64"))
+        try r1.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:12::1/64"))
+        try r2.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:12::2/64"))
+        try r2.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:2::1/64"))
+        for r in [r1, r2] { r.v6.setRouting(true) }
+        for h in [h1, h2] { try h.v6.configure("eth0", Ipv6Config(autoconfig: true)) }
+        sim.run(3 * S)
+        expectError("Next hop 2001:db8:13::2 is not in a connected IPv6 subnet") { try r1.v6.addStatic("2001:db8:2::/64", "2001:db8:13::2") }
+        expectError("Next hop fe80::1 is not in a connected IPv6 subnet") { try r1.v6.addStatic("2001:db8:2::/64", "fe80::1") }
+        try r1.v6.addStatic("2001:db8:2::/64", "2001:db8:12::2")
+        try r2.v6.addStatic("2001:db8:1::/64", "2001:db8:12::1")
+        let ping = try Ping(node: h1, target: H2, options: PingOptions(count: 1))
+        sim.run(1 * S)
+        #expect(ping.result.replies.map(\.ttl) == [62])
+        try r1.v6.removeStatic("2001:db8:2::/64")
+        #expect(r1.v6.lookup(try parseIp6("2001:db8:2::1")) == nil)
+    }
+
+    @Test func aStaticDefaultBeatsTheOneFromTheRaAndAConnectedPrefixBeatsBoth() throws {
+        let (sim, h1, _, _) = try routed()
+        let hop = { (dst: String) in h1.v6.lookup(try! parseIp6(dst)).map { formatIp6($0.nextHop) } }
+        try withExtendedLifetime(sim) { // the nodes refer to their Sim `unowned`
+            #expect(hop("2001:db8:9::1") == "fe80::ff:fe00:3")
+            try h1.v6.addStatic("::/0", "2001:db8:1::99")
+            #expect(hop("2001:db8:9::1") == "2001:db8:1::99" && hop("2001:db8:1::7") == "2001:db8:1::7")
+        }
+    }
+
+    @Test func withoutUnicastRoutingTheRouterForwardsNothing() throws {
+        let (sim, h1, _, r1) = try routed()
+        r1.v6.setRouting(false)
+        try h1.v6.addStatic("::/0", "2001:db8:1::1") // the RA's default is gone with the final RA
+        let ping = try Ping(node: h1, target: H2, options: PingOptions(count: 1, timeoutNs: 2 * S))
+        sim.run(3 * S)
+        #expect(ping.result.lines.last == "1 packets transmitted, 0 received, 100% packet loss")
+    }
+
+    @Test func natAndTheFirewallLeaveIpv6Alone() throws {
+        let (sim, h1, _, r1) = try routed()
+        r1.firewall = try Firewall(node: r1, config: FirewallConfig(defaultAction: .deny))
+        r1.nat = try Nat(node: r1, config: NatConfig(inside: ["Gi0/0"], outside: "Gi0/1"))
+        let ping6 = try Ping(node: h1, target: H2, options: PingOptions(count: 1))
+        let ping4 = try Ping(node: h1, target: "10.0.2.10", options: PingOptions(count: 1, timeoutNs: 2 * S))
+        sim.run(3 * S)
+        #expect(ping6.result.replies.map(\.ttl) == [63])
+        #expect(ping4.result.received == 0 && drops(sim, .firewallDefault) == 1)
+    }
+
+    @Test func ipv6RunsOnASubinterfaceBehindASwitchWithoutPortFast() throws {
+        let sim = Sim()
+        let h1 = Host(sim: sim, id: "H1")
+        let sw = Switch(sim: sim, id: "SW1")
+        let r1 = Router(sim: sim, id: "R1", ports: 1)
+        _ = try Link(sim: sim, try h1.iface("eth0"), try sw.iface("Gi0/1"))
+        _ = try Link(sim: sim, try r1.iface("Gi0/0"), try sw.iface("Gi0/8"))
+        try sw.setSwitchport("Gi0/1", PortConfig(vlan: 10))
+        try sw.setSwitchport("Gi0/8", PortConfig(mode: .trunk))
+        try r1.addSubinterface("Gi0/0.10")
+        try r1.v6.configure("Gi0/0.10", Ipv6Config(address: "2001:db8:10::1/64"))
+        r1.v6.setRouting(true)
+        try h1.v6.configure("eth0", Ipv6Config(autoconfig: true))
+        sim.run(60 * S)
+        #expect(states(h1).count == 1) // the RSs of 1, 5, 13 and 29 s died in spanning tree's 30 s
+        sim.run(3 * S)
+        #expect(states(h1).last == "2001:db8:10::ff:fe00:1 preferred") // the RS of 61 s got through
+        #expect(sim.log.all.contains { $0.kind == .tx && $0.node == "R1" && $0.frame?.vlan == 10 && $0.frame?.etherType == ETHERTYPE_IPV6 })
     }
 }
 

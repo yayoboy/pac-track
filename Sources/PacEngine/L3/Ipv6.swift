@@ -60,6 +60,13 @@ struct DefaultRouter {
     var expiresAt: Int
 }
 
+/// IOS `ipv6 route <prefix> <next hop>` (spec M9 §6): the next hop is a global address in a connected prefix.
+struct Route6 {
+    let network: UInt128
+    let prefix: Int
+    let nextHop: UInt128
+}
+
 /// The IPv6 stack of a host or router (spec M9), idle until an interface turns IPv6 on. Timers are deadlines checked in `expire`,
 /// as in `Rip`: an expiry does nothing if its deadline was moved or cleared since.
 final class Ipv6 {
@@ -69,6 +76,7 @@ final class Ipv6 {
     private(set) var routing = false
     /// Hosts: the routers RAs announced, in order of arrival; the first one still valid is used.
     private(set) var defaults: [DefaultRouter] = []
+    private(set) var statics: [Route6] = []
     private(set) lazy var neighbors = NeighborCache(stack: self)
     /// Ordered (not a dictionary): listener order must be deterministic.
     private var listeners: [(token: Int, listener: Icmp6Listener)] = []
@@ -142,14 +150,28 @@ final class Ipv6 {
         return [ALL_NODES] + (routing ? [ALL_ROUTERS] : []) + v6.addrs.map { solicitedNode($0.addr) }
     }
 
-    /// A packet that reached an interface: for a group it joined or an address in use, else ignored.
+    /// A packet that reached an interface: for a group it joined or an address in use; otherwise forwarded by a router with
+    /// `ipv6 unicast-routing`, never with a link-local address (RFC 4291 §2.5.6) nor to one of its own tentative or duplicate ones.
     func input(_ p: Ipv6Packet, on iface: Interface) {
         guard iface.v6 != nil else { return } // IPv6 off: like an unknown EtherType
         if isMulticast6(p.dst) {
             if groups(iface).contains(p.dst) { deliver(p, on: iface) }
             return
         }
-        if owns(p.dst) { deliver(p, on: iface) }
+        if owns(p.dst) { return deliver(p, on: iface) }
+        guard routing, !isLinkLocal6(p.src), !isLinkLocal6(p.dst),
+              !node.interfaces.contains(where: { $0.v6?.addrs.contains { $0.addr == p.dst } == true }) else { return }
+        if p.hopLimit <= 1 {
+            node.sim.emit(.drop, node: node.id, iface: iface.name, reason: .ttlExpired, packet6: p)
+            return error(p, type: ICMP6_TIME_EXCEEDED, code: 0)
+        }
+        guard let hop = lookup(p.dst) else {
+            node.sim.emit(.drop, node: node.id, reason: .noRoute, packet6: p)
+            return error(p, type: ICMP6_DEST_UNREACH, code: UNREACH6_NO_ROUTE)
+        }
+        var next = p
+        next.hopLimit -= 1
+        output(next, via: hop)
     }
 
     /// A packet for this device; `iface` is nil when it sent the packet to itself.
@@ -296,10 +318,37 @@ final class Ipv6 {
         return (usable(iface) + node.interfaces.flatMap(usable)).first { $0.origin != .linkLocal }?.addr
     }
 
-    /// The interface and next hop toward `dst` (spec M9 §6): a connected prefix, else the first default router still valid.
+    /// The interface and next hop toward `dst` (spec M9 §6): longest prefix first; on equal prefixes connected (0) beats static
+    /// (1), which beats the RA's default (2). A static route whose next hop is not reachable does not count.
     func lookup(_ dst: UInt128) -> NextHop6? {
-        if let c = connected(dst) { return NextHop6(iface: c.iface, nextHop: dst) }
-        return defaults.first { $0.expiresAt > now }.map { NextHop6(iface: $0.iface, nextHop: $0.addr) }
+        var best: NextHop6?
+        var bestPrefix = -1
+        for r in statics where inSubnet6(dst, r.network, r.prefix) && r.prefix > bestPrefix {
+            guard let via = connected(r.nextHop) else { continue }
+            best = NextHop6(iface: via.iface, nextHop: r.nextHop)
+            bestPrefix = r.prefix
+        }
+        if best == nil, let r = defaults.first(where: { $0.expiresAt > now }) {
+            best = NextHop6(iface: r.iface, nextHop: r.addr)
+            bestPrefix = 0
+        }
+        if let c = connected(dst), c.prefix >= bestPrefix { return NextHop6(iface: c.iface, nextHop: dst) }
+        return best
+    }
+
+    /// `requireReachable: false` restores saved routes whose next hop is not reachable yet (kept inactive, like IOS).
+    func addStatic(_ cidr: String, _ nextHop: String, requireReachable: Bool = true) throws {
+        let c = try parseCidr6(cidr)
+        let hop = try parseIp6(nextHop)
+        guard !requireReachable || connected(hop) != nil else { throw EngineError("Next hop \(nextHop) is not in a connected IPv6 subnet") }
+        let route = Route6(network: networkOf6(c.addr, c.prefix), prefix: c.prefix, nextHop: hop)
+        statics.removeAll { $0.network == route.network && $0.prefix == route.prefix }
+        statics.append(route)
+    }
+
+    func removeStatic(_ cidr: String) throws {
+        let c = try parseCidr6(cidr)
+        statics.removeAll { $0.network == networkOf6(c.addr, c.prefix) && $0.prefix == c.prefix }
     }
 
     /// The interface whose address prefix holds `addr`, longest prefix first; link-local and duplicate addresses do not count.
