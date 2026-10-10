@@ -388,7 +388,7 @@ public final class Runtime {
                 },
                 routes: ip?.routes.view().map {
                     RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
-                             isStatic: $0.isStatic, dhcp: $0.dhcp, metric: $0.metric)
+                             isStatic: $0.isStatic, dhcp: $0.dhcp, metric: $0.metric, ospf: $0.ospf)
                 } ?? [],
                 arp: ip?.arp.entries().map {
                     ArpRow(ip: formatIp($0.ip), mac: $0.mac, iface: $0.iface, ttlS: ($0.expiresAt - now + S - 1) / S)

@@ -13,6 +13,8 @@ struct RouteView: Equatable {
     var dhcp = false
     /// Hops of a route learned by RIP (distance 120); nil for the others.
     var metric: Int? = nil
+    /// Learned by OSPF (distance 110; `metric` is the cost).
+    var ospf = false
 }
 
 private struct StaticRoute {
@@ -36,6 +38,8 @@ final class RoutingTable {
     var dhcpGateway: UInt32?
     /// Set by RIP; a connected or static route for the same prefix wins (lower administrative distance).
     var learned: [LearnedRoute] = []
+    /// Set by OSPF; beats RIP at the same prefix (110 < 120), loses to connected and static routes.
+    var ospf: [LearnedRoute] = []
     private let interfaces: () -> [Interface]
 
     init(interfaces: @escaping () -> [Interface]) {
@@ -59,9 +63,14 @@ final class RoutingTable {
         statics.removeAll { $0.network == network && $0.prefix == c.prefix }
     }
 
-    /// A connected route, or a static one whose next hop is reachable, for exactly this prefix: a learned route for it is not used,
-    /// shown or advertised (spec M8 §2).
+    /// A connected route, a static one whose next hop is reachable, or an OSPF route, for exactly this prefix: a RIP route for it
+    /// is not used, shown or advertised (spec M8 §2).
     func shadows(_ network: UInt32, _ prefix: Int) -> Bool {
+        beatsOspf(network, prefix) || ospf.contains { $0.network == network && $0.prefix == prefix }
+    }
+
+    /// A connected route, or a static one whose next hop is reachable, for exactly this prefix.
+    private func beatsOspf(_ network: UInt32, _ prefix: Int) -> Bool {
         statics.contains { $0.network == network && $0.prefix == prefix && connectedFor($0.nextHop) != nil }
             || interfaces().contains { i in i.up && i.ipv4.map { networkOf($0.addr, $0.prefix) == network && $0.prefix == prefix } ?? false }
     }
@@ -74,16 +83,19 @@ final class RoutingTable {
         let statics = statics.map {
             RouteView(isStatic: true, network: $0.network, prefix: $0.prefix, nextHop: $0.nextHop, iface: connectedFor($0.nextHop)?.iface.name ?? "-")
         }
+        let ospf = ospf.filter { !beatsOspf($0.network, $0.prefix) }.map {
+            RouteView(isStatic: false, network: $0.network, prefix: $0.prefix, nextHop: $0.nextHop, iface: $0.iface.name, metric: $0.metric, ospf: true)
+        }
         let rip = learned.filter { !shadows($0.network, $0.prefix) }.map {
             RouteView(isStatic: false, network: $0.network, prefix: $0.prefix, nextHop: $0.nextHop, iface: $0.iface.name, metric: $0.metric)
         }
         let learned = dhcpGateway.map {
             [RouteView(isStatic: false, network: 0, prefix: 0, nextHop: $0, iface: connectedFor($0)?.iface.name ?? "-", dhcp: true)]
         } ?? []
-        return connected + statics + rip + learned
+        return connected + statics + ospf + rip + learned
     }
 
-    /// Longest-prefix match; on equal length the lower administrative distance wins: connected, static, RIP, DHCP default.
+    /// Longest-prefix match; on equal length the lower administrative distance wins: connected, static, OSPF, RIP, DHCP default.
     /// Static routes whose next hop is not currently reachable are skipped (as if withdrawn from the RIB).
     func lookup(_ dst: UInt32) -> NextHop? {
         let conn = connectedFor(dst)
@@ -92,6 +104,10 @@ final class RoutingTable {
         for r in statics where inSubnet(dst, r.network, r.prefix) && r.prefix > bestPrefix {
             guard let via = connectedFor(r.nextHop) else { continue }
             best = NextHop(iface: via.iface, nextHop: r.nextHop)
+            bestPrefix = r.prefix
+        }
+        for r in ospf where inSubnet(dst, r.network, r.prefix) && r.prefix > bestPrefix {
+            best = NextHop(iface: r.iface, nextHop: r.nextHop)
             bestPrefix = r.prefix
         }
         for r in learned where inSubnet(dst, r.network, r.prefix) && r.prefix > bestPrefix {

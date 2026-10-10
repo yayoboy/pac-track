@@ -100,4 +100,23 @@ private func hop(_ rt: RoutingTable, _ dst: String) throws -> String? {
         let (n1, n2, n3) = (try parseIp("10.0.1.0"), try parseIp("10.0.2.0"), try parseIp("10.0.3.0"))
         #expect(rt.shadows(n3, 24) && rt.shadows(n1, 24) && !rt.shadows(n2, 24))
     }
+
+    @Test func ospfBeatsRipAtTheSamePrefixAndLosesToStaticAndConnectedRoutes() throws {
+        let (_, node, rt) = try setup()
+        let eth1 = try node.iface("eth1")
+        let via = try parseIp("10.0.12.2")
+        let (n1, n2, n3) = (try parseIp("10.0.1.0"), try parseIp("10.0.2.0"), try parseIp("10.0.3.0"))
+        rt.learned = [LearnedRoute(network: n2, prefix: 24, nextHop: try parseIp("10.0.1.254"), iface: try node.iface("eth0"), metric: 1)]
+        rt.ospf = [
+            LearnedRoute(network: n2, prefix: 24, nextHop: via, iface: eth1, metric: 20),
+            LearnedRoute(network: n3, prefix: 24, nextHop: via, iface: eth1, metric: 2),
+            LearnedRoute(network: n1, prefix: 24, nextHop: via, iface: eth1, metric: 2),
+        ]
+        try rt.addStatic("10.0.3.0/24", "10.0.1.253")
+        #expect(try hop(rt, "10.0.2.9") == "eth1 via 10.0.12.2") // OSPF 110 beats RIP 120 whatever the metrics
+        #expect(try hop(rt, "10.0.3.9") == "eth0 via 10.0.1.253") // static 1 beats OSPF 110
+        #expect(try hop(rt, "10.0.1.9") == "eth0 via 10.0.1.9") // connected 0
+        #expect(rt.view().filter { $0.metric != nil }.map { "\($0.ospf ? "O" : "R") \(formatIp($0.network))/\($0.prefix) \($0.metric!)" } == ["O 10.0.2.0/24 20"])
+        #expect(rt.shadows(n2, 24)) // RIP does not advertise what OSPF routes
+    }
 }

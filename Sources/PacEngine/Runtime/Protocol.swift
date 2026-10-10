@@ -224,6 +224,8 @@ public struct RouteRow: Equatable, Sendable {
     public var dhcp = false
     /// Hops of a RIP route (shown as [120/n]); nil for the others.
     public var metric: Int? = nil
+    /// An OSPF route (shown as O [110/metric]).
+    public var ospf = false
 }
 
 public struct ArpRow: Equatable, Sendable {
