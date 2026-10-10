@@ -59,6 +59,17 @@ private func errorText6(_ m: IcmpMessage) -> String {
     }
 }
 
+/// An IPv6 destination for ping, traceroute or the traffic generator (spec M9 §7): nil without a ":". Link-local and multicast
+/// destinations are refused, with or without a zone ("fe80::1%eth0"), since Linux needs the zone and Pac-Track has none (§2);
+/// a zone on any other address is not an address.
+func ipv6Target(_ s: String, tool: String) throws -> UInt128? {
+    guard s.contains(":") else { return nil }
+    let a = try parseIp6(String(s.prefix { $0 != "%" }))
+    if isLinkLocal6(a) || isMulticast6(a) { throw EngineError("\(tool) to link-local or multicast addresses is not supported") }
+    if s.contains("%") { throw EngineError("Invalid IPv6 address: \"\(s)\"") }
+    return a
+}
+
 /// Milliseconds with 3 decimals, rounding half up like JavaScript's toFixed (printf would round half to even).
 func formatMs(_ ns: Int) -> String {
     let us = (ns + 500) / 1000
@@ -95,8 +106,7 @@ final class Ping {
         self.node = node
         self.target = target
         opts = o
-        let v6 = try target.contains(":") ? parseIp6(target) : nil
-        if let v6, isLinkLocal6(v6) || isMulticast6(v6) { throw EngineError("Ping to link-local or multicast addresses is not supported") }
+        let v6 = try ipv6Target(target, tool: "Ping")
         let literal = try v6 == nil ? literalIp(target) : nil
         let name = v6 == nil && literal == nil ? normalizeHostName(target) : nil
         guard v6 != nil || literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }

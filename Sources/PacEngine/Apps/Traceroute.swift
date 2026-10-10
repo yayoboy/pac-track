@@ -79,8 +79,7 @@ final class Traceroute {
         self.node = node
         self.target = target
         opts = o
-        let v6 = try target.contains(":") ? parseIp6(target) : nil
-        if let v6, isLinkLocal6(v6) || isMulticast6(v6) { throw EngineError("Traceroute to link-local or multicast addresses is not supported") }
+        let v6 = try ipv6Target(target, tool: "Traceroute")
         let literal = try v6 == nil ? literalIp(target) : nil
         let name = v6 == nil && literal == nil ? normalizeHostName(target) : nil
         guard v6 != nil || literal != nil || name != nil else { throw EngineError("Invalid address or host name: \"\(target)\"") }
