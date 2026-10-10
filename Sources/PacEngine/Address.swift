@@ -66,3 +66,17 @@ func macFromIndex(_ i: Int) -> Mac {
 func isGroupMac(_ mac: Mac) -> Bool {
     (Int(mac.prefix(2), radix: 16) ?? 0) & 1 == 1
 }
+
+/// An IPv4 or IPv6 address, where both versions meet: TCP connections, DNS records and answers, the traffic generator's targets
+/// (spec M9 §10).
+enum IpAddr: Equatable, Sendable {
+    case v4(UInt32)
+    case v6(UInt128)
+
+    var text: String {
+        switch self {
+        case .v4(let a): formatIp(a)
+        case .v6(let a): formatIp6(a)
+        }
+    }
+}

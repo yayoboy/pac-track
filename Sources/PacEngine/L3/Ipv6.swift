@@ -185,9 +185,15 @@ final class Ipv6 {
                 send(p.src, .icmp(IcmpMessage(type: ICMP6_ECHO_REPLY, code: 0, checksum: 0, id: m.id, seq: m.seq, data: m.data)), src: p.dst, via: iface)
             }
             for entry in listeners { entry.listener(p, m) }
-        case .udp:
-            // ponytail: no UDP service listens on IPv6 in M9a (spec M9 §3), so every datagram is refused; M9b adds the services
-            if !isMulticast6(p.dst) { error(p, type: ICMP6_DEST_UNREACH, code: UNREACH6_PORT, via: iface) }
+        case .udp(let u):
+            // A port bound on both stacks (spec M9 §10); otherwise Port Unreachable, as in IPv4.
+            if let handler = node.udp6[u.dstPort] {
+                handler(p, u)
+            } else if !isMulticast6(p.dst) {
+                error(p, type: ICMP6_DEST_UNREACH, code: UNREACH6_PORT, via: iface)
+            }
+        case .tcp(let t):
+            node.tcp.input(t, from: .v6(p.src), to: .v6(p.dst))
         }
     }
 
@@ -286,6 +292,14 @@ final class Ipv6 {
               let from = src ?? source(for: dst, out: hop.iface) else { return false }
         output(makeIpv6(src: from, dst: dst, hopLimit: hopLimit ?? self.hopLimit, payload: payload), via: hop)
         return true
+    }
+
+    /// The source toward `dst`: itself when it is an own address; nil for a link-local destination (it needs an interface) or
+    /// without a route.
+    func sourceFor(_ dst: UInt128) -> UInt128? {
+        if owns(dst) { return dst }
+        guard !isLinkLocal6(dst), let hop = lookup(dst) else { return nil }
+        return source(for: dst, out: hop.iface)
     }
 
     /// No fragmentation, not even at the source (spec M9 §3): a packet over the MTU is dropped with Packet Too Big.

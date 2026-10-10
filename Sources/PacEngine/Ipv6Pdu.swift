@@ -182,17 +182,19 @@ struct NdpMessage: Equatable, Sendable {
     }
 }
 
-/// What an IPv6 packet carries: ICMPv6 echo and errors (ICMPv4's header layout, so `IcmpMessage`), NDP, UDP.
+/// What an IPv6 packet carries: ICMPv6 echo and errors (ICMPv4's header layout, so `IcmpMessage`), NDP, UDP, TCP.
 enum Ipv6Payload: Equatable, Sendable {
     case icmp(IcmpMessage)
     case ndp(NdpMessage)
     case udp(UdpDatagram)
+    case tcp(TcpSegment)
 
     var size: Int {
         switch self {
         case .icmp(let m): m.size
         case .ndp(let n): n.size
         case .udp(let u): u.size
+        case .tcp(let t): t.size
         }
     }
 
@@ -200,6 +202,7 @@ enum Ipv6Payload: Equatable, Sendable {
         switch self {
         case .icmp, .ndp: IPPROTO_ICMPV6
         case .udp: IPPROTO_UDP
+        case .tcp: IPPROTO_TCP
         }
     }
 }
@@ -257,6 +260,7 @@ func serializePayload(_ p: Ipv6Packet) -> [UInt8] {
     case .icmp(let m): serialize(m)
     case .ndp(let n): serialize(n)
     case .udp(let u): serialize(u)
+    case .tcp(let t): serialize(t)
     }
 }
 
@@ -265,7 +269,7 @@ func pseudoHeader6(_ src: UInt128, _ dst: UInt128, _ length: Int, _ nextHeader: 
     bytes16(src) + bytes16(dst) + u32(UInt32(truncatingIfNeeded: length)) + [0, 0, 0, nextHeader]
 }
 
-/// A packet with its payload's checksum filled in: mandatory for ICMPv6 and for UDP over IPv6, where a sum of 0 is sent as ffff.
+/// A packet with its payload's checksum filled in: mandatory for ICMPv6, TCP and UDP over IPv6, where a UDP sum of 0 is sent as ffff.
 func makeIpv6(src: UInt128, dst: UInt128, hopLimit: UInt8, payload: Ipv6Payload) -> Ipv6Packet {
     let pseudo = pseudoHeader6(src, dst, payload.size, payload.nextHeader)
     let sealed: Ipv6Payload
@@ -283,6 +287,10 @@ func makeIpv6(src: UInt128, dst: UInt128, hopLimit: UInt8, payload: Ipv6Payload)
         let sum = internetChecksum(pseudo + serialize(u))
         u.checksum = sum == 0 ? 0xFFFF : sum
         sealed = .udp(u)
+    case .tcp(var t):
+        t.checksum = 0
+        t.checksum = internetChecksum(pseudo + serialize(t))
+        sealed = .tcp(t)
     }
     return Ipv6Packet(hopLimit: hopLimit, src: src, dst: dst, payload: sealed)
 }

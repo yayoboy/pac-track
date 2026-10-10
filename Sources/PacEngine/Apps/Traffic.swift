@@ -99,7 +99,7 @@ final class TcpFlow {
         guard let c = conn, !result.done else { return }
         if c.state == .established && !connected {
             connected = true
-            result.lines.append("[  1] local \(formatIp(c.localIp)) port \(c.localPort) connected to \(formatIp(c.remoteIp)) port \(c.remotePort)")
+            result.lines.append("[  1] local \(c.localIp.text) port \(c.localPort) connected to \(c.remoteIp.text) port \(c.remotePort)")
         }
         guard c.state == .timeWait || c.state == .closed else { return }
         if let f = c.failure {

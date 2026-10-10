@@ -35,6 +35,8 @@ class IpNode: Node {
     var effectiveNameServer: UInt32? { nameServer ?? learnedNameServer }
     private var ipId: UInt16 = 0
     private var udp: [UInt16: UdpHandler] = [:]
+    /// The ports bound on both stacks also take IPv6 datagrams (spec M9 §10).
+    private(set) var udp6: [UInt16: (Ipv6Packet, UdpDatagram) -> Void] = [:]
     /// Ordered (not a dictionary): listener order must be deterministic.
     private var icmpListeners: [(token: Int, listener: IcmpListener)] = []
     private var nextToken = 0
@@ -71,11 +73,29 @@ class IpNode: Node {
         ownsIp(dst) ? dst : routes.lookup(dst)?.iface.ipv4?.addr
     }
 
+    /// Either stack's source address toward `dst`; nil without a route.
+    func source(for dst: IpAddr) -> IpAddr? {
+        switch dst {
+        case .v4(let a): sourceFor(a).map(IpAddr.v4)
+        case .v6(let a): v6.sourceFor(a).map(IpAddr.v6)
+        }
+    }
+
     @discardableResult
     func bindUdp(_ port: UInt16, _ handler: @escaping UdpHandler) throws -> () -> Void {
         guard udp[port] == nil else { throw EngineError("UDP port \(port) already in use") }
         udp[port] = handler
         return { [weak self] in self?.udp[port] = nil }
+    }
+
+    /// A UDP port on both stacks, like a Linux dual-stack socket: the handler gets each datagram's source and destination.
+    func bindDualUdp(_ port: UInt16, _ handler: @escaping (IpAddr, IpAddr, UdpDatagram) -> Void) throws -> () -> Void {
+        let unbind = try bindUdp(port) { p, u, _ in handler(.v4(p.src), .v4(p.dst), u) }
+        udp6[port] = { p, u in handler(.v6(p.src), .v6(p.dst), u) }
+        return { [weak self] in
+            unbind()
+            self?.udp6[port] = nil
+        }
     }
 
     @discardableResult
@@ -96,7 +116,7 @@ class IpNode: Node {
         try tcp.listen(PORT_DISCARD)
         let unbind: () -> Void
         do {
-            unbind = try bindUdp(PORT_DISCARD) { [unowned self] _, u, _ in
+            unbind = try bindDualUdp(PORT_DISCARD) { [unowned self] _, _, u in
                 if case .traffic(let d) = u.payload { self.sim.flows[d.flow]?(d) }
             }
         } catch {
@@ -298,7 +318,7 @@ class IpNode: Node {
                 icmpError(p, type: ICMP_DEST_UNREACH, code: UNREACH_PORT)
             }
         case .tcp(let t):
-            tcp.input(p, t)
+            tcp.input(t, from: .v4(p.src), to: .v4(p.dst))
         case .ospf(let o):
             if let iface { ospf?.receive(p, o, on: iface) }
         }

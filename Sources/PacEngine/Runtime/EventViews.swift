@@ -85,6 +85,7 @@ private func proto(of p: Ipv6Packet) -> Proto {
     case .icmp: .icmp
     case .ndp: .ndp
     case .udp: .udp
+    case .tcp: .tcp
     }
 }
 
@@ -130,6 +131,7 @@ private func describe(_ p: Ipv6Packet) -> String {
     case .icmp(let m): "ICMPv6 \(icmp6Name(m))" + (isEcho6(m) ? " id=\(m.id) seq=\(m.seq)" : "") + " hlim=\(p.hopLimit)"
     case .ndp(let n): "NDP " + describe(n, from: p.src)
     case .udp(let u): "UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)"
+    case .tcp(let t): "TCP " + tcpSummary(t)
     }
     return "\(what) · \(formatIp6(p.src)) → \(formatIp6(p.dst))"
 }
@@ -139,6 +141,12 @@ private let TCP_FLAG_NAMES: [(TcpFlags, String)] = [(.fin, "FIN"), (.syn, "SYN")
 /// Wireshark order, lowest bit first: "SYN, ACK".
 private func flagNames(_ f: TcpFlags) -> String {
     TCP_FLAG_NAMES.filter { f.contains($0.0) }.map { $0.1 }.joined(separator: ", ")
+}
+
+/// "40000 → 9 [SYN, ACK] seq=… ack=… win=65535 len=0 mss=1460".
+private func tcpSummary(_ t: TcpSegment) -> String {
+    "\(t.srcPort) → \(t.dstPort) [\(flagNames(t.flags))] seq=\(t.seq)" + (t.flags.contains(.ack) ? " ack=\(t.ack)" : "")
+        + " win=\(t.window) len=\(t.dataLength)" + (t.mss.map { " mss=\($0)" } ?? "")
 }
 
 private func describe(_ p: Ipv4Packet) -> String {
@@ -155,8 +163,7 @@ private func describe(_ p: Ipv4Packet) -> String {
         case .raw, .traffic: return "\(ends) UDP \(u.srcPort) → \(u.dstPort) ttl=\(p.ttl)"
         }
     case .tcp(let t):
-        return "\(ends) TCP \(t.srcPort) → \(t.dstPort) [\(flagNames(t.flags))] seq=\(t.seq)" + (t.flags.contains(.ack) ? " ack=\(t.ack)" : "")
-            + " win=\(t.window) len=\(t.dataLength)" + (t.mss.map { " mss=\($0)" } ?? "")
+        return "\(ends) TCP " + tcpSummary(t)
     case .ospf(let o):
         return "\(ends) OSPF " + ospfSummary(o)
     }
@@ -373,6 +380,23 @@ private func udpLayer(_ u: UdpDatagram) -> PduLayer {
     ])
 }
 
+private func tcpLayer(_ t: TcpSegment) -> PduLayer {
+    var fields = [
+        field("Porta sorgente", "\(t.srcPort)"),
+        field("Porta destinazione", "\(t.dstPort)"),
+        field("Numero di sequenza", "\(t.seq)"),
+        field("Numero di ack", "\(t.ack)"),
+        field("Lungh. header", "\(t.headerSize) B (data offset \(t.headerSize / 4))"),
+        field("Flag", "\(hex(Int(t.flags.rawValue), digits: 3)) (\(flagNames(t.flags)))"),
+        field("Finestra", "\(t.window)"),
+        field("Checksum", hex(Int(t.checksum), digits: 4)),
+        field("Puntatore urgente", "0"),
+    ]
+    if let mss = t.mss { fields.append(field("Opzione MSS", "\(mss) B")) }
+    fields.append(field("Dati", "\(t.dataLength) B"))
+    return PduLayer(title: "TCP", bytes: t.size, fields: fields)
+}
+
 private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
     let ip = PduLayer(title: "IPv4", bytes: p.size, fields: [
         field("Versione", "4"),
@@ -404,20 +428,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         case .rip(let m): return [ip, udp, ripLayer(m)]
         }
     case .tcp(let t):
-        var fields = [
-            field("Porta sorgente", "\(t.srcPort)"),
-            field("Porta destinazione", "\(t.dstPort)"),
-            field("Numero di sequenza", "\(t.seq)"),
-            field("Numero di ack", "\(t.ack)"),
-            field("Lungh. header", "\(t.headerSize) B (data offset \(t.headerSize / 4))"),
-            field("Flag", "\(hex(Int(t.flags.rawValue), digits: 3)) (\(flagNames(t.flags)))"),
-            field("Finestra", "\(t.window)"),
-            field("Checksum", hex(Int(t.checksum), digits: 4)),
-            field("Puntatore urgente", "0"),
-        ]
-        if let mss = t.mss { fields.append(field("Opzione MSS", "\(mss) B")) }
-        fields.append(field("Dati", "\(t.dataLength) B"))
-        return [ip, PduLayer(title: "TCP", bytes: t.size, fields: fields)]
+        return [ip, tcpLayer(t)]
     case .ospf(let o):
         return [ip, ospfLayer(o)]
     }
@@ -463,7 +474,7 @@ private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
         field("Traffic class", "0x00"),
         field("Flow label", "0x00000"),
         field("Lunghezza payload", "\(p.payload.size) B"),
-        field("Next header", p.payload.nextHeader == IPPROTO_UDP ? "17 (UDP)" : "58 (ICMPv6)"),
+        field("Next header", p.payload.nextHeader == IPPROTO_UDP ? "17 (UDP)" : p.payload.nextHeader == IPPROTO_TCP ? "6 (TCP)" : "58 (ICMPv6)"),
         field("Hop limit", "\(p.hopLimit)"),
         field("Sorgente", formatIp6(p.src)),
         field("Destinazione", formatIp6(p.dst)),
@@ -477,6 +488,7 @@ private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
         return [ip, PduLayer(title: "ICMPv6", bytes: m.size, fields: fields)]
     case .ndp(let n): return [ip, ndpLayer(n)]
     case .udp(let u): return [ip, udpLayer(u)]
+    case .tcp(let t): return [ip, tcpLayer(t)]
     }
 }
 

@@ -377,7 +377,7 @@ public final class Runtime {
     private func tcpRows(_ n: IpNode) -> [TcpRow] {
         n.tcp.listening.map { TcpRow(local: "0.0.0.0:\($0)", remote: "0.0.0.0:*", state: "LISTEN") }
             + n.tcp.connections.map {
-                TcpRow(local: "\(formatIp($0.localIp)):\($0.localPort)", remote: "\(formatIp($0.remoteIp)):\($0.remotePort)", state: $0.state.rawValue)
+                TcpRow(local: "\($0.localIp.text):\($0.localPort)", remote: "\($0.remoteIp.text):\($0.remotePort)", state: $0.state.rawValue)
             }
     }
 

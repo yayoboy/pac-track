@@ -1,4 +1,6 @@
 let TCP_MSS = 1460
+/// Over IPv6 the header is 20 B longer: the MTU less 60 (RFC 8200 §8.3, spec M9 §10).
+let TCP_MSS6 = 1440
 /// RFC 879: the MSS to assume when a SYN carries no option.
 private let TCP_DEFAULT_MSS = 536
 /// Receive buffer and advertised window: 64 KB, no window scaling.
@@ -40,9 +42,9 @@ enum TcpFailure: String, Sendable {
 // ponytail: one-way bulk data, no delayed ACK, SACK, timestamps, window scaling, persist or keepalive timers
 final class TcpConnection {
     unowned let tcp: Tcp
-    let localIp: UInt32
+    let localIp: IpAddr
     let localPort: UInt16
-    let remoteIp: UInt32
+    let remoteIp: IpAddr
     let remotePort: UInt16
     let startedAt: Int
     private(set) var state: TcpState {
@@ -66,6 +68,8 @@ final class TcpConnection {
     private var nxt = 0
     private var sentMax = 0
     private var mss = TCP_MSS
+    /// The MSS this end announces: the MTU less the IP and TCP headers.
+    private let ownMss: Int
     private var peerWindow = TCP_WINDOW
 
     // RFC 6298 retransmission timer.
@@ -93,12 +97,14 @@ final class TcpConnection {
     /// Where the peer's FIN sits once seen (it may arrive before the data in front of it).
     private var peerFin: Int?
 
-    init(tcp: Tcp, local: UInt32, localPort: UInt16, remote: UInt32, remotePort: UInt16, sending bytes: Int, state: TcpState) {
+    init(tcp: Tcp, local: IpAddr, localPort: UInt16, remote: IpAddr, remotePort: UInt16, sending bytes: Int, state: TcpState) {
         self.tcp = tcp
         localIp = local
         self.localPort = localPort
         remoteIp = remote
         self.remotePort = remotePort
+        ownMss = if case .v6 = local { TCP_MSS6 } else { TCP_MSS }
+        mss = ownMss
         startedAt = tcp.node.sim.now
         self.state = state
         dataLength = bytes
@@ -169,7 +175,7 @@ final class TcpConnection {
     }
 
     private func learn(_ syn: TcpSegment) {
-        mss = min(TCP_MSS, Int(syn.mss ?? UInt16(TCP_DEFAULT_MSS)))
+        mss = min(ownMss, Int(syn.mss ?? UInt16(TCP_DEFAULT_MSS)))
         peerWindow = Int(syn.window)
     }
 
@@ -332,7 +338,7 @@ final class TcpConnection {
     private func send(_ flags: TcpFlags, at offset: Int, length: Int) {
         let s = TcpSegment(srcPort: localPort, dstPort: remotePort, seq: iss &+ UInt32(truncatingIfNeeded: offset),
                            ack: flags.contains(.ack) ? irs &+ UInt32(truncatingIfNeeded: rcvNxt) : 0, flags: flags,
-                           window: UInt16(TCP_WINDOW), mss: flags.contains(.syn) ? UInt16(TCP_MSS) : nil, dataLength: length)
+                           window: UInt16(TCP_WINDOW), mss: flags.contains(.syn) ? UInt16(ownMss) : nil, dataLength: length)
         tcp.send(s, from: localIp, to: remoteIp)
     }
 
@@ -407,8 +413,8 @@ final class Tcp {
     }
 
     /// Active open from a random ephemeral port (Linux range 32768–60999): sends `bytes`, then closes.
-    func connect(to dst: UInt32, port: UInt16, sending bytes: Int) throws -> TcpConnection {
-        guard let src = node.sourceFor(dst) else { throw EngineError("Network is unreachable") }
+    func connect(to dst: IpAddr, port: UInt16, sending bytes: Int) throws -> TcpConnection {
+        guard let src = node.source(for: dst) else { throw EngineError("Network is unreachable") }
         for _ in 0..<16 {
             let local = UInt16(32768 + node.sim.rng.int(28232))
             guard !connections.contains(where: { $0.localPort == local }) else { continue }
@@ -420,25 +426,38 @@ final class Tcp {
         throw EngineError("No free local port")
     }
 
-    func input(_ p: Ipv4Packet, _ s: TcpSegment) {
-        guard node.ownsIp(p.dst) else { return } // never to a broadcast address
+    /// An IPv4 destination.
+    func connect(to dst: UInt32, port: UInt16, sending bytes: Int) throws -> TcpConnection {
+        try connect(to: .v4(dst), port: port, sending: bytes)
+    }
+
+    /// A segment from either stack.
+    func input(_ s: TcpSegment, from src: IpAddr, to dst: IpAddr) {
+        guard owns(dst) else { return } // never to a broadcast or multicast address
         if let c = connections.first(where: {
-            $0.localIp == p.dst && $0.localPort == s.dstPort && $0.remoteIp == p.src && $0.remotePort == s.srcPort
+            $0.localIp == dst && $0.localPort == s.dstPort && $0.remoteIp == src && $0.remotePort == s.srcPort
         }) {
             return c.receive(s)
         }
         if s.flags.contains(.rst) { return }
         if s.flags == [.syn], listening.contains(s.dstPort) {
-            let c = TcpConnection(tcp: self, local: p.dst, localPort: s.dstPort, remote: p.src, remotePort: s.srcPort, sending: 0,
+            let c = TcpConnection(tcp: self, local: dst, localPort: s.dstPort, remote: src, remotePort: s.srcPort, sending: 0,
                                   state: .synReceived)
             connections.append(c)
             return c.accept(s)
         }
-        refuse(p, s)
+        refuse(s, from: src, to: dst)
+    }
+
+    private func owns(_ a: IpAddr) -> Bool {
+        switch a {
+        case .v4(let a): node.ownsIp(a)
+        case .v6(let a): node.v6.owns(a)
+        }
     }
 
     /// RFC 793 "Reset Generation": a segment for no connection gets a RST its sender will accept.
-    private func refuse(_ p: Ipv4Packet, _ s: TcpSegment) {
+    private func refuse(_ s: TcpSegment, from src: IpAddr, to dst: IpAddr) {
         let rst: TcpSegment
         if s.flags.contains(.ack) {
             rst = TcpSegment(srcPort: s.dstPort, dstPort: s.srcPort, seq: s.ack, ack: 0, flags: [.rst], window: 0)
@@ -446,11 +465,15 @@ final class Tcp {
             let length = UInt32(s.dataLength) + (s.flags.contains(.syn) ? 1 : 0) + (s.flags.contains(.fin) ? 1 : 0)
             rst = TcpSegment(srcPort: s.dstPort, dstPort: s.srcPort, seq: 0, ack: s.seq &+ length, flags: [.rst, .ack], window: 0)
         }
-        send(rst, from: p.dst, to: p.src)
+        send(rst, from: dst, to: src)
     }
 
-    func send(_ s: TcpSegment, from src: UInt32, to dst: UInt32) {
-        node.sendPacket(dst, .tcp(makeTcp(s, src: src, dst: dst)), src: src)
+    func send(_ s: TcpSegment, from src: IpAddr, to dst: IpAddr) {
+        switch (src, dst) {
+        case let (.v4(a), .v4(b)): node.sendPacket(b, .tcp(makeTcp(s, src: a, dst: b)), src: a)
+        case let (.v6(a), .v6(b)): node.v6.send(b, .tcp(s), src: a) // makeIpv6 fills the checksum
+        default: break // a connection's ends are always of one version
+        }
     }
 
     func remove(_ c: TcpConnection) {
