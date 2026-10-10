@@ -396,7 +396,7 @@ public final class Editor {
         }
     }
 
-    /// Adds devices of the same kind, power state, interface modes, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
+    /// Adds devices of the same kind, power state, interface modes, IPv6 and SLAAC settings, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
     /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
     /// and selects them.
     private func insertCopies(of srcs: [TopologyNode]) async {
@@ -416,6 +416,10 @@ public final class Editor {
             for i in src.ifaces {
                 if let c = i.switchport { cmds.append(.setSwitchport(node: id, iface: i.name, config: c)) }
                 if i.name.contains(".") { cmds.append(.addSubinterface(node: id, iface: i.name)) }
+            }
+            // IPv6 stays on with its SLAAC setting; a manual address stays behind like an IPv4 one (spec M9 §9).
+            for i in src.ifaces {
+                if let c = i.ipv6 { cmds.append(.setIpv6(node: id, iface: i.name, config: Ipv6Config(autoconfig: c.autoconfig))) }
             }
             // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
             for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }

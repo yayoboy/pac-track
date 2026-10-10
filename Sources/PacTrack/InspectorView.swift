@@ -112,6 +112,7 @@ private struct NodeInspector: View {
                             await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
                         }
                     }
+                    Ipv6Fields(node: node, iface: iface, editor: editor)
                     Text("MAC \(iface.mac)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
                 }
             }
@@ -171,7 +172,15 @@ private struct NodeInspector: View {
                     }
                 }
             } else {
-                TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."], rows: node.routes.map(routeColumns))
+                TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."],
+                             rows: node.routes.filter { !$0.dest.contains(":") }.map(routeColumns))
+                if node.ifaces.contains(where: { $0.ipv6Config != nil }) {
+                    // Destination over next hop and address over MAC, as the NAT table does: IPv6 addresses are too long for one line each.
+                    TableSection(title: "Tabella di routing IPv6", head: ["Tipo", "Destinazione\nNext hop", "AD/m", "Int."],
+                                 rows: node.routes.filter { $0.dest.contains(":") }.map(routeColumns).map { [$0[0], "\($0[1])\n\($0[3])", $0[2], $0[4]] })
+                    TableSection(title: "Vicini IPv6", head: ["Indirizzo\nMAC", "Stato", "Int."],
+                                 rows: node.neighbors6.map { ["\($0.addr)\n\($0.mac)", $0.state, $0.iface] })
+                }
                 if node.ospf != nil {
                     TableSection(title: "Vicini OSPF" + (node.ospfRouterId.map { " · router ID \($0)" } ?? ""), head: ["Router ID", "Pri", "Stato", "Indirizzo", "Int."],
                                  rows: node.ospfNeighbors.map { [$0.routerId, "\($0.priority)", $0.state, $0.address, $0.iface] })
@@ -283,6 +292,50 @@ private struct SubinterfaceForm: View {
     }
 }
 
+/// IPv6 on an interface (spec M9 §8): on/off, SLAAC on hosts, the manual address, and every address with its origin and state.
+private struct Ipv6Fields: View {
+    let node: NodeView
+    let iface: IfaceView
+    @Bindable var editor: Editor
+
+    var body: some View {
+        let key = "ip6:\(node.id):\(iface.name)"
+        let apply = { (c: Ipv6Config?) in Task { await editor.edit(.setIpv6(node: node.id, iface: iface.name, config: c), key: key) } }
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                Toggle("IPv6", isOn: Binding(get: { iface.ipv6Config != nil }, set: { on in
+                    _ = apply(on ? Ipv6Config(autoconfig: node.kind.isHost) : nil)
+                }))
+                .accessibilityIdentifier("ipv6-\(iface.name)")
+                if node.kind.isHost, let c = iface.ipv6Config {
+                    Toggle("SLAAC", isOn: Binding(get: { c.autoconfig }, set: { on in
+                        var n = c
+                        n.autoconfig = on
+                        _ = apply(n)
+                    }))
+                    .help("Indirizzo dal prefisso annunciato dal router (RA) + EUI-64")
+                    .accessibilityIdentifier("slaac-\(iface.name)")
+                }
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            if let c = iface.ipv6Config {
+                CommitField(label: "Indirizzo IPv6 / prefisso", value: c.address ?? "", placeholder: "2001:db8:1::10/64", errorKey: key, editor: editor) { text in
+                    var n = c
+                    let t = text.trimmingCharacters(in: .whitespaces)
+                    n.address = t.isEmpty ? nil : t
+                    await editor.edit(.setIpv6(node: node.id, iface: iface.name, config: n), key: key)
+                }
+                ForEach(iface.ipv6, id: \.self) { line in
+                    Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.fg).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                ErrorLine(editor: editor, key: key)
+            }
+        }
+    }
+}
+
 private struct RoutingTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -294,6 +347,19 @@ private struct RoutingTab: View {
         let gwKey = "gw:\(node.id)"
         let routeKey = "route:\(node.id)"
         VStack(alignment: .leading, spacing: 14) {
+            if node.kind == .router {
+                let key = "ip6:\(node.id)"
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Routing IPv6 (ipv6 unicast-routing)", isOn: Binding(get: { node.ipv6Routing }, set: { on in
+                        Task { await editor.edit(.setIpv6Routing(node: node.id, on: on), key: key) }
+                    }))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Inoltra IPv6 e manda le Router Advertisement sulle interfacce IPv6")
+                    .accessibilityIdentifier("ipv6-routing")
+                    ErrorLine(editor: editor, key: key)
+                }
+            }
             CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1", errorKey: gwKey, editor: editor) { text in
                 let trimmed = text.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty {

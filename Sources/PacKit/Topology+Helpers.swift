@@ -98,10 +98,10 @@ public func ospfRole(_ config: OspfConfig?, _ iface: String) -> RoutingRole {
     config?.interfaces.first { $0.name == iface }.map { $0.passive ? .passive : .active } ?? .off
 }
 
-/// One row of Tabelle's routing table (spec M8 §5): type (C, S, R, O), destination, [distance/metric], next hop, interface.
+/// One row of Tabelle's routing tables (spec M8 §5, M9 §8): type (C, S, R, O, ND), destination, [distance/metric], next hop, interface.
 public func routeColumns(_ r: RouteRow) -> [String] {
     let (type, distance) = r.metric.map { r.ospf ? ("O", "[110/\($0)]") : ("R", "[120/\($0)]") }
-        ?? (r.dhcp ? ("S", "[254/0]") : r.isStatic ? ("S", "[1/0]") : ("C", ""))
+        ?? (r.ra ? ("ND", "[2/0]") : r.dhcp ? ("S", "[254/0]") : r.isStatic ? ("S", "[1/0]") : ("C", ""))
     return [type, r.dest, distance, (r.nextHop ?? "connessa") + (r.dhcp ? " (DHCP)" : ""), r.iface]
 }
 
@@ -148,11 +148,12 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
                      // A leased address (and the DHCP default route) belongs to the server, not to the design: only the mode is saved.
                      ifaces: n.ifaces.map {
                          TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode,
-                                       switchport: $0.switchport == PortConfig() ? nil : $0.switchport)
+                                       switchport: $0.switchport == PortConfig() ? nil : $0.switchport, ipv6: $0.ipv6Config)
                      },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
                      powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall,
-                     stpPriorities: n.stpPriorities.isEmpty ? nil : n.stpPriorities, rip: n.rip, ospf: n.ospf)
+                     stpPriorities: n.stpPriorities.isEmpty ? nil : n.stpPriorities, rip: n.rip, ospf: n.ospf,
+                     ipv6Routing: n.ipv6Routing)
     }, links: s.links)
 }
 

@@ -87,6 +87,7 @@ enum SelfTest {
         failures += await stpScenario(output: output)
         failures += await ripScenario(output: output)
         failures += await ospfScenario(output: output)
+        failures += await ipv6Scenario(output: output)
         return failures
     }
 
@@ -558,6 +559,52 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m8b-ospf")) { failures.append("could not write the M8b OSPF image") }
         editor.inspectorTab = .tables
         if !render(editor, to: sibling(output, "m8b-tables")) { failures.append("could not write the M8b tables image") }
+        return failures
+    }
+
+    /// M9a: R1 routes IPv6 between PC1 and PC2, which autoconfigure with SLAAC; PC1 pings PC2's address.
+    private static func ipv6Scenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.router, at: Pos(x: 560, y: 160))
+        await editor.addDevice(.pc, at: Pos(x: 400, y: 380))
+        await editor.addDevice(.pc, at: Pos(x: 720, y: 380))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("R1"), id("PC1")) // R1 Gi0/0
+        await editor.connect(id("R1"), id("PC2")) // R1 Gi0/1
+        for (iface, cidr) in [("Gi0/0", "2001:db8:1::1/64"), ("Gi0/1", "2001:db8:2::1/64")] {
+            await editor.edit(.setIpv6(node: id("R1"), iface: iface, config: Ipv6Config(address: cidr)))
+        }
+        await editor.edit(.setIpv6Routing(node: id("R1"), on: true))
+        for pc in ["PC1", "PC2"] { await editor.edit(.setIpv6(node: id(pc), iface: "eth0", config: Ipv6Config(autoconfig: true))) }
+        for _ in 0..<30 { await editor.tick(wallMs: 100) }
+        let pc2 = editor.snapshot.nodes.first { $0.name == "PC2" }?.ifaces.first?.ipv6.last ?? ""
+        let target = String(pc2.split(separator: "/").first ?? "")
+        if !pc2.hasPrefix("2001:db8:2::") || !pc2.hasSuffix("SLAAC") { failures.append("PC2 addresses \(pc2)") }
+        await editor.run(.ping(node: id("PC1"), target: target))
+        for _ in 0..<50 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") || !lines.contains(where: { $0.contains("ttl=63") }) {
+            failures.append("ping over IPv6 \(lines)")
+        }
+        let pc1 = editor.snapshot.nodes.first { $0.name == "PC1" }
+        if !(pc1?.routes.map(routeColumns) ?? []).contains(where: { $0.first == "ND" && $0[1] == "::/0" }) {
+            failures.append("PC1 routes \(String(describing: pc1?.routes))")
+        }
+        if let ns = editor.events.last(where: { $0.proto == .ndp && $0.node == id("PC1") && $0.kind == .tx && $0.info.contains("NS chi ha") }) {
+            await editor.selectEvent(ns.id)
+            if editor.pdu?.map(\.title) != ["Ethernet II", "IPv6", "ICMPv6"] { failures.append("NDP PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no NS sent by PC1")
+        }
+        editor.select(.node(id("PC1")))
+        editor.inspectorTab = .interfaces
+        if !render(editor, to: sibling(output, "m9a-interfaces")) { failures.append("could not write the M9a interfaces image") }
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m9a-tables")) { failures.append("could not write the M9a tables image") }
+        editor.select(.node(id("R1")))
+        editor.inspectorTab = .routing
+        if !render(editor, to: sibling(output, "m9a-routing")) { failures.append("could not write the M9a routing image") }
         return failures
     }
 
