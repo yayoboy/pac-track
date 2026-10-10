@@ -449,9 +449,9 @@ public final class Runtime {
                 leases: ip?.dhcpServer?.view().map {
                     LeaseRow(ip: formatIp($0.ip), mac: $0.mac, expiresS: secondsLeft($0.expiresAt - now), bound: $0.bound)
                 } ?? [],
-                dnsRecords: ip?.dnsServer?.records.map { DnsRecord(name: $0.name, ip: formatIp($0.addr), ttl: $0.ttl) },
+                dnsRecords: ip?.dnsServer?.records.map { DnsRecord(name: $0.name, ip: $0.addr.text, ttl: $0.ttl) },
                 dnsCache: ip?.resolver.entries().flatMap { e in
-                    e.addrs.map { DnsCacheRow(name: e.name, ip: formatIp($0), ttlS: secondsLeft(e.expiresAt - now)) }
+                    e.addrs.map { DnsCacheRow(name: e.name, ip: $0.text, ttlS: secondsLeft(e.expiresAt - now)) }
                 } ?? [],
                 sink: ip?.sink ?? false,
                 tcp: ip.map { tcpRows($0) } ?? [],

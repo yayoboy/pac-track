@@ -139,6 +139,11 @@ final class Ipv6 {
         node.interfaces.contains { $0.v6?.addrs.contains { $0.addr == a && $0.state == .preferred } == true }
     }
 
+    /// A usable global address on any interface: the resolver then asks for AAAA records too (spec M9 §10).
+    var hasGlobal: Bool {
+        node.interfaces.contains { $0.v6?.addrs.contains { $0.origin != .linkLocal && $0.state == .preferred } == true }
+    }
+
     /// The NIC filter for `33:33` MACs: a group that `phys` or one of its subinterfaces has joined (spec M9 §2).
     func listens(_ mac: Mac, on phys: Interface) -> Bool {
         node.interfaces.contains { i in (i.dot1q?.parent ?? i) === phys && groups(i).contains { multicastMac6($0) == mac } }

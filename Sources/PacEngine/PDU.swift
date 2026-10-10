@@ -19,6 +19,9 @@ let PORT_DNS: UInt16 = 53
 /// Discard service (RFC 863): the traffic generator's receiver, TCP and UDP.
 let PORT_DISCARD: UInt16 = 9
 let DNS_NXDOMAIN: UInt8 = 3
+/// DNS record types (RFC 1035 §3.2.2, RFC 3596 §2.1).
+let DNS_TYPE_A: UInt16 = 1
+let DNS_TYPE_AAAA: UInt16 = 28
 /// iperf3's default UDP payload: with UDP, IPv4 and Ethernet headers the frame stays within a 1500-byte MTU.
 let TRAFFIC_DATAGRAM = 1470
 /// The same over IPv6, whose header is 20 B longer: the packet stays at 1498 B (spec M9 §10).
@@ -106,12 +109,17 @@ struct DhcpMessage: Equatable, Sendable {
     var size: Int { max(300, 240 + optionsSize) }
 }
 
-struct DnsAnswer: Equatable, Sendable {
-    var ttl: UInt32
-    var addr: UInt32
+func dnsTypeName(_ type: UInt16) -> String {
+    type == DNS_TYPE_AAAA ? "AAAA" : "A"
 }
 
-/// One-question DNS message for an A record (class IN); answers repeat the question name.
+struct DnsAnswer: Equatable, Sendable {
+    var ttl: UInt32
+    /// The record's data: an A's 32 bits or an AAAA's 128, as the message's `type` says.
+    var addr: UInt128
+}
+
+/// One-question DNS message for an A or AAAA record (class IN); answers repeat the question name.
 struct DnsMessage: Equatable, Sendable {
     var id: UInt16
     var response: Bool
@@ -121,14 +129,21 @@ struct DnsMessage: Equatable, Sendable {
     var rcode: UInt8 = 0
     var name: String
     var answers: [DnsAnswer] = []
+    var type = DNS_TYPE_A
 
     var flags: UInt16 {
         (response ? 0x8000 : 0) | (authoritative ? 0x0400 : 0) | (recursionDesired ? 0x0100 : 0) | UInt16(rcode)
     }
 
-    /// Header 12 B + question (labels + type + class) + answers of 16 B (name as a 2-byte pointer, type, class, TTL, length, address).
+    /// Header 12 B + question (labels + type + class) + answers (name as a 2-byte pointer, type, class, TTL, length, then 4 B of
+    /// address for an A, 16 for an AAAA: 16 or 28 B).
     var size: Int {
-        12 + name.split(separator: ".").reduce(1) { $0 + 1 + $1.utf8.count } + 4 + 16 * answers.count
+        12 + name.split(separator: ".").reduce(1) { $0 + 1 + $1.utf8.count } + 4 + (type == DNS_TYPE_AAAA ? 28 : 16) * answers.count
+    }
+
+    /// An answer's address, read as the question's type.
+    func address(_ a: DnsAnswer) -> IpAddr {
+        type == DNS_TYPE_AAAA ? .v6(a.addr) : .v4(UInt32(truncatingIfNeeded: a.addr))
     }
 }
 

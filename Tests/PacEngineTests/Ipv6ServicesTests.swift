@@ -29,6 +29,26 @@ private func checksumHolds(_ p: Ipv6Packet) -> Bool {
     internetChecksum(pseudoHeader6(p.src, p.dst, p.payload.size, p.payload.nextHeader) + serializePayload(p)) == 0
 }
 
+/// srv1.lab has both records, the others one each; SRV's IPv4 address is 10.0.2.10.
+private let records = [
+    DnsRecord(name: "srv1.lab", ip: "2001:db8:2::53"),
+    DnsRecord(name: "srv1.lab", ip: "10.0.2.10"),
+    DnsRecord(name: "v4only.lab", ip: "10.0.2.10"),
+    DnsRecord(name: "v6only.lab", ip: "2001:db8:2::53"),
+]
+
+/// The types of the DNS queries a node sent, over either stack, in order.
+private func queries(_ sim: Sim, from node: String) -> [UInt16] {
+    sim.log.all.compactMap { e -> UInt16? in
+        guard e.kind == .tx, e.node == node else { return nil }
+        var u: UdpDatagram?
+        if case .ipv4(let p)? = e.frame?.payload, case .udp(let d) = p.payload { u = d }
+        if case .ipv6(let p)? = e.frame?.payload, case .udp(let d) = p.payload { u = d }
+        guard case .dns(let m)? = u?.payload, !m.response else { return nil }
+        return m.type
+    }
+}
+
 @Suite struct Ipv6ServicesTests {
     @Test func tcpOverIpv6HasItsWireSizeAPseudoHeaderChecksumAndItsLayers() throws {
         let src = try parseIp6("2001:db8:1::10")
@@ -108,5 +128,71 @@ private func checksumHolds(_ p: Ipv6Packet) -> Bool {
         #expect(sim.log.all.contains { $0.kind == .rx && $0.node == "H2" && $0.frame?.size == 1512 }) // 14 + 40 + 8 + 1450
         #expect(drops(sim, .mtuExceeded) == 0)
         expectError("Traffic to link-local or multicast addresses is not supported") { _ = try TcpFlow(node: pc, target: "fe80::1", bytes: 1) }
+    }
+
+    @Test func aaaaQuestionsAndAnswersHaveTheirWireSizesAndLayers() throws {
+        let q = DnsMessage(id: 1, response: false, name: "srv1.lab", type: DNS_TYPE_AAAA)
+        #expect(q.size == 26) // header 12 + name 10 + type/class 4
+        let r = DnsMessage(id: 1, response: true, authoritative: true, name: "srv1.lab", answers: [DnsAnswer(ttl: 3600, addr: SRV)], type: DNS_TYPE_AAAA)
+        #expect(r.size == 54) // + 28: pointer, type, class, TTL, length, 16 B of address
+        let p = makeIpv6(src: SRV, dst: try parseIp6(PC), hopLimit: 64, payload: .udp(makeUdp(srcPort: 53, dstPort: 40000, payload: .dns(r))))
+        let e = SimEvent(time: 0, kind: .tx, node: "S", iface: "eth0", frame: EthernetFrame(
+            id: 1, src: "02:00:00:00:00:02", dst: "02:00:00:00:00:04", etherType: ETHERTYPE_IPV6, payload: .ipv6(p)))
+        #expect(eventView(e).proto == .dns && eventView(e).bytes == 116)
+        #expect(eventView(e).info == "DNS Risposta 0x0001 AAAA srv1.lab → 2001:db8:2::53 · 2001:db8:2::53 → \(PC)")
+        let layers = pduLayers(e)
+        #expect(layers.map(\.title) == ["Ethernet II", "IPv6", "UDP", "DNS"])
+        #expect(layers[3].fields.contains(PduField(name: "Domanda", value: "srv1.lab tipo AAAA, classe IN")))
+        #expect(layers[3].fields.contains(PduField(name: "Risposta 1", value: "srv1.lab AAAA 2001:db8:2::53, TTL 3600 s")))
+    }
+
+    @Test func theServerAnswersAaaaOnBothStacksAndNslookupShowsAAndAaaa() throws {
+        let (sim, pc, srv, _) = try lab()
+        try srv.configureDnsServer(records)
+        pc.nameServer = try parseIp("10.0.2.10")
+        // One at a time at first: ARP queues at most 3 packets for the gateway.
+        let both = try NsLookup(node: pc, name: "srv1.lab")
+        sim.run(1 * S)
+        let v4 = try NsLookup(node: pc, name: "v4only.lab")
+        let v6 = try NsLookup(node: pc, name: "v6only.lab")
+        sim.run(1 * S)
+        let missing = try NsLookup(node: pc, name: "nope.lab")
+        sim.run(1 * S)
+        #expect(both.result.lines == ["Server:\t\t10.0.2.10", "Address:\t10.0.2.10#53", "",
+                                     "Name:\tsrv1.lab", "Address: 10.0.2.10", "Name:\tsrv1.lab", "Address: 2001:db8:2::53", ""])
+        #expect(Array(v4.result.lines.suffix(3)) == ["Name:\tv4only.lab", "Address: 10.0.2.10", ""]) // the AAAA got NODATA
+        #expect(Array(v6.result.lines.suffix(3)) == ["Name:\tv6only.lab", "Address: 2001:db8:2::53", ""])
+        #expect(Array(missing.result.lines.suffix(2)) == ["** server can't find nope.lab: NXDOMAIN", ""])
+        #expect(queries(sim, from: "H1") == [DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_A, DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_AAAA, DNS_TYPE_A])
+        // Over IPv6 the server answers from the address it was asked.
+        var answers: [Resolution] = []
+        pc.resolver.lookup("srv1.lab", server: .v6(SRV), type: DNS_TYPE_AAAA, useCache: false) { answers.append($0) }
+        sim.run(1 * S)
+        #expect(answers == [.found([.v6(SRV)])])
+        expectError("Record srv1.lab AAAA 2001:db8:2::53 already exists") {
+            try srv.configureDnsServer(records + [DnsRecord(name: "SRV1.lab", ip: "2001:DB8:2:0::53")])
+        }
+        expectError("Invalid IPv6 address") { try srv.configureDnsServer([DnsRecord(name: "a.lab", ip: "2001:db8::zz")]) }
+    }
+
+    @Test func namesResolveToTheAaaaOnlyWhenTheDeviceHasAGlobalIpv6Address() throws {
+        let (sim, pc, srv, _) = try lab()
+        try srv.configureDnsServer(records)
+        pc.nameServer = try parseIp("10.0.2.10")
+        let ping6 = try Ping(node: pc, target: "srv1.lab", options: PingOptions(count: 1))
+        sim.run(2 * S)
+        #expect(ping6.result.lines.first == "PING srv1.lab(2001:db8:2::53) 56 data bytes")
+        #expect(ping6.result.replies.map(\.ttl) == [63])
+        #expect(queries(sim, from: "H1") == [DNS_TYPE_A, DNS_TYPE_AAAA]) // back to back, like glibc
+        #expect(pc.resolver.entries().map(\.type) == [DNS_TYPE_A, DNS_TYPE_AAAA])
+        let ping4 = try Ping(node: pc, target: "v4only.lab", options: PingOptions(count: 1))
+        sim.run(2 * S)
+        #expect(ping4.result.lines.first == "PING v4only.lab (10.0.2.10) 56(84) bytes of data.")
+        // Without a global IPv6 address only the A is asked, as before M9b.
+        try pc.v6.configure("eth0", nil)
+        let trace = try Traceroute(node: pc, target: "v6only.lab")
+        sim.run(1 * S)
+        #expect(trace.result.lines.first == "v6only.lab: Name or service not known")
+        #expect(queries(sim, from: "H1").suffix(1) == [DNS_TYPE_A] && queries(sim, from: "H1").count == 5)
     }
 }

@@ -36,9 +36,11 @@ private func dhcpAddress(_ m: DhcpMessage) -> UInt32? {
 
 private func dnsSummary(_ m: DnsMessage) -> String {
     let id = hex(Int(m.id), digits: 4)
-    if !m.response { return "Query \(id) A \(m.name)" }
+    let type = dnsTypeName(m.type)
+    if !m.response { return "Query \(id) \(type) \(m.name)" }
     if m.rcode == DNS_NXDOMAIN { return "Risposta \(id) NXDOMAIN \(m.name)" }
-    return "Risposta \(id) A \(m.name) → " + m.answers.map { formatIp($0.addr) }.joined(separator: ", ")
+    if m.answers.isEmpty { return "Risposta \(id) \(type) \(m.name) senza record" }
+    return "Risposta \(id) \(type) \(m.name) → " + m.answers.map { m.address($0).text }.joined(separator: ", ")
 }
 
 private func describe(_ b: Bpdu) -> String {
@@ -84,7 +86,7 @@ private func proto(of p: Ipv6Packet) -> Proto {
     switch p.payload {
     case .icmp: .icmp
     case .ndp: .ndp
-    case .udp: .udp
+    case .udp(let u): if case .dns = u.payload { .dns } else { .udp }
     case .tcp: .tcp
     }
 }
@@ -130,7 +132,7 @@ private func describe(_ p: Ipv6Packet) -> String {
     let what = switch p.payload {
     case .icmp(let m): "ICMPv6 \(icmp6Name(m))" + (isEcho6(m) ? " id=\(m.id) seq=\(m.seq)" : "") + " hlim=\(p.hopLimit)"
     case .ndp(let n): "NDP " + describe(n, from: p.src)
-    case .udp(let u): "UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)"
+    case .udp(let u): if case .dns(let m) = u.payload { "DNS \(dnsSummary(m))" } else { "UDP \(u.srcPort) → \(u.dstPort) hlim=\(p.hopLimit)" }
     case .tcp(let t): "TCP " + tcpSummary(t)
     }
     return "\(what) · \(formatIp6(p.src)) → \(formatIp6(p.dst))"
@@ -247,10 +249,10 @@ private func dnsLayer(_ m: DnsMessage) -> PduLayer {
         field("Risposte", "\(m.answers.count)"),
         field("Autorità", "0"),
         field("Aggiuntivi", "0"),
-        field("Domanda", "\(m.name) tipo A, classe IN"),
+        field("Domanda", "\(m.name) tipo \(dnsTypeName(m.type)), classe IN"),
     ]
     for (i, a) in m.answers.enumerated() {
-        fields.append(field("Risposta \(i + 1)", "\(m.name) A \(formatIp(a.addr)), TTL \(a.ttl) s"))
+        fields.append(field("Risposta \(i + 1)", "\(m.name) \(dnsTypeName(m.type)) \(m.address(a).text), TTL \(a.ttl) s"))
     }
     return PduLayer(title: "DNS", bytes: m.size, fields: fields)
 }
@@ -487,7 +489,9 @@ private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
         fields.append(field("Dati", isEcho6(m) ? "\(m.data.count) B" : "\(m.data.count) B (inizio del pacchetto originale)"))
         return [ip, PduLayer(title: "ICMPv6", bytes: m.size, fields: fields)]
     case .ndp(let n): return [ip, ndpLayer(n)]
-    case .udp(let u): return [ip, udpLayer(u)]
+    case .udp(let u):
+        if case .dns(let m) = u.payload { return [ip, udpLayer(u), dnsLayer(m)] }
+        return [ip, udpLayer(u)]
     case .tcp(let t): return [ip, tcpLayer(t)]
     }
 }

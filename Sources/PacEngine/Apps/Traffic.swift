@@ -84,7 +84,7 @@ final class TcpFlow {
 
     private func resolved(_ r: Resolution) {
         guard !result.done else { return }
-        if case .found(let addrs) = r, let first = addrs.first { return begin(.v4(first)) }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
         result.lines = [resolutionError(target, r)]
         result.done = true
     }
@@ -189,7 +189,7 @@ final class UdpFlow {
 
     private func resolved(_ r: Resolution) {
         guard !result.done else { return }
-        if case .found(let addrs) = r, let first = addrs.first { return begin(.v4(first)) }
+        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
         result.lines = [resolutionError(target, r)]
         result.done = true
     }

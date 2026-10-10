@@ -113,7 +113,12 @@ final class Traceroute {
 
     private func resolved(_ r: Resolution) {
         guard !result.done else { return }
-        if case .found(let addrs) = r, let first = addrs.first { return begin(first) }
+        if case .found(let addrs) = r, let first = addrs.first {
+            switch first {
+            case .v4(let a): return begin(a)
+            case .v6(let a): return begin6(a)
+            }
+        }
         result.lines = ["\(target): " + (r == .nxdomain ? "Name or service not known" : "Temporary failure in name resolution"),
                         "Cannot handle \"host\" cmdline arg `\(target)' on position 1 (argc 1)"]
         finish()
