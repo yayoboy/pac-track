@@ -33,8 +33,82 @@ public enum IfaceMode: String, Codable, Sendable {
     case `static`, dhcp
 }
 
+/// A switch port's 802.1Q role, IOS `switchport mode`.
+public enum PortMode: String, Codable, CaseIterable, Sendable {
+    case access, trunk
+}
+
+/// A switch port's VLAN settings as typed and saved (spec M7 §2): the access VLAN, or the trunk's allowed VLANs
+/// ("all" or "10,20,30-35") and native VLAN. Every field is kept whatever the mode.
+public struct PortConfig: Codable, Equatable, Sendable {
+    public var mode: PortMode
+    public var vlan: Int
+    public var allowed: String
+    public var native: Int
+    /// IOS `spanning-tree portfast` (access ports only): straight to forwarding, and its changes send no TCN (spec M7 §4).
+    public var portfast: Bool
+
+    public init(mode: PortMode = .access, vlan: Int = 1, allowed: String = "all", native: Int = 1, portfast: Bool = false) {
+        self.mode = mode
+        self.vlan = vlan
+        self.allowed = allowed
+        self.native = native
+        self.portfast = portfast
+    }
+
+    /// Files written before M7b have no `portfast`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(PortMode.self, forKey: .mode)
+        vlan = try c.decode(Int.self, forKey: .vlan)
+        allowed = try c.decode(String.self, forKey: .allowed)
+        native = try c.decode(Int.self, forKey: .native)
+        portfast = try c.decodeIfPresent(Bool.self, forKey: .portfast) ?? false
+    }
+}
+
+/// A port's 802.1D role in one VLAN (alternate and backup ports are "blocked", as the spec's table shows them).
+public enum StpRole: String, Sendable {
+    case root, designated, blocked
+}
+
+/// A port's 802.1D state in one VLAN; a port that is down or outside the VLAN is not listed.
+public enum StpState: String, Sendable {
+    case blocking, listening, learning, forwarding
+}
+
+public struct StpPortRow: Equatable, Sendable {
+    public let iface: String
+    public let role: StpRole
+    public let state: StpState
+}
+
+/// One PVST+ instance as `show spanning-tree vlan <n>` lists it.
+public struct StpView: Equatable, Sendable {
+    public let vlan: Int
+    /// This switch's bridge priority for the VLAN (the VLAN is added to it in the bridge ID).
+    public let priority: Int
+    /// Root bridge ID, "priority/VLAN/MAC".
+    public let root: String
+    public let cost: Int
+    /// nil on the root bridge.
+    public let rootPort: String?
+    public let ports: [StpPortRow]
+}
+
+/// A switch's bridge priority for one VLAN, saved when it is not the default 32768.
+public struct StpPriority: Codable, Equatable, Sendable {
+    public var vlan: Int
+    public var priority: Int
+
+    public init(vlan: Int, priority: Int) {
+        self.vlan = vlan
+        self.priority = priority
+    }
+}
+
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, dhcp, dns, udp, tcp
+    case arp, icmp, dhcp, dns, udp, tcp, stp
 }
 
 public enum Command: Sendable {
@@ -72,6 +146,14 @@ public enum Command: Sendable {
     case setPower(id: String, on: Bool)
     /// Switch size: 8, 24 or 48 ports; only free ports can go.
     case setPorts(id: String, count: Int)
+    /// A switch port's 802.1Q role and VLANs (switches only); the addresses the port learned are flushed.
+    case setSwitchport(node: String, iface: String, config: PortConfig)
+    /// IOS `spanning-tree vlan <n> priority <p>` (switches only): 0…61440 in steps of 4096.
+    case setStpPriority(node: String, vlan: Int, priority: Int)
+    /// Router subinterface "<physical>.<VLAN>" (IOS `interface Gi0/0.10` + `encapsulation dot1q 10`), routers only.
+    case addSubinterface(node: String, iface: String)
+    /// Refused while NAT or a firewall rule names it.
+    case removeSubinterface(node: String, iface: String)
     case updateLink(id: String, options: LinkOptions)
     case setLinkUp(id: String, up: Bool)
     case setRunning(Bool)
@@ -106,6 +188,10 @@ public enum Command: Sendable {
         case .step: "step"
         case .setPower: "setPower"
         case .setPorts: "setPorts"
+        case .setSwitchport: "setSwitchport"
+        case .setStpPriority: "setStpPriority"
+        case .addSubinterface: "addSubinterface"
+        case .removeSubinterface: "removeSubinterface"
         case .updateLink: "updateLink"
         case .setLinkUp: "setLinkUp"
         case .setRunning: "setRunning"
@@ -119,8 +205,11 @@ public struct IfaceView: Equatable, Sendable {
     public let name: String
     public let mac: String
     public let cidr: String?
+    /// A subinterface is linked when its physical interface is.
     public let linked: Bool
     public let mode: IfaceMode
+    /// Switch ports only: the 802.1Q role.
+    public let switchport: PortConfig?
 }
 
 public struct RouteRow: Equatable, Sendable {
@@ -140,6 +229,7 @@ public struct ArpRow: Equatable, Sendable {
 }
 
 public struct MacRow: Equatable, Sendable {
+    public let vlan: Int
     public let mac: String
     public let iface: String
     public let ageS: Int
@@ -272,6 +362,10 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let natTable: [NatRow]
     /// nil while the firewall is off.
     public let firewall: FirewallConfig?
+    /// Switches: the PVST+ instances, by VLAN.
+    public let stp: [StpView]
+    /// Switches: the bridge priorities set away from 32768, by VLAN.
+    public let stpPriorities: [StpPriority]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -390,18 +484,22 @@ public struct TopologyIface: Codable, Equatable, Sendable {
     /// Always nil in DHCP mode: a leased address is never saved.
     public var cidr: String?
     public var mode: IfaceMode
-    public init(name: String, cidr: String?, mode: IfaceMode = .`static`) {
+    /// Switch ports whose VLAN role is not the default (access, VLAN 1); nil otherwise.
+    public var switchport: PortConfig?
+    public init(name: String, cidr: String?, mode: IfaceMode = .`static`, switchport: PortConfig? = nil) {
         self.name = name
         self.cidr = cidr
         self.mode = mode
+        self.switchport = switchport
     }
 
-    /// Files written before M3 have no `mode`.
+    /// Files written before M3 have no `mode`, before M7 no `switchport`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         cidr = try c.decodeIfPresent(String.self, forKey: .cidr)
         mode = try c.decodeIfPresent(IfaceMode.self, forKey: .mode) ?? .`static`
+        switchport = try c.decodeIfPresent(PortConfig.self, forKey: .switchport)
     }
 }
 
@@ -520,9 +618,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var sink: Bool
     public var nat: NatConfig?
     public var firewall: FirewallConfig?
+    public var stpPriorities: [StpPriority]?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
-                nat: NatConfig? = nil, firewall: FirewallConfig? = nil) {
+                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -536,9 +635,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.sink = sink
         self.nat = nat
         self.firewall = firewall
+        self.stpPriorities = stpPriorities
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -554,6 +654,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         sink = try c.decodeIfPresent(Bool.self, forKey: .sink) ?? false
         nat = try c.decodeIfPresent(NatConfig.self, forKey: .nat)
         firewall = try c.decodeIfPresent(FirewallConfig.self, forKey: .firewall)
+        stpPriorities = try c.decodeIfPresent([StpPriority].self, forKey: .stpPriorities)
     }
 }
 
@@ -575,3 +676,5 @@ public struct Topology: Codable, Equatable, Sendable {
 public let SPEEDS: [Double] = [0.1, 0.5, 1, 2, 5, 10, 100]
 /// Switch sizes offered in the Porte tab (spec §5.5).
 public let SWITCH_PORTS = [8, 24, 48]
+/// Bridge priorities offered in the switch's Servizi tab (spec M7 §5): multiples of 4096, the low 12 bits being the VLAN.
+public let STP_PRIORITIES = Array(stride(from: 0, through: 61440, by: 4096))

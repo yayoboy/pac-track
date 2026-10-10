@@ -59,6 +59,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
     @Test func skipsExcludedAddressesServesClientsInOrderAndStaysSilentWhenThePoolIsFull() throws {
         let sim = Sim()
         let sw = Switch(sim: sim, id: "SW")
+        for i in 1...4 { try sw.setSwitchport("Gi0/\(i)", PortConfig(portfast: true)) } // hosts on edge ports: forwarding once cabled
         let srv = Host(sim: sim, id: "S")
         _ = try Link(sim: sim, try srv.iface("eth0"), try sw.iface("Gi0/1"))
         try srv.setIp("eth0", "10.0.0.1/24")
@@ -222,6 +223,7 @@ private func clientRequests(_ sim: Sim) -> [String] {
     @Test func pingsAnAddressBeforeOfferingItAndSkipsOneInUse() throws {
         let sim = Sim()
         let sw = Switch(sim: sim, id: "SW")
+        for i in 1...4 { try sw.setSwitchport("Gi0/\(i)", PortConfig(portfast: true)) } // hosts on edge ports: forwarding once cabled
         let srv = Host(sim: sim, id: "S")
         let fixed = Host(sim: sim, id: "P")
         let pc = Host(sim: sim, id: "C")

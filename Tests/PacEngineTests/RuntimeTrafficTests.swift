@@ -8,6 +8,8 @@ private func trafficRuntime() throws -> Runtime {
     try rt.handle(.addNode(id: "s", kind: .switch, name: "SW1"))
     try rt.handle(.addNode(id: "srv", kind: .server, name: "SRV1"))
     try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
+    // Hosts on PortFast edge ports: forwarding as soon as they are cabled.
+    for port in ["Gi0/1", "Gi0/2"] { try rt.handle(.setSwitchport(node: "s", iface: port, config: PortConfig(portfast: true))) }
     try rt.handle(.connect(id: "l1", a: IfaceRef(node: "s", iface: "Gi0/1"), b: IfaceRef(node: "srv", iface: "eth0")))
     try rt.handle(.connect(id: "l2", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "s", iface: "Gi0/2")))
     try rt.handle(.updateLink(id: "l1", options: LinkOptions(bandwidthBps: 10e6)))

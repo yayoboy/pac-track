@@ -7,16 +7,28 @@ final class Interface {
     var up = true
     var mtu = 1500
     var ipv4: Cidr?
+    /// Switch ports only: access or trunk and the VLANs (IOS `switchport`).
+    var switchport = Switchport()
+    /// Router subinterfaces only (IOS `encapsulation dot1q`): the physical interface it rides on and its VLAN.
+    let dot1q: (parent: Interface, vlan: Int)?
 
-    init(node: Node, name: String, mac: Mac) {
+    init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node
         self.name = name
         self.mac = mac
+        self.dot1q = dot1q
     }
 
     var id: String { "\(node.id)/\(name)" }
 
     func send(_ frame: EthernetFrame) {
+        // A subinterface sends through its physical interface, tagged with its VLAN; once deleted (down) it sends nothing.
+        if let dot1q {
+            guard up else { return node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: .ifaceDown) }
+            var tagged = frame
+            tagged.vlan = dot1q.vlan
+            return dot1q.parent.send(tagged)
+        }
         let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil ? .noLink : nil
         if let reason {
             node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: reason)
@@ -27,17 +39,32 @@ final class Interface {
 }
 
 extension Interface {
-    /// IP interfaces in this interface's broadcast domain: across cables, switches and hubs, whatever their power or link state; self excluded.
+    /// IP interfaces in this interface's broadcast domain: across cables, hubs and switches within one VLAN (access ports, a trunk's
+    /// allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
     func segmentPeers() -> [Interface] {
-        var seen: Set<ObjectIdentifier> = [ObjectIdentifier(self)]
-        var todo = [self]
+        /// An interface reached by a frame carrying `tag` on the wire.
+        struct Hop: Hashable {
+            let iface: ObjectIdentifier
+            let tag: Int?
+        }
+        // A subinterface's frames leave its physical interface tagged.
+        let start = (iface: dot1q?.parent ?? self, tag: dot1q?.vlan)
+        var seen: Set<Hop> = [Hop(iface: ObjectIdentifier(start.iface), tag: start.tag)]
+        var todo = [start]
         var peers: [Interface] = []
-        while let i = todo.popLast() {
-            guard let peer = i.link?.peer(i), seen.insert(ObjectIdentifier(peer)).inserted else { continue }
+        while let hop = todo.popLast() {
+            guard let peer = hop.iface.link?.peer(hop.iface), seen.insert(Hop(iface: ObjectIdentifier(peer), tag: hop.tag)).inserted else { continue }
             if peer.node is IpNode {
-                peers.append(peer)
+                // Untagged: the physical interface; tagged: its subinterface for that VLAN, if any.
+                let ip = peer.node.interfaces.first { hop.tag == nil ? $0 === peer : $0.dot1q?.parent === peer && $0.dot1q?.vlan == hop.tag }
+                if let ip { peers.append(ip) }
+            } else if peer.node is Switch {
+                guard let vlan = peer.switchport.ingress(hop.tag) else { continue }
+                for next in peer.node.interfaces where next !== peer && next.switchport.carries(vlan) {
+                    todo.append((next, next.switchport.tag(vlan)))
+                }
             } else {
-                for next in peer.node.interfaces where seen.insert(ObjectIdentifier(next)).inserted { todo.append(next) }
+                for next in peer.node.interfaces where next !== peer { todo.append((next, hop.tag)) }
             }
         }
         return peers
@@ -53,7 +80,15 @@ class Node {
     /// Interfaces taken away (a smaller switch): kept alive while a frame that was on their cable finishes (links refer to them `unowned`).
     // ponytail: never freed before the Sim is replaced; at most 40 per resize
     private var retired: [Interface] = []
-    var powered = true
+    var powered = true {
+        // The devices at the other end of its cables see their ports go down, or up, at once (spec M7 §4).
+        didSet {
+            guard powered != oldValue else { return }
+            for i in interfaces {
+                if let peer = i.link?.peer(i) { peer.node.linkChanged(peer) }
+            }
+        }
+    }
 
     init(sim: Sim, id: String) {
         self.sim = sim
@@ -73,6 +108,17 @@ class Node {
         retired.append(interfaces.removeLast())
     }
 
+    /// A router subinterface, at the place `show ip interface brief` lists it.
+    func insertInterface(_ iface: Interface, at index: Int) {
+        interfaces.insert(iface, at: index)
+    }
+
+    /// A deleted router subinterface: retired like the ports a smaller switch gives up.
+    func removeInterface(_ iface: Interface) {
+        interfaces.removeAll { $0 === iface }
+        retired.append(iface)
+    }
+
     func iface(_ name: String) throws -> Interface {
         guard let iface = interfaces.first(where: { $0.name == name }) else { throw EngineError("\(id) has no interface \(name)") }
         return iface
@@ -87,4 +133,7 @@ class Node {
 
     /// Power on: starts what boots with the device (a DHCP client); configuration was kept.
     func powerOn() {}
+
+    /// The cable at `iface` was plugged, pulled, failed or restored, or the device at its other end was switched off or on.
+    func linkChanged(_ iface: Interface) {}
 }

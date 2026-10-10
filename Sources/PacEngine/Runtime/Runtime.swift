@@ -123,6 +123,8 @@ public final class Runtime {
             node.name = name
             nodes[id] = (node, kind)
             nodeOrder.append(id)
+            // Its ports' VLAN 1 may be new to the network.
+            if node is Switch { sim.syncStp() }
         case let .removeNode(id):
             let node = try get(id)
             for linkId in linkOrder where links[linkId]!.a.node === node || links[linkId]!.b.node === node {
@@ -135,6 +137,7 @@ public final class Runtime {
             // Nothing keeps running on a removed device (its DHCP client would broadcast forever).
             node.powered = false
             node.reset()
+            sim.remove(node)
             nodes[id] = nil
             nodeOrder.removeAll { $0 == id }
         case let .rename(id, name):
@@ -233,6 +236,18 @@ public final class Runtime {
             let node = try get(id)
             guard let sw = node as? Switch else { throw EngineError("\(node.name) cannot change its ports") }
             try sw.setPorts(count)
+        case let .setSwitchport(node, iface, config):
+            let n = try get(node)
+            guard let sw = n as? Switch else { throw EngineError("\(n.name) has no switch ports") }
+            try sw.setSwitchport(iface, config)
+        case let .setStpPriority(node, vlan, priority):
+            let n = try get(node)
+            guard let sw = n as? Switch else { throw EngineError("\(n.name) does not run spanning tree") }
+            try sw.setStpPriority(vlan, priority)
+        case let .addSubinterface(node, iface):
+            try router(node).addSubinterface(iface)
+        case let .removeSubinterface(node, iface):
+            try router(node).removeSubinterface(iface)
         case let .updateLink(id, options):
             try link(id).update(options)
         case let .setLinkUp(id, up):
@@ -355,14 +370,15 @@ public final class Runtime {
             let (node, kind) = nodes[id]!
             let ip = node as? IpNode
             let host = node as? Host
+            let sw = node as? Switch
             return NodeView(
                 id: id,
                 kind: kind,
                 name: node.name,
                 powered: node.powered,
                 ifaces: node.interfaces.map {
-                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.link != nil,
-                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`)
+                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: ($0.dot1q?.parent ?? $0).link != nil,
+                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil)
                 },
                 routes: ip?.routes.view().map {
                     RouteRow(dest: "\(formatIp($0.network))/\($0.prefix)", nextHop: $0.nextHop.map(formatIp), iface: $0.iface,
@@ -371,7 +387,7 @@ public final class Runtime {
                 arp: ip?.arp.entries().map {
                     ArpRow(ip: formatIp($0.ip), mac: $0.mac, iface: $0.iface, ttlS: ($0.expiresAt - now + S - 1) / S)
                 } ?? [],
-                mac: (node as? Switch)?.macTable().map { MacRow(mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
+                mac: (node as? Switch)?.macTable().map { MacRow(vlan: $0.vlan, mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
                 nameServer: ip?.nameServer.map(formatIp),
                 learnedNameServer: ip?.learnedNameServer.map(formatIp),
                 dhcpClient: host?.dhcp.map { c in
@@ -391,7 +407,12 @@ public final class Runtime {
                 tcp: ip.map { tcpRows($0) } ?? [],
                 nat: ip?.nat?.config,
                 natTable: (ip?.nat).map { natRows($0, now) } ?? [],
-                firewall: ip?.firewall?.config
+                firewall: ip?.firewall?.config,
+                stp: sw?.stp.sorted { $0.key < $1.key }.map { vlan, st in
+                    StpView(vlan: vlan, priority: st.bridge.priority, root: st.root.text, cost: st.rootCost, rootPort: st.rootPort?.name,
+                            ports: st.rows.map { StpPortRow(iface: $0.port, role: $0.role, state: $0.state) })
+                } ?? [],
+                stpPriorities: sw?.stpPriority.sorted { $0.key < $1.key }.map { StpPriority(vlan: $0.key, priority: $0.value) } ?? []
             )
         }
         let linkViews = linkOrder.map { id in
@@ -431,6 +452,13 @@ public final class Runtime {
         return ip
     }
 
+    /// Subinterfaces are for routers only (spec M7 §6), not clouds.
+    private func router(_ id: String) throws -> Router {
+        let node = try get(id)
+        guard nodes[id]?.kind == .router, let r = node as? Router else { throw EngineError("\(node.name) cannot have subinterfaces") }
+        return r
+    }
+
     private func link(_ id: String) throws -> Link {
         guard let link = links[id] else { throw EngineError("Unknown link \(id)") }
         return link
@@ -465,6 +493,12 @@ public final class Runtime {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
             // The saved size is the interface count; a file listing no valid size (hand-written, abbreviated) keeps 8.
             if n.kind == .switch, SWITCH_PORTS.contains(n.ifaces.count) { try next.handle(.setPorts(id: n.id, count: n.ifaces.count)) }
+            for i in n.ifaces {
+                // Subinterfaces ("Gi0/0.10") before the addresses below; port VLANs before any cable.
+                if i.name.contains(".") { try next.handle(.addSubinterface(node: n.id, iface: i.name)) }
+                if let c = i.switchport { try next.handle(.setSwitchport(node: n.id, iface: i.name, config: c)) }
+            }
+            for p in n.stpPriorities ?? [] { try next.handle(.setStpPriority(node: n.id, vlan: p.vlan, priority: p.priority)) }
             for i in n.ifaces where i.cidr != nil { try next.handle(.setIp(node: n.id, iface: i.name, cidr: i.cidr)) }
         }
         for l in t.links {

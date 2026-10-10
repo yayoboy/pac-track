@@ -195,10 +195,11 @@ actor Recording: EngineClient {
         await editor.run(.setMode(.simulation))
         await editor.run(.ping(node: pc1, target: "10.0.0.2"))
         await editor.step()
-        #expect(editor.events.map { "\($0.kind.rawValue) \($0.proto.rawValue)" } == ["tx arp"])
-        #expect(editor.selectedEvent == editor.events[0].id)
+        // After the switch's first BPDUs and port state changes, logged when it was cabled.
+        #expect(editor.events.last.map { "\($0.kind.rawValue) \($0.proto.rawValue)" } == "tx arp")
+        #expect(editor.selectedEvent == editor.events.last?.id)
         #expect(editor.pdu?.map(\.title) == ["Ethernet II", "ARP"])
-        #expect(editor.flights.map(\.from) == [pc1])
+        #expect(editor.flights.last?.from == pc1)
     }
 
     @Test func pullsOnlyNewEventsAndClearsThemWhenTheNetworkIsReloaded() async {
@@ -215,7 +216,9 @@ actor Recording: EngineClient {
         await editor.tick(wallMs: 100)
         #expect(await client.fetches.isEmpty)
         await editor.undo() // reloads the network: a new epoch
-        #expect(editor.events.isEmpty && editor.flights.isEmpty && editor.selectedEvent == nil)
+        // Only what the reloaded switch logged at once: its first BPDUs and port state changes.
+        #expect(editor.events.allSatisfy { $0.timeNs == 0 && $0.proto == .stp } && editor.flights.allSatisfy { $0.proto == .stp })
+        #expect(editor.selectedEvent == nil)
     }
 
     @Test func copiesPastesAndDuplicatesADeviceWithItsConfiguration() async {
@@ -269,12 +272,12 @@ actor Recording: EngineClient {
     }
 
     @Test func showsAnL2LoopWarningUntilDismissed() async {
-        await editor.addDevice(.switch, at: origin)
-        await editor.addDevice(.switch, at: origin)
+        await editor.addDevice(.hub, at: origin) // STP breaks a switch loop
+        await editor.addDevice(.hub, at: origin)
         await editor.addDevice(.pc, at: origin)
-        await editor.connect(node("SW1").id, node("SW2").id)
-        await editor.connect(node("SW1").id, node("SW2").id)
-        await editor.connect(node("PC1").id, node("SW1").id)
+        await editor.connect(node("HUB1").id, node("HUB2").id)
+        await editor.connect(node("HUB1").id, node("HUB2").id)
+        await editor.connect(node("PC1").id, node("HUB1").id)
         await editor.edit(.setIp(node: node("PC1").id, iface: "eth0", cidr: "10.0.0.1/24"))
         await editor.run(.ping(node: node("PC1").id, target: "10.0.0.9"))
         await editor.tick(wallMs: 10)

@@ -77,6 +77,14 @@ private struct NodeInspector: View {
                         Text(iface.name).foregroundStyle(Theme.fgStrong)
                         Spacer()
                         Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        if iface.name.contains(".") {
+                            Button("Elimina", role: .destructive) {
+                                Task { await editor.edit(.removeSubinterface(node: node.id, iface: iface.name), key: "sub:\(node.id)") }
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Elimina la sottointerfaccia")
+                            .accessibilityIdentifier("subif-delete-\(iface.name)")
+                        }
                     }
                     .font(.system(size: 11))
                     if node.kind.isHost {
@@ -107,6 +115,7 @@ private struct NodeInspector: View {
                     Text("MAC \(iface.mac)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
                 }
             }
+            if node.kind == .router { SubinterfaceForm(node: node, editor: editor) }
             if node.kind.isHost {
                 let key = "dns:\(node.id)"
                 CommitField(label: "Server DNS", value: node.nameServer ?? "",
@@ -119,7 +128,7 @@ private struct NodeInspector: View {
     }
 
     private var ports: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: node.kind == .switch ? 10 : 2) {
             if node.kind == .switch {
                 let key = "ports:\(node.id)"
                 Picker("Porte", selection: Binding(get: { node.ifaces.count }, set: { n in
@@ -133,12 +142,15 @@ private struct NodeInspector: View {
                 ErrorLine(editor: editor, key: key)
             }
             ForEach(node.ifaces, id: \.name) { iface in
-                HStack {
-                    Text(iface.name)
-                    Spacer()
-                    Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(iface.name)
+                        Spacer()
+                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                    }
+                    .font(Theme.mono)
+                    if let port = iface.switchport { SwitchportFields(node: node.id, iface: iface.name, port: port, editor: editor) }
                 }
-                .font(Theme.mono)
             }
         }
     }
@@ -146,7 +158,18 @@ private struct NodeInspector: View {
     private var tables: some View {
         VStack(alignment: .leading, spacing: 14) {
             if node.kind == .switch {
-                TableSection(title: "Tabella MAC", head: ["MAC", "Porta", "Età"], rows: node.mac.map { [$0.mac, $0.iface, "\($0.ageS)s"] })
+                TableSection(title: "Tabella MAC", head: ["VLAN", "MAC", "Porta", "Età"],
+                             rows: node.mac.map { ["\($0.vlan)", $0.mac, $0.iface, "\($0.ageS)s"] })
+                ForEach(node.stp, id: \.vlan) { st in
+                    VStack(alignment: .leading, spacing: 4) {
+                        TableSection(title: "Spanning Tree VLAN \(st.vlan)", head: ["Porta", "Ruolo", "Stato"],
+                                     rows: st.ports.map { [$0.iface, $0.role.rawValue, $0.state.rawValue] })
+                        Text("Root \(st.root) · costo \(st.cost) · " + (st.rootPort.map { "root port \($0)" } ?? "questo switch è la root"))
+                            .font(Theme.small)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else {
                 TableSection(title: "Tabella di routing", head: ["Destinazione", "Next hop", "Int."],
                              rows: node.routes.map { [$0.dest, ($0.nextHop ?? "connessa") + ($0.dhcp ? " (DHCP)" : ""), $0.iface] })
@@ -166,6 +189,91 @@ private struct NodeInspector: View {
                     TableSection(title: "Lease DHCP", head: ["IP", "MAC", "Scade", "Stato"], rows: leaseRows(node.leases))
                 }
             }
+        }
+    }
+}
+
+/// A switch port's VLAN role (spec M7 §5): Access with its VLAN and PortFast, or Trunk with the allowed VLANs and the native one; errors under the field.
+private struct SwitchportFields: View {
+    let node: String
+    let iface: String
+    let port: PortConfig
+    @Bindable var editor: Editor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                Picker("", selection: Binding(get: { port.mode }, set: { mode in
+                    var c = port
+                    c.mode = mode
+                    Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
+                })) {
+                    Text("Access").tag(PortMode.access)
+                    Text("Trunk").tag(PortMode.trunk)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityIdentifier("port-mode-\(iface)")
+                if port.mode == .access {
+                    Toggle("PortFast", isOn: Binding(get: { port.portfast }, set: { on in
+                        var c = port
+                        c.portfast = on
+                        Task { await editor.edit(.setSwitchport(node: node, iface: iface, config: c)) }
+                    }))
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .help("Forwarding subito, senza TCN: per le porte verso PC e server")
+                    .accessibilityIdentifier("portfast-\(iface)")
+                }
+            }
+            HStack(alignment: .top) {
+                ForEach(port.mode == .access ? [PortField.vlan] : [.allowed, .native], id: \.self) { field in
+                    CommitField(label: field.label, value: field.format(port), errorKey: "port:\(node):\(iface):\(field.rawValue)", editor: editor) {
+                        await editor.setPort(node, iface: iface, field, $0)
+                    }
+                    .frame(maxWidth: field == .allowed ? .infinity : 80)
+                }
+            }
+        }
+    }
+}
+
+/// Router-on-a-stick (spec M7 §5): a subinterface `<fisica>.<VID>` with its address.
+private struct SubinterfaceForm: View {
+    let node: NodeView
+    @Bindable var editor: Editor
+    @State private var parent = "Gi0/0"
+    @State private var vlan = ""
+    @State private var cidr = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SOTTOINTERFACCIA 802.1Q").font(.system(size: 9)).foregroundStyle(Theme.muted)
+            HStack {
+                Picker("", selection: $parent) {
+                    ForEach(node.ifaces.filter { !$0.name.contains(".") }, id: \.name) { Text($0.name).tag($0.name) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                TextField("VID", text: $vlan).textFieldStyle(.roundedBorder).font(Theme.mono).frame(width: 50)
+                TextField("10.0.10.1/24", text: $cidr).textFieldStyle(.roundedBorder).font(Theme.mono)
+            }
+            Button("Aggiungi sottointerfaccia") {
+                Task {
+                    if await editor.addSubinterface(node.id, parent: parent, vlan: vlan, cidr: cidr) {
+                        vlan = ""
+                        cidr = ""
+                    }
+                }
+            }
+            .accessibilityIdentifier("subif-add")
+            ErrorLine(editor: editor, key: "sub:\(node.id)")
+            Text("Nome <fisica>.<VID>, stesso MAC della fisica: collega la fisica a una porta trunk.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
         }
     }
 }

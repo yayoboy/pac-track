@@ -2,11 +2,13 @@ import Testing
 @testable import PacEngine
 
 private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Probe] {
-    try names.enumerated().map { i, name in
+    let probes = try names.enumerated().map { i, name in
         let p = Probe(sim: sim, id: name)
         _ = try Link(sim: sim, try p.iface("eth0"), device.interfaces[i])
         return p
     }
+    if device is Switch { sim.run(30 * S) } // ports reach forwarding after 2 × forward delay
+    return probes
 }
 
 @Suite struct L2Tests {
@@ -26,12 +28,12 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         try p[0].sendRaw()
         sim.run(MS)
         #expect(p[1].got.count == 1 && p[2].got.count == 1)
-        #expect(sw.lookup(try p[0].iface("eth0").mac) === (try sw.iface("Gi0/1")))
+        #expect(sw.lookup(try p[0].iface("eth0").mac, vlan: 1) === (try sw.iface("Gi0/1")))
         try p[1].sendRaw(try p[0].iface("eth0").mac)
         sim.run(MS)
         #expect(p[0].got.count == 1)
         #expect(p[2].got.count == 1)
-        #expect(sw.lookup(try p[1].iface("eth0").mac) === (try sw.iface("Gi0/2")))
+        #expect(sw.lookup(try p[1].iface("eth0").mac, vlan: 1) === (try sw.iface("Gi0/2")))
     }
 
     @Test func switchAgesOutMacEntriesAfter300Seconds() throws {
@@ -41,17 +43,17 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         try p[0].sendRaw()
         sim.run(MS)
         sim.run(301 * S)
-        #expect(sw.lookup(try p[0].iface("eth0").mac) == nil)
+        #expect(sw.lookup(try p[0].iface("eth0").mac, vlan: 1) == nil)
     }
 
     @Test func staysBoundedInALayer2Loop() throws {
         let sim = Sim(logCapacity: 1000)
-        let sw1 = Switch(sim: sim, id: "SW1")
-        let sw2 = Switch(sim: sim, id: "SW2")
-        _ = try Link(sim: sim, try sw1.iface("Gi0/1"), try sw2.iface("Gi0/1"))
-        _ = try Link(sim: sim, try sw1.iface("Gi0/2"), try sw2.iface("Gi0/2"))
+        let hub1 = Hub(sim: sim, id: "HUB1") // STP breaks a switch loop
+        let hub2 = Hub(sim: sim, id: "HUB2")
+        _ = try Link(sim: sim, try hub1.iface("p1"), try hub2.iface("p1"))
+        _ = try Link(sim: sim, try hub1.iface("p2"), try hub2.iface("p2"))
         let a = Probe(sim: sim, id: "A")
-        _ = try Link(sim: sim, try a.iface("eth0"), try sw1.iface("Gi0/3"))
+        _ = try Link(sim: sim, try a.iface("eth0"), try hub1.iface("p3"))
         try a.sendRaw()
         sim.run(10 * MS)
         #expect(sim.log.size == 1000)
@@ -69,17 +71,17 @@ private func star(_ sim: Sim, _ device: Node, _ names: [String]) throws -> [Prob
         #expect(sw.macTable().isEmpty)
     }
 
-    @Test func warnsOncePerSwitchAboutALayer2Loop() throws {
+    @Test func warnsOncePerHubAboutALayer2Loop() throws {
         let sim = Sim(logCapacity: 1000)
-        let sw1 = Switch(sim: sim, id: "SW1")
-        let sw2 = Switch(sim: sim, id: "SW2")
-        _ = try Link(sim: sim, try sw1.iface("Gi0/1"), try sw2.iface("Gi0/1"))
-        _ = try Link(sim: sim, try sw1.iface("Gi0/2"), try sw2.iface("Gi0/2"))
+        let hub1 = Hub(sim: sim, id: "HUB1") // STP breaks a switch loop
+        let hub2 = Hub(sim: sim, id: "HUB2")
+        _ = try Link(sim: sim, try hub1.iface("p1"), try hub2.iface("p1"))
+        _ = try Link(sim: sim, try hub1.iface("p2"), try hub2.iface("p2"))
         let a = Probe(sim: sim, id: "A")
-        _ = try Link(sim: sim, try a.iface("eth0"), try sw1.iface("Gi0/3"))
+        _ = try Link(sim: sim, try a.iface("eth0"), try hub1.iface("p3"))
         try a.sendRaw()
         sim.run(10 * MS)
-        #expect(Set(sim.warnings.map(\.node)) == ["SW1", "SW2"])
+        #expect(Set(sim.warnings.map(\.node)) == ["HUB1", "HUB2"])
         #expect(sim.warnings.count == 2)
         #expect(sim.warnings.map(\.id).sorted() == [1, 2])
     }

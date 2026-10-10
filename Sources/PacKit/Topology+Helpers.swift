@@ -40,7 +40,7 @@ public enum InspectorTab: String, CaseIterable, Sendable {
 
 public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     switch kind {
-    case .switch: [.ports, .tables]
+    case .switch: [.ports, .services, .tables]
     case .hub: [.ports]
     case .router, .server, .cloud: [.interfaces, .routing, .services, .tables, .app]
     case .pc, .laptop: [.interfaces, .routing, .tables, .app]
@@ -126,9 +126,13 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
     Topology(seed: s.seed, nodes: s.nodes.map { n in
         TopologyNode(id: n.id, kind: n.kind, name: n.name, pos: positions[n.id] ?? Pos(x: 0, y: 0),
                      // A leased address (and the DHCP default route) belongs to the server, not to the design: only the mode is saved.
-                     ifaces: n.ifaces.map { TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode) },
+                     ifaces: n.ifaces.map {
+                         TopologyIface(name: $0.name, cidr: $0.mode == .dhcp ? nil : $0.cidr, mode: $0.mode,
+                                       switchport: $0.switchport == PortConfig() ? nil : $0.switchport)
+                     },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
-                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall)
+                     powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall,
+                     stpPriorities: n.stpPriorities.isEmpty ? nil : n.stpPriorities)
     }, links: s.links)
 }
 
@@ -274,6 +278,62 @@ public func dhcpStatus(_ c: DhcpClientView) -> String {
     case "INIT": "INIT · dispositivo spento"
     default: "\(c.state) · in attesa del server DHCP"
     }
+}
+
+/// One switch-port VLAN setting typed in the Porte tab.
+public enum PortField: String, Sendable {
+    case vlan, allowed, native
+
+    public var label: String {
+        switch self {
+        case .vlan: "VLAN"
+        case .allowed: "VLAN ammesse"
+        case .native: "Nativa"
+        }
+    }
+
+    public func format(_ c: PortConfig) -> String {
+        switch self {
+        case .vlan: String(c.vlan)
+        case .allowed: c.allowed
+        case .native: String(c.native)
+        }
+    }
+
+    /// Puts the typed text into the settings; the engine checks the ranges, the list and the native VLAN.
+    public func apply(_ text: String, to c: PortConfig) throws -> PortConfig {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        var n = c
+        if self == .allowed {
+            n.allowed = t
+            return n
+        }
+        guard let v = Int(t) else { throw EngineError("Invalid number: \"\(text)\"") }
+        if self == .vlan { n.vlan = v } else { n.native = v }
+        return n
+    }
+}
+
+/// True when either end of the cable is a switch port in trunk mode: its label says "trunk".
+public func isTrunk(_ link: LinkView, in nodes: [NodeView]) -> Bool {
+    [link.a, link.b].contains { end in
+        nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.switchport?.mode == .trunk
+    }
+}
+
+/// Where a cable sits among those joining the same two devices (in cable order): 0 alone, else -(k-1)/2 … (k-1)/2, so the
+/// canvas can spread parallel cables apart.
+public func cableSlot(_ link: LinkView, in links: [LinkView]) -> Double {
+    let pair = Set([link.a.node, link.b.node])
+    let same = links.filter { Set([$0.a.node, $0.b.node]) == pair }
+    return Double(same.firstIndex { $0.id == link.id } ?? 0) - Double(same.count - 1) / 2
+}
+
+/// The dot at a cable end (spec M7 §5): blocking if the port blocks in any VLAN, else listening or learning if it is on its way
+/// in any; nil once it forwards in all of them (or is no switch port).
+public func stpDot(_ end: IfaceRef, in nodes: [NodeView]) -> StpState? {
+    let states = nodes.first { $0.id == end.node }?.stp.compactMap { $0.ports.first { $0.iface == end.iface }?.state } ?? []
+    return states.contains(.blocking) ? .blocking : states.first { $0 != .forwarding }
 }
 
 public func leaseRows(_ leases: [LeaseRow]) -> [[String]] {

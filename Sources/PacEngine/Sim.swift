@@ -22,6 +22,8 @@ final class Sim {
     private var macs = 0
     /// The simulation owns its nodes (nodes refer back `unowned`), so a node lives exactly as long as its Sim.
     private var nodes: [Node] = []
+    /// Removed devices: kept alive while frames on their cables finish (links refer to their interfaces `unowned`), out of the network.
+    private var removed: [Node] = []
     /// Newest L2 loop warnings, oldest first.
     private(set) var warnings: [SimWarning] = []
     private var warningCount = 0
@@ -47,8 +49,8 @@ final class Sim {
     }
 
     func emit(_ kind: EventKind, node: String, iface: String? = nil, frame: EthernetFrame? = nil,
-              packet: Ipv4Packet? = nil, reason: DropReason? = nil) {
-        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason))
+              packet: Ipv4Packet? = nil, reason: DropReason? = nil, note: String? = nil) {
+        log.push(SimEvent(time: now, kind: kind, node: node, iface: iface, frame: frame, packet: packet, reason: reason, note: note))
     }
 
     /// Hubs and switches report every frame they receive.
@@ -67,6 +69,25 @@ final class Sim {
 
     func adopt(_ node: Node) {
         nodes.append(node)
+    }
+
+    /// A deleted device leaves the network: its VLANs stop existing, so the switches update their PVST+ instances.
+    func remove(_ node: Node) {
+        nodes.removeAll { $0 === node }
+        removed.append(node)
+        syncStp()
+    }
+
+    /// VLANs in the network: one exists where a switch port uses it as access or native VLAN (spec M7 §2: no VLAN database).
+    func vlans() -> Set<Int> {
+        Set(nodes.compactMap { $0 as? Switch }.flatMap { sw in
+            sw.interfaces.map { $0.switchport.config.mode == .access ? $0.switchport.config.vlan : $0.switchport.config.native }
+        })
+    }
+
+    /// A port's VLANs changed somewhere: every switch brings its PVST+ instances in line.
+    func syncStp() {
+        for case let sw as Switch in nodes { sw.syncStp() }
     }
 
     func run(_ duration: Int) {

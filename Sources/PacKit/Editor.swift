@@ -396,7 +396,7 @@ public final class Editor {
         }
     }
 
-    /// Adds devices of the same kind, power state, interface modes and name server as `srcs` (no addresses, routes or cables: a copied IP
+    /// Adds devices of the same kind, power state, interface modes, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
     /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
     /// and selects them.
     private func insertCopies(of srcs: [TopologyNode]) async {
@@ -412,6 +412,11 @@ public final class Editor {
             positions[id] = src.pos
             cmds.append(.addNode(id: id, kind: src.kind, name: name))
             if src.kind == .switch { cmds.append(.setPorts(id: id, count: src.ifaces.count)) }
+            // Port VLANs and subinterfaces are structure, like the size; their addresses stay behind.
+            for i in src.ifaces {
+                if let c = i.switchport { cmds.append(.setSwitchport(node: id, iface: i.name, config: c)) }
+                if i.name.contains(".") { cmds.append(.addSubinterface(node: id, iface: i.name)) }
+            }
             // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
             for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
             if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
@@ -470,6 +475,41 @@ public final class Editor {
                 return
             }
             await self.editNow([.setDhcpServer(node: id, config: next)], key: key)
+        }
+    }
+
+    /// Applies one switch-port VLAN setting typed in the Porte tab; errors show under that field.
+    public func setPort(_ id: String, iface: String, _ field: PortField, _ text: String) async {
+        await serialized {
+            let key = "port:\(id):\(iface):\(field.rawValue)"
+            guard let config = self.snapshot.nodes.first(where: { $0.id == id })?.ifaces.first(where: { $0.name == iface })?.switchport else { return }
+            let next: PortConfig
+            do {
+                next = try field.apply(text, to: config)
+            } catch {
+                self.fail(key, error)
+                return
+            }
+            await self.editNow([.setSwitchport(node: id, iface: iface, config: next)], key: key)
+        }
+    }
+
+    /// The Interfacce tab's "Aggiungi sottointerfaccia": `<parent>.<VLAN>` and its address (blank: none) in one undo step. A refused
+    /// address leaves the subinterface without it, as IOS takes the interface and rejects the `ip address` line. Returns false, with
+    /// the error under the form, if anything was refused.
+    @discardableResult
+    public func addSubinterface(_ id: String, parent: String, vlan: String, cidr: String) async -> Bool {
+        await serialized {
+            let key = "sub:\(id)"
+            guard let v = Int(vlan.trimmingCharacters(in: .whitespaces)) else {
+                self.error = EditorError(key: key, message: "Invalid number: \"\(vlan)\"")
+                return false
+            }
+            let name = "\(parent).\(v)"
+            let ip = cidr.trimmingCharacters(in: .whitespaces)
+            var cmds: [Command] = [.addSubinterface(node: id, iface: name)]
+            if !ip.isEmpty { cmds.append(.setIp(node: id, iface: name, cidr: ip)) }
+            return await self.editNow(cmds, key: key)
         }
     }
 

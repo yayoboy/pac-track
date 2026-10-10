@@ -103,7 +103,7 @@ import Testing
         #expect(dhcpStatus(DhcpClientView(state: "SELECTING", server: nil, leaseS: nil, renewS: nil)) == "SELECTING · in attesa del server DHCP")
         #expect(inspectorTabs(for: .server) == [.interfaces, .routing, .services, .tables, .app])
         #expect(inspectorTabs(for: .laptop) == [.interfaces, .routing, .tables, .app])
-        #expect(inspectorTabs(for: .switch) == [.ports, .tables])
+        #expect(inspectorTabs(for: .switch) == [.ports, .services, .tables]) // Servizi: the Spanning Tree priorities (M7b)
         #expect(DeviceKind.allCases.filter(\.isHost) == [.pc, .laptop, .server])
     }
 }

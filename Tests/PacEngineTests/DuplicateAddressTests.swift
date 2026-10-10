@@ -61,11 +61,34 @@ private func lab() throws -> Runtime {
         let rt = try lab()
         try rt.handle(.setIp(node: "r", iface: "Gi0/0", cidr: "10.0.0.1/24"))
         try rt.handle(.setDhcpServer(node: "r", config: DhcpConfig(start: "10.0.0.100", end: "10.0.0.199")))
+        for _ in 0..<300 { rt.advance(wallMs: 100) } // ports reach forwarding after 2 × forward delay
         try rt.handle(.setIfaceMode(node: "a", iface: "eth0", mode: .dhcp))
         for _ in 0..<10 { rt.advance(wallMs: 100) }
         #expect(rt.snapshot().nodes[0].ifaces[0].cidr == "10.0.0.100/24")
         // The lease is run-time state (the server's ping check guards its pool); only typed addresses conflict.
         try rt.handle(.setIp(node: "b", iface: "eth0", cidr: "10.0.0.100/24"))
         expectError("already used by R1 Gi0/0") { try rt.handle(.setIp(node: "c", iface: "eth0", cidr: "10.0.0.1/24")) }
+    }
+
+    /// The segment is the broadcast domain: one VLAN, across access ports, the trunk's allowed list and subinterfaces.
+    @Test func aDuplicateIsRefusedOnlyWithinTheSameVlan() throws {
+        let rt = Runtime()
+        let devices: [(String, DeviceKind, String)] = [("a", .pc, "PC1"), ("b", .pc, "PC2"), ("c", .pc, "PC3"), ("s", .switch, "SW1"),
+                                                       ("r", .router, "R1")]
+        for (id, kind, name) in devices { try rt.handle(.addNode(id: id, kind: kind, name: name)) }
+        try cable(rt, "1", "a", "eth0", "s", "Gi0/1")
+        try cable(rt, "2", "b", "eth0", "s", "Gi0/2")
+        try cable(rt, "3", "c", "eth0", "s", "Gi0/3")
+        try cable(rt, "4", "r", "Gi0/0", "s", "Gi0/8")
+        let ports: [(String, PortConfig)] = [("Gi0/1", PortConfig(vlan: 10)), ("Gi0/2", PortConfig(vlan: 20)), ("Gi0/3", PortConfig(vlan: 10)),
+                                             ("Gi0/8", PortConfig(mode: .trunk, allowed: "1,10"))]
+        for (port, config) in ports { try rt.handle(.setSwitchport(node: "s", iface: port, config: config)) }
+        try rt.handle(.addSubinterface(node: "r", iface: "Gi0/0.10"))
+        try rt.handle(.addSubinterface(node: "r", iface: "Gi0/0.20"))
+        try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "10.0.0.1/24"))
+        try rt.handle(.setIp(node: "b", iface: "eth0", cidr: "10.0.0.1/24")) // VLAN 20: another broadcast domain
+        expectError("already used by PC1 eth0") { try rt.handle(.setIp(node: "c", iface: "eth0", cidr: "10.0.0.1/24")) }
+        expectError("already used by PC1 eth0") { try rt.handle(.setIp(node: "r", iface: "Gi0/0.10", cidr: "10.0.0.1/24")) } // over the trunk
+        try rt.handle(.setIp(node: "r", iface: "Gi0/0.20", cidr: "10.0.0.1/24")) // the trunk does not carry VLAN 20
     }
 }

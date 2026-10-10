@@ -44,7 +44,9 @@ private final class Direction {
 
 /// Full-duplex point-to-point link with a FIFO tail-drop queue per direction.
 final class Link {
-    var up = true
+    var up = true {
+        didSet { if up != oldValue { notify() } }
+    }
     private(set) var opts: LinkOptions
     unowned let sim: Sim
     unowned let a: Interface
@@ -54,6 +56,7 @@ final class Link {
 
     init(sim: Sim, _ a: Interface, _ b: Interface, _ opts: LinkOptions = LinkOptions()) throws {
         guard a.node !== b.node else { throw EngineError("Cannot connect a node to itself") }
+        guard a.dot1q == nil && b.dot1q == nil else { throw EngineError("Cannot cable a subinterface") }
         guard a.link == nil, b.link == nil else { throw EngineError("Interface already connected: \(a.link != nil ? a.id : b.id)") }
         try validateLinkOptions(opts)
         self.sim = sim
@@ -62,9 +65,16 @@ final class Link {
         self.opts = opts
         a.link = self
         b.link = self
+        notify()
     }
 
     func peer(_ i: Interface) -> Interface { i === a ? b : a }
+
+    /// Both ends see a change of the cable at once (spec M7 §4).
+    private func notify() {
+        a.node.linkChanged(a)
+        b.node.linkChanged(b)
+    }
 
     /// From `a` to `b`, and back.
     func counters() -> (ab: LinkCounters, ba: LinkCounters) {
@@ -75,6 +85,7 @@ final class Link {
     func update(_ opts: LinkOptions) throws {
         try validateLinkOptions(opts)
         self.opts = opts
+        notify() // a new bandwidth is a new STP path cost
     }
 
     /// Pulls the cable: both interfaces become free, frames in flight are lost.

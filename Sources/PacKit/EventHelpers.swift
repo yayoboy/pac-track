@@ -5,7 +5,7 @@ extension Proto {
 }
 
 extension EventKind {
-    public var label: String { rawValue.uppercased() }
+    public var label: String { self == .state ? "STATO" : rawValue.uppercased() }
 }
 
 /// Simulated time with nanosecond digits: "1.000002672 s".
