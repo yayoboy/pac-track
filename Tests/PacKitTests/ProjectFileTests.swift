@@ -62,6 +62,25 @@ import Testing
         try opened.handle(.load(m7))
         #expect(opened.snapshot().nodes[0].rip == nil)
     }
+
+    @Test func ospfSurvivesSavingAndAnM8aFileOpensWithOspfOff() throws {
+        let config = OspfConfig(routerId: "1.1.1.1", interfaces: [OspfInterfaceConfig(name: "Gi0/0", pointToPoint: true),
+                                                                  OspfInterfaceConfig(name: "Gi0/1", passive: true, priority: 0)])
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        try rt.handle(.setOspf(node: "r", config: config))
+        let t = try ProjectFile.decode(try ProjectFile.encode(makeTopology(rt.snapshot(), [:])))
+        #expect(t.nodes[0].ospf == config)
+        let reopened = Runtime()
+        try reopened.handle(.load(t))
+        #expect(reopened.snapshot().nodes[0].ospf == config)
+        let json = #"{"version":1,"seed":1,"links":[],"nodes":[{"id":"r","kind":"router","name":"R1","pos":{"x":0,"y":0},"routes":[],"ifaces":[{"name":"Gi0/0","cidr":"10.0.0.1/24"}],"rip":{"interfaces":["Gi0/0"],"passive":[]}}]}"#
+        let m8a = try ProjectFile.decode(Data(json.utf8))
+        #expect(m8a.nodes[0].ospf == nil && m8a.nodes[0].rip != nil)
+        let opened = Runtime()
+        try opened.handle(.load(m8a))
+        #expect(opened.snapshot().nodes[0].ospf == nil)
+    }
 }
 
 func expectError(_ fragment: String, sourceLocation: SourceLocation = #_sourceLocation, _ body: () throws -> Void) {

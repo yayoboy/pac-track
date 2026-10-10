@@ -96,6 +96,26 @@ public struct StpView: Equatable, Sendable {
     public let ports: [StpPortRow]
 }
 
+/// One OSPF neighbour as `show ip ospf neighbor` lists it: state "Full/DR", "2-Way/DROther", "Full/-" on point-to-point.
+public struct OspfNeighborRow: Equatable, Sendable {
+    public let routerId: String
+    public let priority: Int
+    public let state: String
+    public let address: String
+    public let iface: String
+}
+
+/// One LSA as `show ip ospf database` lists it.
+public struct OspfLsaRow: Equatable, Sendable {
+    /// "router" or "network".
+    public let type: String
+    public let linkId: String
+    public let advRouter: String
+    public let ageS: Int
+    /// "0x80000001".
+    public let seq: String
+}
+
 /// A switch's bridge priority for one VLAN, saved when it is not the default 32768.
 public struct StpPriority: Codable, Equatable, Sendable {
     public var vlan: Int
@@ -143,6 +163,8 @@ public enum Command: Sendable {
     case setFirewall(node: String, config: FirewallConfig?)
     /// RIPv2 interfaces and passive ones (routers only); nil turns RIP off and forgets what it learned.
     case setRip(node: String, config: RipConfig?)
+    /// OSPF in area 0 (routers only); nil turns it off and forgets neighbours, database and routes.
+    case setOspf(node: String, config: OspfConfig?)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -187,6 +209,7 @@ public enum Command: Sendable {
         case .setNat: "setNat"
         case .setFirewall: "setFirewall"
         case .setRip: "setRip"
+        case .setOspf: "setOspf"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -375,6 +398,12 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let stpPriorities: [StpPriority]
     /// Routers: RIP's interfaces; nil while RIP is off.
     public let rip: RipConfig?
+    /// Routers: OSPF's settings; nil while OSPF is off.
+    public let ospf: OspfConfig?
+    /// The router ID OSPF runs with.
+    public let ospfRouterId: String?
+    public let ospfNeighbors: [OspfNeighborRow]
+    public let ospfDatabase: [OspfLsaRow]
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -667,9 +696,11 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var firewall: FirewallConfig?
     public var stpPriorities: [StpPriority]?
     public var rip: RipConfig?
+    public var ospf: OspfConfig?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
-                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil) {
+                nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil,
+                ospf: OspfConfig? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -685,9 +716,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.firewall = firewall
         self.stpPriorities = stpPriorities
         self.rip = rip
+        self.ospf = ospf
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -705,6 +737,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         firewall = try c.decodeIfPresent(FirewallConfig.self, forKey: .firewall)
         stpPriorities = try c.decodeIfPresent([StpPriority].self, forKey: .stpPriorities)
         rip = try c.decodeIfPresent(RipConfig.self, forKey: .rip)
+        ospf = try c.decodeIfPresent(OspfConfig.self, forKey: .ospf)
     }
 }
 

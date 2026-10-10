@@ -161,8 +161,9 @@ public final class Runtime {
             } else {
                 try ip.iface(iface).ipv4 = nil
             }
-            // RIP advertises the new network and withdraws the old one.
+            // RIP and OSPF advertise the new network and withdraw the old one.
             ip.rip?.refresh()
+            ip.ospf?.refresh()
         case let .addRoute(node, cidr, nextHop):
             try ipNode(node).routes.addStatic(cidr.trimmingCharacters(in: .whitespaces), nextHop.trimmingCharacters(in: .whitespaces))
         case let .removeRoute(node, cidr):
@@ -220,6 +221,10 @@ public final class Runtime {
             let n = try ipNode(node)
             guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run RIP") }
             try n.configureRip(config)
+        case let .setOspf(node, config):
+            let n = try ipNode(node)
+            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run OSPF") }
+            try n.configureOspf(config)
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -419,7 +424,22 @@ public final class Runtime {
                             ports: st.rows.map { StpPortRow(iface: $0.port, role: $0.role, state: $0.state) })
                 } ?? [],
                 stpPriorities: sw?.stpPriority.sorted { $0.key < $1.key }.map { StpPriority(vlan: $0.key, priority: $0.value) } ?? [],
-                rip: ip?.rip?.config
+                rip: ip?.rip?.config,
+                ospf: ip?.ospf?.config,
+                ospfRouterId: ip?.ospf.flatMap { $0.routerId == 0 ? nil : formatIp($0.routerId) },
+                ospfNeighbors: ip?.ospf?.interfaces.flatMap { oi in
+                    oi.neighbors.map { n in
+                        let role = oi.config.pointToPoint ? "-" : n.addr == oi.dr ? "DR" : n.addr == oi.bdr ? "BDR" : "DROther"
+                        return OspfNeighborRow(routerId: formatIp(n.id), priority: n.priority, state: "\(n.state.label)/\(role)",
+                                               address: formatIp(n.addr), iface: oi.iface.name)
+                    }
+                } ?? [],
+                ospfDatabase: ip?.ospf.map { o in
+                    o.lsdb.map { e in
+                        OspfLsaRow(type: e.lsa.header.type == 1 ? "router" : "network", linkId: formatIp(e.lsa.header.id),
+                                   advRouter: formatIp(e.lsa.header.adv), ageS: o.age(e), seq: String(format: "0x%08x", UInt32(bitPattern: e.lsa.header.seq)))
+                    }
+                } ?? []
             )
         }
         let linkViews = linkOrder.map { id in
@@ -525,6 +545,7 @@ public final class Runtime {
             if let nat = n.nat { try next.handle(.setNat(node: n.id, config: nat)) }
             if let firewall = n.firewall { try next.handle(.setFirewall(node: n.id, config: firewall)) }
             if let rip = n.rip { try next.handle(.setRip(node: n.id, config: rip)) }
+            if let ospf = n.ospf { try next.handle(.setOspf(node: n.id, config: ospf)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }

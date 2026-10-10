@@ -147,7 +147,7 @@ public func makeTopology(_ s: Snapshot, _ positions: [String: Pos]) -> Topology 
                      },
                      routes: n.routes.filter(\.isStatic).map { TopologyRoute(cidr: $0.dest, nextHop: $0.nextHop ?? "") },
                      powered: n.powered, nameServer: n.nameServer, dhcp: n.dhcpServer, dns: n.dnsRecords, sink: n.sink, nat: n.nat, firewall: n.firewall,
-                     stpPriorities: n.stpPriorities.isEmpty ? nil : n.stpPriorities, rip: n.rip)
+                     stpPriorities: n.stpPriorities.isEmpty ? nil : n.stpPriorities, rip: n.rip, ospf: n.ospf)
     }, links: s.links)
 }
 

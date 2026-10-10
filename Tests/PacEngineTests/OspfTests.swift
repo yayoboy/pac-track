@@ -360,4 +360,29 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
         try r1.routes.addStatic("192.168.2.0/24", "10.0.12.2")
         #expect(try route(r1, "192.168.2.0/24") == "S via 10.0.12.2")
     }
+
+    @Test func theRuntimeRunsOspfOnRoutersOnlyAndShowsNeighboursAndDatabase() throws {
+        let rt = Runtime()
+        let devices: [(String, DeviceKind, String)] = [("r1", .router, "R1"), ("r2", .router, "R2"), ("p", .pc, "PC1"), ("c", .cloud, "ISP")]
+        for (id, kind, name) in devices { try rt.handle(.addNode(id: id, kind: kind, name: name)) }
+        expectError("PC1 cannot run OSPF") { try rt.handle(.setOspf(node: "p", config: OspfConfig(routerId: "1.1.1.1"))) }
+        expectError("ISP cannot run OSPF") { try rt.handle(.setOspf(node: "c", config: OspfConfig(routerId: "1.1.1.1"))) }
+        try rt.handle(.connect(id: "l1", a: IfaceRef(node: "r1", iface: "Gi0/0"), b: IfaceRef(node: "r2", iface: "Gi0/0")))
+        try rt.handle(.connect(id: "l2", a: IfaceRef(node: "r2", iface: "Gi0/1"), b: IfaceRef(node: "p", iface: "eth0")))
+        try rt.handle(.setIp(node: "r1", iface: "Gi0/0", cidr: "10.0.12.1/30"))
+        try rt.handle(.setIp(node: "r2", iface: "Gi0/0", cidr: "10.0.12.2/30"))
+        try rt.handle(.setIp(node: "r2", iface: "Gi0/1", cidr: "192.168.2.1/24"))
+        try rt.handle(.setOspf(node: "r1", config: OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0")])))
+        try rt.handle(.setOspf(node: "r2", config: OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0"), OspfInterfaceConfig(name: "Gi0/1", passive: true)])))
+        for _ in 0..<460 { rt.advance(wallMs: 100) } // 46 s: Full at 40 s, SPF at 45 s
+        let r1 = rt.snapshot().nodes[0]
+        #expect(r1.ospf == OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0")]))
+        #expect(r1.ospfRouterId == "10.0.12.1")
+        #expect(r1.ospfNeighbors == [OspfNeighborRow(routerId: "192.168.2.1", priority: 1, state: "Full/DR", address: "10.0.12.2", iface: "Gi0/0")])
+        #expect(r1.ospfDatabase.map { "\($0.type) \($0.linkId) \($0.advRouter) \($0.seq)" }
+                == ["router 10.0.12.1 10.0.12.1 0x80000002", "router 192.168.2.1 192.168.2.1 0x80000002", "network 10.0.12.2 192.168.2.1 0x80000001"])
+        #expect(r1.routes.last == RouteRow(dest: "192.168.2.0/24", nextHop: "10.0.12.2", iface: "Gi0/0", isStatic: false, metric: 2, ospf: true))
+        try rt.handle(.setOspf(node: "r1", config: nil))
+        #expect(rt.snapshot().nodes[0].ospf == nil && rt.snapshot().nodes[0].ospfNeighbors.isEmpty)
+    }
 }
