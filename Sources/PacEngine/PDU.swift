@@ -28,6 +28,16 @@ let STP_HELLO_NS = 2 * S
 let STP_MAX_AGE_NS = 20 * S
 let STP_FORWARD_DELAY_NS = 15 * S
 let STP_TC_NS = STP_MAX_AGE_NS + STP_FORWARD_DELAY_NS
+/// RIPv2 (RFC 2453, spec M8 §3): its UDP port, the RIP-2 routers group (224.0.0.9) and that group's MAC.
+let PORT_RIP: UInt16 = 520
+let RIP_GROUP: UInt32 = 0xE000_0009
+let RIP_MAC: Mac = "01:00:5e:00:00:09"
+let RIP_REQUEST: UInt8 = 1
+let RIP_RESPONSE: UInt8 = 2
+/// Hop count meaning "unreachable".
+let RIP_INFINITY = 16
+/// Route entries per message (RFC 2453 §4: at most 512 bytes of RIP).
+let RIP_MAX_ENTRIES = 25
 
 struct ArpPacket: Equatable, Sendable {
     var op: UInt16
@@ -127,11 +137,29 @@ struct TrafficData: Equatable, Sendable {
     var sentAt: Int
 }
 
+/// One RIPv2 route entry (20 B: AFI, route tag 0, address, mask, next hop 0.0.0.0, metric). A whole-table request is a single
+/// entry with AFI 0 and metric 16.
+struct RipEntry: Equatable, Sendable {
+    var afi: UInt16 = 2
+    var network: UInt32
+    var prefix: Int
+    var metric: Int
+}
+
+/// A RIPv2 message: 4-byte header (command, version 2, zero) and its entries.
+struct RipMessage: Equatable, Sendable {
+    var command: UInt8
+    var entries: [RipEntry]
+
+    var size: Int { 4 + 20 * entries.count }
+}
+
 enum UdpPayload: Equatable, Sendable {
     case raw([UInt8])
     case dhcp(DhcpMessage)
     case dns(DnsMessage)
     case traffic(TrafficData)
+    case rip(RipMessage)
 
     var size: Int {
         switch self {
@@ -139,6 +167,7 @@ enum UdpPayload: Equatable, Sendable {
         case .dhcp(let m): m.size
         case .dns(let m): m.size
         case .traffic: TRAFFIC_DATAGRAM
+        case .rip(let m): m.size
         }
     }
 }

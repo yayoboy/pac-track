@@ -26,6 +26,7 @@ enum Theme {
         case .dns: Color(hex: 0xB083F0)
         case .tcp: Color(hex: 0x5FB865)
         case .stp: Color(hex: 0xD6C95E)
+        case .rip: Color(hex: 0xCC7F52)
         }
     }
 }

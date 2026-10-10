@@ -53,6 +53,7 @@ private func proto(of p: Ipv4Packet) -> Proto {
         switch u.payload {
         case .dhcp: .dhcp
         case .dns: .dns
+        case .rip: .rip
         case .raw, .traffic: .udp
         }
     case .tcp: .tcp
@@ -74,6 +75,9 @@ private func describe(_ p: Ipv4Packet) -> String {
         switch u.payload {
         case .dhcp(let m): return "\(ends) DHCP \(m.type.name)" + (dhcpAddress(m).map { " \(formatIp($0))" } ?? "") + " xid=\(hex(Int(m.xid), digits: 8))"
         case .dns(let m): return "\(ends) DNS \(dnsSummary(m))"
+        case .rip(let m):
+            return "\(ends) RIPv2 " + (m.command == RIP_REQUEST ? "Request"
+                : "Response " + m.entries.map { "\(formatIp($0.network))/\($0.prefix) m\($0.metric)" }.joined(separator: ", "))
         case .raw, .traffic: return "\(ends) UDP \(u.srcPort) → \(u.dstPort) ttl=\(p.ttl)"
         }
     case .tcp(let t):
@@ -167,6 +171,19 @@ private func dnsLayer(_ m: DnsMessage) -> PduLayer {
     return PduLayer(title: "DNS", bytes: m.size, fields: fields)
 }
 
+private func ripLayer(_ m: RipMessage) -> PduLayer {
+    var fields = [
+        field("Comando", m.command == RIP_REQUEST ? "1 (Request)" : "2 (Response)"),
+        field("Versione", "2"),
+        field("Zero", "0x0000"),
+    ]
+    for (i, e) in m.entries.enumerated() {
+        fields.append(field("Voce \(i + 1)", e.afi == 0 ? "AFI 0, metrica 16: intera tabella"
+            : "AFI 2, \(formatIp(e.network))/\(e.prefix) maschera \(formatIp(prefixMask(e.prefix))), next hop 0.0.0.0, metrica \(e.metric), tag 0"))
+    }
+    return PduLayer(title: "RIPv2", bytes: m.size, fields: fields)
+}
+
 /// Wireshark's layout of a Cisco PVST+ BPDU: LLC/SNAP, then the 802.1D BPDU with the PVID TLV.
 private func bpduLayers(_ b: Bpdu) -> [PduLayer] {
     let llc = PduLayer(title: "LLC/SNAP", bytes: 8, fields: [
@@ -224,6 +241,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         case .raw(let data): "\(data.count) B"
         case .dhcp(let m): "\(m.size) B (DHCP)"
         case .dns(let m): "\(m.size) B (DNS)"
+        case .rip(let m): "\(m.size) B (RIP)"
         case .traffic(let d): "\(TRAFFIC_DATAGRAM) B (generatore di traffico, seq \(d.seq))"
         }
         let udp = PduLayer(title: "UDP", bytes: u.size, fields: [
@@ -237,6 +255,7 @@ private func ipLayers(_ p: Ipv4Packet) -> [PduLayer] {
         case .raw, .traffic: return [ip, udp]
         case .dhcp(let m): return [ip, udp, dhcpLayer(m)]
         case .dns(let m): return [ip, udp, dnsLayer(m)]
+        case .rip(let m): return [ip, udp, ripLayer(m)]
         }
     case .tcp(let t):
         var fields = [
