@@ -80,6 +80,23 @@ private func lsdb(_ r: Router) -> [String] {
     r.ospf?.lsdb.map { "\($0.lsa.header.type) \(formatIp($0.lsa.header.id)) \(formatIp($0.lsa.header.adv)) \(String(UInt32(bitPattern: $0.lsa.header.seq), radix: 16))" } ?? []
 }
 
+/// The routing table's row for `dest`: "O <cost> via <next hop> <iface>", "R …", "S …", "C <iface>", or nil.
+private func route(_ r: IpNode, _ dest: String) throws -> String? {
+    let c = try parseCidr(dest)
+    return r.routes.view().first { $0.network == c.addr && $0.prefix == c.prefix }.map { v in
+        if let m = v.metric { return "\(v.ospf ? "O" : "R") \(m) via \(formatIp(v.nextHop!)) \(v.iface)" }
+        return v.isStatic ? "S via \(formatIp(v.nextHop!))" : "C \(v.iface)"
+    }
+}
+
+/// One echo request from `h` to `dst`; the TTL of the reply if it came back within a second.
+private func pingTtl(_ sim: Sim, _ h: Host, _ dst: String) throws -> UInt8? {
+    let seen = icmpSeen(h)
+    h.sendPacket(try parseIp(dst), echoRequest())
+    sim.run(1 * S)
+    return seen.seen.first { $0.type == ICMP_ECHO_REPLY }?.ttl
+}
+
 private struct OspfTx: Equatable {
     let time: Int
     let iface: String
@@ -296,5 +313,51 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
         l12.up = false
         sim.run(10 * MS)
         #expect(!lsdb(r1).contains { $0.hasPrefix("2 10.0.12.2") } && !lsdb(r3).contains { $0.hasPrefix("2 10.0.12.2") })
+    }
+
+    @Test func spfInstallsRoutesFiveSecondsAfterTheFirstDatabaseChange() throws {
+        let (sim, h1, _, r1, _) = try pair()
+        sim.run(45 * S - 10 * MS)
+        #expect(try route(r1, "192.168.2.0/24") == nil)
+        sim.run(20 * MS)
+        #expect(try route(r1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1")
+        #expect(try route(r1, "10.0.12.0/30") == "C Gi0/1") // a network of its own stays connected
+        #expect(try pingTtl(sim, h1, "192.168.2.10") == 62)
+        let (p2p, _, _, q1, _) = try pair(pointToPoint: true)
+        p2p.run(15 * S - 10 * MS)
+        #expect(try route(q1, "192.168.2.0/24") == nil)
+        p2p.run(20 * MS)
+        #expect(try route(q1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1")
+    }
+
+    @Test func aSlowerCableCostsMoreAndTheTriangleRoutesAroundIt() throws {
+        let (sim, _, _, r1, _, _, l12) = try triangle()
+        sim.run(46 * S)
+        #expect(try route(r1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1")
+        try l12.update(LinkOptions(bandwidthBps: 10e6)) // cost 100 Mb/s ÷ 10 Mb/s = 10
+        sim.run(5 * S + 10 * MS)
+        #expect(try route(r1, "192.168.2.0/24") == "O 3 via 10.0.13.2 Gi0/2")
+    }
+
+    @Test func aCableFaultMovesTrafficToTheThirdRouterAtTheNextSpf() throws {
+        let (sim, h1, _, r1, _, _, l12) = try triangle()
+        sim.run(50 * S)
+        l12.up = false
+        sim.run(5 * S - 10 * MS) // t ≈ 54.99 s: the SPF has not run yet
+        #expect(try route(r1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1")
+        sim.run(20 * MS)
+        #expect(try route(r1, "192.168.2.0/24") == "O 3 via 10.0.13.2 Gi0/2")
+        #expect(try pingTtl(sim, h1, "192.168.2.10") == 61)
+    }
+
+    @Test func ospfBeatsRipAndStaticBeatsOspf() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        for r in [r1, r2] { try r.configureRip(RipConfig(interfaces: ["Gi0/0", "Gi0/1"], passive: ["Gi0/0"])) }
+        sim.run(2 * S)
+        #expect(try route(r1, "192.168.2.0/24") == "R 1 via 10.0.12.2 Gi0/1")
+        sim.run(44 * S)
+        #expect(try route(r1, "192.168.2.0/24") == "O 2 via 10.0.12.2 Gi0/1") // 110 beats 120
+        try r1.routes.addStatic("192.168.2.0/24", "10.0.12.2")
+        #expect(try route(r1, "192.168.2.0/24") == "S via 10.0.12.2")
     }
 }

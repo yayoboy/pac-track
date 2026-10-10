@@ -5,6 +5,8 @@ let OSPF_DEAD_NS = OSPF_DEAD_S * S
 let OSPF_RXMT_NS = 5 * S
 /// LSRefreshTime: own LSAs are originated again this often.
 let OSPF_REFRESH_NS = 1800 * S
+/// IOS `timers throttle spf` initial delay: the SPF runs this long after the first change (spec M8 §4).
+let OSPF_SPF_DELAY_NS = 5 * S
 
 /// > 0 when `a` is the more recent instance, < 0 when `b` is, 0 when they are the same (RFC 2328 §13.1).
 func newer(_ a: LsaHeader, _ b: LsaHeader) -> Int {
@@ -109,6 +111,7 @@ final class Ospf {
     private var originateDue: Int?
     /// Own LSAs that came back newer than ours (after a restart): the next origination goes past them (RFC 2328 §13.4).
     private var stale: Set<LsaKey> = []
+    private var spfDue: Int?
 
     init(node: IpNode, config: OspfConfig) {
         self.node = node
@@ -133,6 +136,8 @@ final class Ospf {
         lsdb = []
         originateDue = nil
         stale = []
+        spfDue = nil
+        node.routes.ospf = []
     }
 
     /// New settings; a new router ID waits for the process to restart (spec M8 §4).
@@ -517,7 +522,9 @@ final class Ospf {
             for n in oi.neighbors { n.rxmt.removeAll { $0 == l.header.key } }
         }
         flood(l, from: sender, on: inIf)
+        let old = entry(l.header.key)
         lsdb.removeAll { $0.lsa.header.key == l.header.key }
+        if old?.lsa.body != l.body || l.header.age >= OSPF_MAX_AGE { scheduleSpf() }
         // ponytail: a MaxAge LSA leaves the database once flooded, not once acknowledged; its retransmissions stop there
         guard l.header.age < OSPF_MAX_AGE else { return }
         lsdb.insert(LsdbEntry(lsa: l, installedAt: now), at: lsdb.firstIndex { $0.lsa.header.key > l.header.key } ?? lsdb.endIndex)
@@ -585,6 +592,108 @@ final class Ospf {
         stale.remove(key)
         install(makeLsa(type: key.type, id: key.id, adv: routerId, seq: old.map { $0.lsa.header.seq &+ 1 } ?? OSPF_INITIAL_SEQ, body: body),
                 from: nil, on: nil)
+    }
+
+    // MARK: SPF (RFC 2328 §16.1)
+
+    private func scheduleSpf() {
+        if running, spfDue == nil { spfDue = arm(now + OSPF_SPF_DELAY_NS) }
+    }
+
+    /// Dijkstra over routers and transit networks in one area; a link counts only when its far end links back. Then the stub
+    /// networks. One next hop per destination (spec M8 §2: no ECMP); this router's own networks stay connected routes.
+    private func spf() {
+        enum Vertex: Hashable {
+            case router(UInt32)
+            case network(UInt32)
+        }
+        /// The root's outgoing interface and the next router's address (nil: a network the root is on).
+        struct Hop {
+            let iface: Interface
+            let addr: UInt32?
+        }
+        func lsa(_ v: Vertex) -> Lsa? {
+            switch v {
+            case .router(let id): entry(LsaKey(type: 1, id: id, adv: id))?.lsa
+            case .network(let id): lsdb.first { $0.lsa.header.type == 2 && $0.lsa.header.id == id }?.lsa
+            }
+        }
+        func linksBack(_ l: Lsa, to v: Vertex) -> Bool {
+            switch (l.body, v) {
+            case (.router(let links), .router(let id)): links.contains { $0.type == LINK_P2P && $0.id == id }
+            case (.router(let links), .network(let id)): links.contains { $0.type == LINK_TRANSIT && $0.id == id }
+            case (.network(_, let routers), .router(let id)): routers.contains(id)
+            case (.network, .network): false
+            }
+        }
+        var done: [Vertex: (dist: Int, hop: Hop?)] = [:]
+        var order: [Vertex] = []
+        var candidates: [(v: Vertex, dist: Int, hop: Hop?)] = [(.router(routerId), 0, nil)]
+        while let i = candidates.indices.min(by: { candidates[$0].dist < candidates[$1].dist }) {
+            let c = candidates.remove(at: i)
+            done[c.v] = (c.dist, c.hop)
+            order.append(c.v)
+            guard let l = lsa(c.v) else { continue }
+            let edges: [(w: Vertex, cost: Int, data: UInt32)]
+            switch l.body {
+            case .router(let links):
+                edges = links.compactMap { k -> (w: Vertex, cost: Int, data: UInt32)? in
+                    k.type == LINK_P2P ? (.router(k.id), k.metric, k.data) : k.type == LINK_TRANSIT ? (.network(k.id), k.metric, k.data) : nil
+                }
+            case .network(_, let routers):
+                edges = routers.map { (.router($0), 0, 0) }
+            }
+            for e in edges where done[e.w] == nil {
+                guard let wl = lsa(e.w), linksBack(wl, to: c.v) else { continue }
+                let hop: Hop?
+                if let h = c.hop {
+                    // Past a network the root is on, the next hop is that router's own address on it.
+                    if h.addr == nil, case .network(let net) = c.v, case .router(let links) = wl.body {
+                        hop = links.first { $0.type == LINK_TRANSIT && $0.id == net }.map { Hop(iface: h.iface, addr: $0.data) }
+                    } else {
+                        hop = h
+                    }
+                } else if let oi = interfaces.first(where: { $0.addr == e.data }) {
+                    // From the root: out of the interface the link names; a point-to-point neighbour's address from its Hellos.
+                    if case .router(let id) = e.w {
+                        hop = oi.neighbors.first { $0.id == id }.map { Hop(iface: oi.iface, addr: $0.addr) }
+                    } else {
+                        hop = Hop(iface: oi.iface, addr: nil)
+                    }
+                } else {
+                    hop = nil
+                }
+                guard let hop else { continue }
+                let d = c.dist + e.cost
+                if let k = candidates.firstIndex(where: { $0.v == e.w }) {
+                    if d < candidates[k].dist { candidates[k] = (e.w, d, hop) }
+                } else {
+                    candidates.append((e.w, d, hop))
+                }
+            }
+        }
+        var routes: [LearnedRoute] = []
+        func add(_ network: UInt32, _ prefix: Int, _ dist: Int, _ hop: Hop?) {
+            guard let hop, let via = hop.addr else { return }
+            let r = LearnedRoute(network: networkOf(network, prefix), prefix: prefix, nextHop: via, iface: hop.iface, metric: dist)
+            if let k = routes.firstIndex(where: { $0.network == r.network && $0.prefix == r.prefix }) {
+                if dist < routes[k].metric { routes[k] = r }
+            } else {
+                routes.append(r)
+            }
+        }
+        for v in order {
+            guard let l = lsa(v), let reached = done[v] else { continue }
+            switch (l.body, v) {
+            case (.network(let prefix, _), .network(let id)):
+                add(id, prefix, reached.dist, reached.hop)
+            case (.router(let links), _):
+                for s in links where s.type == LINK_STUB { add(s.id, s.data.nonzeroBitCount, reached.dist + s.metric, reached.hop) }
+            default:
+                break
+            }
+        }
+        node.routes.ospf = routes.sorted { ($0.network, $0.prefix) < ($1.network, $1.prefix) }
     }
 
     // MARK: Database
@@ -670,7 +779,12 @@ final class Ospf {
                 originate()
             } else if h.adv != routerId && e.installedAt + (OSPF_MAX_AGE - h.age) * S == due {
                 lsdb.removeAll { $0.lsa.header.key == h.key }
+                scheduleSpf()
             }
+        }
+        if spfDue == due {
+            spfDue = nil
+            spf()
         }
     }
 }
