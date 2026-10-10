@@ -11,7 +11,7 @@ Far imparare le route ai router da soli e vedere il protocollo lavorare pacchett
 - *Simula guasto* sul cavo R1–R2 a t = 40 s: R1 e R2 vedono subito la linea giù, mettono a metrica 16 le route che passavano da lì e mandano un triggered update. A t = 60 s l'update periodico di R3 porta `192.168.2.0/24` con metrica 2 e R1 installa `[120/2] via 10.0.13.2`: il ping riprende, 20 s dopo il guasto (in generale entro 30 s).
 - Se invece un vicino smette di parlare senza che la linea cada (RIP spento su R2, oppure R2 dietro uno switch e spento), la sua route scade 180 s dopo l'ultimo update ricevuto e sparisce 120 s dopo.
 
-**Successo M8b:** la stessa rete con OSPF al posto di RIP. Sui cavi router–router (rete broadcast, il default IOS su Ethernet) i router diventano 2-Way dopo il primo hello, eleggono DR e BDR allo scadere del wait timer (40 s) e arrivano a Full. Con le interfacce in point-to-point le adiacenze vanno in Full subito, senza elezione. Dopo l'SPF R1 ha `O 192.168.2.0/24 [110/2]`. Con *Simula guasto* su R1–R2 l'adiacenza cade subito, i router riemettono la loro router-LSA e R1 passa per R3 non appena l'SPF ricalcola. Spegnendo R2 dietro uno switch, l'adiacenza cade dopo il dead interval (40 s).
+**Successo M8b:** la stessa rete con OSPF al posto di RIP. Sui cavi router–router (rete broadcast, il default IOS su Ethernet) i router si vedono (Init) con i primi hello a t = 0, diventano 2-Way al secondo hello (10 s), eleggono DR e BDR allo scadere del wait timer (40 s) e arrivano a Full pochi ms dopo. Con le interfacce in point-to-point le adiacenze vanno in Full a 10 s, senza elezione. L'SPF parte 5 s dopo il primo cambio del database, quindi a 45 s R1 ha `O 192.168.2.0/24 [110/2]`. Con *Simula guasto* su R1–R2 a t = 50 s l'adiacenza cade subito, i router riemettono la loro router-LSA e a 55 s R1 passa per R3 con `[110/3]`. Spegnendo R2 dietro uno switch, l'adiacenza cade dopo il dead interval (40 s).
 
 ## 2. Parti comuni (M8a, poi estese in M8b)
 - **Distanza amministrativa** (default IOS): connessa 0, statica 1, OSPF 110, RIP 120, default da DHCP 254. Prima vince il prefisso più lungo; a parità di prefisso vince la distanza minore. Una statica il cui next hop non è raggiungibile non conta, quindi a quel prefisso vince la route dinamica.
@@ -68,6 +68,23 @@ Far imparare le route ai router da soli e vedere il protocollo lavorare pacchett
 - **Timer:** hello 10 s, dead 40 s, wait 40 s, ritrasmissione 5 s, InfTransDelay 1 s, LSRefreshTime 1800 s, MaxAge 3600 s. Non sono configurabili.
 - **Adiacenze:** gli stati Down, Init, 2-Way, ExStart, Exchange, Loading e Full seguono la macchina a stati della RFC, con master/slave nella DBD e LSR/LSU/LSAck. Ogni cambio di stato del vicino è un evento di tipo STATO con protocollo OSPF (per esempio `10.0.0.2 Gi0/1: Loading → Full`).
   - *Decisione:* gli LSAck partono subito, senza ack ritardati; le ritrasmissioni restano quelle della RFC.
+  - *Decisione (M8b):* anche i cambi di stato dell'interfaccia sono eventi STATO OSPF (per esempio `Waiting → DR`), perché rendono visibile l'elezione.
+  - *Decisione (M8b):* un nuovo vicino non riceve un hello di risposta immediato. Si aspetta l'hello periodico, come IOS su Ethernet: per questo il 2-Way arriva al secondo hello.
+  - *Decisione (M8b):* i vicini si identificano con il router ID su entrambi i tipi di rete, come mostra `show ip ospf neighbor`.
+  - *Decisione (M8b):* il numero di sequenza DD iniziale è il tempo simulato in ms invece di un valore casuale: è deterministico e diverso a ogni tentativo.
+  - *Decisione (M8b):* il riepilogo del database viaggia in una sola DBD (il bit M resta quello della RFC). Il database di un laboratorio sta in un pacchetto da 1500 B.
+- *Decisione (M8b):* niente MinLSInterval né MinLSArrival. Le LSA proprie si riemettono appena cambia qualcosa, raccogliendo i cambi dello stesso istante. In un laboratorio non serve frenare l'origine delle LSA, e i tempi restano leggibili.
+- *Decisione (M8b):*
+  - una LSA di un altro router esce dal database quando raggiunge MaxAge, senza flooding;
+  - una LSA ritirata in anticipo esce subito dopo essere stata inoltrata, senza aspettare gli ack;
+  - una network-LSA propria viene ritirata quando il router non è più DR o non ha più vicini Full.
+- *Decisione (M8b):* una LSA propria più recente che torna indietro dopo un riavvio fa riemettere la LSA con un numero di sequenza successivo (RFC §13.4), anche se il contenuto è identico.
+- *Decisione (M8b):* le modifiche alla configurazione hanno effetti diversi:
+  - il tipo di rete fa ripartire l'interfaccia e le sue adiacenze;
+  - la priorità vale dalla prossima elezione;
+  - una nuova banda del cavo ricalcola il costo e riemette la router-LSA, senza far cadere le adiacenze.
+- *Decisione (M8b):* le interfacce passive non mandano hello e compaiono nella router-LSA come stub, come con `passive-interface`.
+- *Decisione (M8b):* con RIP e OSPF sullo stesso router vince la route OSPF (110 contro 120). RIP non annuncia le reti che conosce solo tramite OSPF, perché non c'è redistribuzione.
 - **Elezione DR/BDR** (RFC 2328 §9.4): priorità per interfaccia (default 1, 0 = mai DR, impostabile 0–255), poi router ID maggiore. Allo scadere del wait timer, nessuna preemption: un router con priorità più alta che arriva dopo non toglie il ruolo a chi ce l'ha. Su una rete broadcast i DROther restano in 2-Way fra loro e vanno in Full solo con DR e BDR.
 - **LSA:** tipo 1 (router-LSA, con link point-to-point, transit e stub) e tipo 2 (network-LSA, generata dal DR). Flooding affidabile, sequence number, età, checksum Fletcher calcolato davvero, refresh a 1800 s e MaxAge a 3600 s.
 - **SPF:** Dijkstra sul database (RFC 2328 §16.1), le route vanno in tabella con distanza 110 e il costo totale come metrica.
