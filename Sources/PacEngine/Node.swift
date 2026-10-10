@@ -7,6 +7,8 @@ final class Interface {
     var up = true
     var mtu = 1500
     var ipv4: Cidr?
+    /// IPv6 on this interface (spec M9 §2); nil while it is off.
+    var v6: Ipv6Iface?
     /// Switch ports only: access or trunk and the VLANs (IOS `switchport`).
     var switchport = Switchport()
     /// Router subinterfaces only (IOS `encapsulation dot1q`): the physical interface it rides on and its VLAN.

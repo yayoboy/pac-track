@@ -24,6 +24,8 @@ class IpNode: Node {
     var rip: Rip?
     /// OSPFv2 in area 0 (routers), spec M8 §4.
     var ospf: Ospf?
+    /// IPv6 (spec M9): idle until an interface turns it on.
+    private(set) lazy var v6 = Ipv6(node: self)
     /// Turns the discard sink off again; nil while it is off.
     private var sinkStop: (() -> Void)?
 
@@ -159,6 +161,17 @@ class IpNode: Node {
         firewall?.reset()
         rip?.stop()
         ospf?.stop()
+        v6.reset()
+    }
+
+    /// IPv6 runs DAD again on every interface (spec M9 §5).
+    override func powerOn() {
+        v6.start()
+    }
+
+    /// A line coming back up runs DAD again on its interfaces (spec M9 §5).
+    override func linkChanged(_ iface: Interface) {
+        v6.linkChanged(iface)
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
@@ -209,7 +222,9 @@ class IpNode: Node {
 
     override func receive(_ frame: EthernetFrame, on iface: Interface) {
         // The RIP-2 and OSPF groups only reach a router running that protocol, as if it had joined them.
+        // IPv6 groups reach an interface that joined them (spec M9 §2).
         let group = (frame.dst == RIP_MAC && rip != nil) || ((frame.dst == OSPF_ALL_ROUTERS_MAC || frame.dst == OSPF_ALL_DROUTERS_MAC) && ospf != nil)
+            || (frame.dst.hasPrefix("33:33:") && v6.listens(frame.dst, on: iface))
         guard frame.dst == iface.mac || frame.dst == BROADCAST_MAC || group else { return }
         // 802.1Q, after the NIC's MAC filter: a tagged frame belongs to the subinterface for its VLAN; a host, or a router without one, drops it.
         var to = iface
@@ -223,7 +238,7 @@ class IpNode: Node {
         switch frame.payload {
         case .arp(let a): arp.handle(a, on: to)
         case .ipv4(let p): input(p, on: to)
-        case .ipv6: break // nothing listens until an interface turns IPv6 on (spec M9 §2)
+        case .ipv6(let p): v6.input(p, on: to)
         case .bpdu: break // never reached: the MAC filter above already left out the PVST+ group address
         }
     }

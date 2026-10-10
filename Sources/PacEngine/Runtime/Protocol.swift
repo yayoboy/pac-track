@@ -680,6 +680,18 @@ public struct OspfConfig: Codable, Equatable, Sendable {
     }
 }
 
+/// IPv6 on an interface (spec M9 §2): the manual global address with its prefix (IOS `ipv6 address`; nil: link-local only) and,
+/// on hosts, SLAAC. No configuration (nil) means IPv6 off.
+public struct Ipv6Config: Codable, Equatable, Sendable {
+    public var address: String?
+    public var autoconfig: Bool
+
+    public init(address: String? = nil, autoconfig: Bool = false) {
+        self.address = address
+        self.autoconfig = autoconfig
+    }
+}
+
 public struct TopologyNode: Codable, Equatable, Sendable {
     public var id: String
     public var kind: DeviceKind

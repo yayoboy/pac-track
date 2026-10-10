@@ -28,6 +28,7 @@ final class Host: IpNode {
     }
 
     override func powerOn() {
+        super.powerOn()
         dhcp?.start()
     }
 }
