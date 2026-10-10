@@ -4,6 +4,12 @@ import Foundation
 let ND_RETRANS_NS = 1 * S
 /// Hop limit of the packets a host or router originates (Linux and IOS default, spec M9 §3).
 let HOP_LIMIT6: UInt8 = 64
+/// Router Solicitations (spec M9 §5, RFC 7559 as Linux): 4 s after the first, then doubling up to 3600 s, until an RA arrives.
+let RS_INTERVAL_NS = 4 * S
+let RS_MAX_INTERVAL_NS = 3600 * S
+/// Router Advertisements (IOS `ipv6 nd ra interval` 200 s); never two multicast RAs closer than MIN_DELAY_BETWEEN_RAS (RFC 4861 §10).
+let RA_INTERVAL_NS = 200 * S
+let RA_MIN_GAP_NS = 3 * S
 
 enum AddrOrigin: Sendable {
     case linkLocal, manual, slaac
@@ -39,6 +45,19 @@ struct Ipv6Iface {
     var addrs: [Addr6]
     /// The line state last seen: DAD runs again when it comes back up (spec M9 §5).
     var lineWasUp: Bool
+    /// Hosts: the next RS and the wait after it; nil once an RA arrived.
+    var rsDue: Int? = nil
+    var rsInterval = RS_INTERVAL_NS
+    /// Routers that route: the next multicast RA, and when the last one left.
+    var raDue: Int? = nil
+    var lastRa: Int? = nil
+}
+
+/// A default router learned from an RA (spec M9 §5), valid until `expiresAt`.
+struct DefaultRouter {
+    let addr: UInt128
+    let iface: Interface
+    var expiresAt: Int
 }
 
 /// The IPv6 stack of a host or router (spec M9), idle until an interface turns IPv6 on. Timers are deadlines checked in `expire`,
@@ -46,6 +65,10 @@ struct Ipv6Iface {
 final class Ipv6 {
     unowned let node: IpNode
     var hopLimit = HOP_LIMIT6
+    /// IOS `ipv6 unicast-routing`: forwards, sends RAs, listens to ff02::2 (spec M9 §5).
+    private(set) var routing = false
+    /// Hosts: the routers RAs announced, in order of arrival; the first one still valid is used.
+    private(set) var defaults: [DefaultRouter] = []
     private(set) lazy var neighbors = NeighborCache(stack: self)
     /// Ordered (not a dictionary): listener order must be deterministic.
     private var listeners: [(token: Int, listener: Icmp6Listener)] = []
@@ -58,22 +81,31 @@ final class Ipv6 {
     private var now: Int { node.sim.now }
 
     /// IPv6 on with these settings, or off with nil (spec M9 §2). A new address starts tentative; DAD runs when the line is up.
+    /// SLAAC turned on solicits a router at once (spec M9 §5); turned off, its addresses go.
     func configure(_ name: String, _ config: Ipv6Config?) throws {
         let iface = try node.iface(name)
         guard let config else {
             iface.v6 = nil
             neighbors.forget(iface)
+            defaults.removeAll { $0.iface === iface }
             return
         }
         let manual = try config.address.map { try manualAddress($0, on: iface) }
+        let slaacOn = config.autoconfig && iface.v6?.config.autoconfig == false
         var v6 = iface.v6 ?? Ipv6Iface(config: config, addrs: [Addr6(addr: linkLocal(iface.mac), prefix: 64, origin: .linkLocal)], lineWasUp: iface.lineUp)
         v6.config = config
-        v6.addrs.removeAll { $0.origin == .manual && ($0.addr != manual?.addr || $0.prefix != manual?.prefix) }
+        v6.addrs.removeAll {
+            $0.origin == .manual && ($0.addr != manual?.addr || $0.prefix != manual?.prefix) || $0.origin == .slaac && !config.autoconfig
+        }
         if let manual, !v6.addrs.contains(where: { $0.origin == .manual }) {
             v6.addrs.append(Addr6(addr: manual.addr, prefix: manual.prefix, origin: .manual))
         }
         iface.v6 = v6
         dad(iface)
+        if slaacOn && node is Host {
+            iface.v6!.rsInterval = RS_INTERVAL_NS
+            solicit(iface)
+        }
     }
 
     /// IOS `ipv6 address X/len` rules (spec M9 §2): a unicast global or unique-local address, not the Subnet-Router anycast one,
@@ -104,10 +136,10 @@ final class Ipv6 {
         node.interfaces.contains { i in (i.dot1q?.parent ?? i) === phys && groups(i).contains { multicastMac6($0) == mac } }
     }
 
-    /// The groups an interface has joined: all-nodes, and each address's solicited-node group.
+    /// The groups an interface has joined: all-nodes, all-routers on a router that routes, each address's solicited-node group.
     private func groups(_ i: Interface) -> [UInt128] {
         guard let v6 = i.v6 else { return [] }
-        return [ALL_NODES] + v6.addrs.map { solicitedNode($0.addr) }
+        return [ALL_NODES] + (routing ? [ALL_ROUTERS] : []) + v6.addrs.map { solicitedNode($0.addr) }
     }
 
     /// A packet that reached an interface: for a group it joined or an address in use, else ignored.
@@ -151,10 +183,10 @@ final class Ipv6 {
             case .preferred:
                 guard p.src != 0 else {
                     // Another node's DAD for an address in use here: the answer goes to every node (RFC 4861 §7.2.4).
-                    return sendNdp(.na(target: target, router: false, solicited: false, override: true, tlla: iface.mac), src: target, dst: ALL_NODES, on: iface)
+                    return sendNdp(.na(target: target, router: routing, solicited: false, override: true, tlla: iface.mac), src: target, dst: ALL_NODES, on: iface)
                 }
                 if let slla { neighbors.learn(p.src, slla, on: iface) }
-                sendNdp(.na(target: target, router: false, solicited: true, override: true, tlla: iface.mac), src: target, dst: p.src, on: iface)
+                sendNdp(.na(target: target, router: routing, solicited: true, override: true, tlla: iface.mac), src: target, dst: p.src, on: iface)
             }
         case .na(let target, _, let solicited, let override, let tlla):
             if let k = iface.v6!.addrs.firstIndex(where: { $0.addr == target }) {
@@ -162,8 +194,35 @@ final class Ipv6 {
                 return
             }
             neighbors.advertised(target, tlla, solicited: solicited, override: override, on: iface)
-        case .rs, .ra:
-            break
+        case .rs(let slla):
+            guard routing, usableLinkLocal(iface) != nil else { return }
+            if let slla, p.src != 0 { neighbors.learn(p.src, slla, on: iface) }
+            // Answered at once, or MIN_DELAY_BETWEEN_RAS after the last multicast RA (RFC 4861 §6.2.6), without random delay.
+            if let last = iface.v6!.lastRa, now < last + RA_MIN_GAP_NS {
+                let at = last + RA_MIN_GAP_NS
+                if iface.v6!.raDue.map({ $0 > at }) ?? true { iface.v6!.raDue = arm(at) }
+            } else {
+                advertise(iface)
+            }
+        case .ra(let ra):
+            // Hosts only (spec M9 §5), from a router's link-local address (RFC 4861 §6.1.2).
+            guard node is Host, isLinkLocal6(p.src) else { return }
+            neighbors.learn(p.src, ra.slla, on: iface)
+            if ra.hopLimit != 0 { hopLimit = ra.hopLimit }
+            iface.v6!.rsDue = nil
+            let expiresAt = now + Int(ra.lifetime) * S
+            if let k = defaults.firstIndex(where: { $0.addr == p.src && $0.iface === iface }) {
+                if ra.lifetime > 0 { defaults[k].expiresAt = expiresAt } else { defaults.remove(at: k) }
+            } else if ra.lifetime > 0 {
+                defaults.append(DefaultRouter(addr: p.src, iface: iface, expiresAt: expiresAt))
+            }
+            // SLAAC (RFC 4862 §5.5.3): an autonomous /64 prefix + EUI-64; the lifetimes are not modelled (spec M9 §5).
+            guard iface.v6!.config.autoconfig else { return }
+            for info in ra.prefixes where info.length == 64 && !isLinkLocal6(info.prefix) {
+                let addr = networkOf6(info.prefix, 64) | eui64(iface.mac)
+                if !iface.v6!.addrs.contains(where: { $0.addr == addr }) { iface.v6!.addrs.append(Addr6(addr: addr, prefix: 64, origin: .slaac)) }
+            }
+            dad(iface)
         }
     }
 
@@ -237,9 +296,10 @@ final class Ipv6 {
         return (usable(iface) + node.interfaces.flatMap(usable)).first { $0.origin != .linkLocal }?.addr
     }
 
-    /// The interface and next hop toward `dst`: the longest connected prefix (spec M9 §6).
+    /// The interface and next hop toward `dst` (spec M9 §6): a connected prefix, else the first default router still valid.
     func lookup(_ dst: UInt128) -> NextHop6? {
-        connected(dst).map { NextHop6(iface: $0.iface, nextHop: dst) }
+        if let c = connected(dst) { return NextHop6(iface: c.iface, nextHop: dst) }
+        return defaults.first { $0.expiresAt > now }.map { NextHop6(iface: $0.iface, nextHop: $0.addr) }
     }
 
     /// The interface whose address prefix holds `addr`, longest prefix first; link-local and duplicate addresses do not count.
@@ -252,6 +312,59 @@ final class Ipv6 {
             }
         }
         return best
+    }
+
+    private func usableLinkLocal(_ iface: Interface) -> UInt128? {
+        iface.v6?.addrs.first { $0.origin == .linkLocal && $0.state == .preferred }?.addr
+    }
+
+    /// IOS `ipv6 unicast-routing` on or off (spec M9 §5): on, every IPv6 interface advertises at once (from the scheduler); off,
+    /// a last RA with lifetime 0 where RAs were sent.
+    func setRouting(_ on: Bool) {
+        guard on != routing else { return }
+        routing = on
+        for i in node.interfaces where i.v6 != nil {
+            if on {
+                i.v6!.raDue = arm(now)
+            } else {
+                if i.v6!.lastRa != nil { advertise(i, lifetime: 0) }
+                i.v6!.raDue = nil
+                i.v6!.lastRa = nil
+            }
+        }
+    }
+
+    /// A multicast RA with IOS defaults and the interface's global prefixes; the next one 200 s later (none after lifetime 0).
+    private func advertise(_ iface: Interface, lifetime: UInt16 = RA_LIFETIME_S) {
+        guard iface.lineUp, let ll = usableLinkLocal(iface) else {
+            iface.v6?.raDue = nil
+            return
+        }
+        let prefixes = iface.v6!.addrs.filter { $0.origin == .manual && $0.state != .duplicate }
+            .map { PrefixInfo(prefix: networkOf6($0.addr, $0.prefix), length: $0.prefix) }
+        sendNdp(.ra(RouterAdvert(lifetime: lifetime, slla: iface.mac, prefixes: prefixes)), src: ll, dst: ALL_NODES, on: iface)
+        iface.v6!.lastRa = now
+        iface.v6!.raDue = lifetime == 0 ? nil : arm(now + RA_INTERVAL_NS)
+    }
+
+    /// One RS to all routers; the next one after the current wait, which doubles up to 3600 s (RFC 7559).
+    private func solicit(_ iface: Interface) {
+        guard iface.lineUp, let ll = usableLinkLocal(iface) else {
+            iface.v6?.rsDue = nil
+            return
+        }
+        sendNdp(.rs(slla: iface.mac), src: ll, dst: ALL_ROUTERS, on: iface)
+        iface.v6!.rsDue = arm(now + iface.v6!.rsInterval)
+        iface.v6!.rsInterval = min(2 * iface.v6!.rsInterval, RS_MAX_INTERVAL_NS)
+    }
+
+    /// The link-local address passed DAD: a host looks for routers, a router that routes advertises.
+    private func linkLocalReady(_ iface: Interface) {
+        if node is Host {
+            solicit(iface)
+        } else if routing {
+            advertise(iface)
+        }
     }
 
     /// Starts DAD for every tentative address of `iface` not yet under way, if its line is up. The NS leaves from the scheduler,
@@ -271,6 +384,10 @@ final class Ipv6 {
             iface.v6!.addrs[k].dadDue = nil
             iface.v6!.addrs[k].probed = false
         }
+        iface.v6!.rsDue = nil
+        iface.v6!.rsInterval = RS_INTERVAL_NS
+        iface.v6!.raDue = nil
+        iface.v6!.lastRa = nil
     }
 
     /// The line came back up, or the device was switched on: DAD runs again on every address (spec M9 §5).
@@ -285,13 +402,15 @@ final class Ipv6 {
         for i in node.interfaces where i.v6 != nil { restart(i) }
     }
 
-    /// Power off: what was learned is forgotten, every address waits for DAD again.
+    /// Power off: what was learned is forgotten (SLAAC addresses, neighbours, default routers); every address waits for DAD again.
     func reset() {
         for i in node.interfaces where i.v6 != nil {
+            i.v6!.addrs.removeAll { $0.origin == .slaac }
             rewind(i)
             i.v6!.lineWasUp = false
         }
         neighbors.reset()
+        defaults = []
         hopLimit = HOP_LIMIT6
     }
 
@@ -308,6 +427,7 @@ final class Ipv6 {
     }
 
     private func expire(_ due: Int) {
+        var ready: [Interface] = []
         for i in node.interfaces where i.v6 != nil {
             for k in i.v6!.addrs.indices where i.v6!.addrs[k].dadDue == due {
                 let a = i.v6!.addrs[k]
@@ -319,8 +439,12 @@ final class Ipv6 {
                 } else {
                     i.v6!.addrs[k].dadDue = nil
                     i.v6!.addrs[k].state = .preferred
+                    if a.origin == .linkLocal { ready.append(i) }
                 }
             }
+            if i.v6!.rsDue == due { solicit(i) }
+            if i.v6!.raDue == due { advertise(i) }
         }
+        for i in ready { linkLocalReady(i) }
     }
 }

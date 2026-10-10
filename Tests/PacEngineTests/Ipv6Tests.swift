@@ -24,6 +24,26 @@ private func neighbors(_ n: IpNode) -> [String] {
     n.v6.neighbors.view().map { "\(formatIp6($0.addr)) \($0.mac ?? "-") \($0.state.rawValue)" }
 }
 
+/// H1 (SLAAC unless told otherwise) — R1 Gi0/0 (2001:db8:1::1/64, `ipv6 unicast-routing` unless told otherwise), configured at t = 0.
+/// MACs: H1 eth0 …:01, R1 Gi0/0 …:02.
+private func edge(slaac: Bool = true, routing: Bool = true) throws -> (sim: Sim, h1: Host, r1: Router) {
+    let sim = Sim()
+    let h1 = Host(sim: sim, id: "H1")
+    let r1 = Router(sim: sim, id: "R1", ports: 2)
+    _ = try Link(sim: sim, try h1.iface("eth0"), try r1.iface("Gi0/0"))
+    try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:1::1/64"))
+    r1.v6.setRouting(routing)
+    try h1.v6.configure("eth0", Ipv6Config(autoconfig: slaac))
+    return (sim, h1, r1)
+}
+
+/// When a node sent NDP messages of one type.
+private func ndp(_ sim: Sim, by node: String, _ type: UInt8) -> [Int] {
+    sent(sim, by: node).filter { if case .ndp(let n) = $0.p.payload { n.type == type } else { false } }.map(\.time)
+}
+
+private let ELSEWHERE = UInt128(0x2001_0DB8_0009) << 80 | 1 // 2001:db8:9::1
+
 /// "address state" for every IPv6 address of an interface, in its order.
 private func states(_ n: IpNode, _ iface: String = "eth0") -> [String] {
     ((try? n.iface(iface))?.v6?.addrs ?? []).map { "\(formatIp6($0.addr)) \($0.state)" }
@@ -87,7 +107,7 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         #expect(states(a).last == "2001:db8::1 tentative" && sent(sim, by: "A").isEmpty)
         let link = try Link(sim: sim, try a.iface("eth0"), try b.iface("eth0"))
         sim.run(999 * MS)
-        #expect(sent(sim, by: "A").map(\.time) == [5 * S, 5 * S + 816] && states(a).last == "2001:db8::1 tentative")
+        #expect(ndp(sim, by: "A", ND_NS) == [5 * S, 5 * S + 816] && states(a).last == "2001:db8::1 tentative")
         sim.run(1 * MS)
         #expect(states(a).last == "2001:db8::1 preferred")
         link.up = false
@@ -96,7 +116,7 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         link.up = true
         #expect(states(a).last == "2001:db8::1 tentative")
         sim.run(1 * S)
-        #expect(sent(sim, by: "A").map(\.time).suffix(2) == [8 * S, 8 * S + 816] && states(a).last == "2001:db8::1 preferred")
+        #expect(ndp(sim, by: "A", ND_NS).suffix(2) == [8 * S, 8 * S + 816] && states(a).last == "2001:db8::1 preferred")
     }
 
     @Test func aPowerCycleRunsDadAgain() throws {
@@ -110,7 +130,7 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         a.powered = true
         a.powerOn()
         sim.run(999 * MS)
-        #expect(sent(sim, by: "A").map(\.time).suffix(2) == [3 * S, 3 * S + 816] && states(a).last == "2001:db8::1 tentative")
+        #expect(ndp(sim, by: "A", ND_NS).suffix(2) == [3 * S, 3 * S + 816] && states(a).last == "2001:db8::1 tentative")
         sim.run(1 * MS)
         #expect(states(a).last == "2001:db8::1 preferred")
     }
@@ -146,7 +166,7 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         let (sim, a, _) = try pair()
         let ping = try Ping(node: a, target: "2001:db8::9", options: PingOptions(count: 1))
         sim.run(5 * S)
-        #expect(sent(sim, by: "A").filter { $0.time >= 2 * S }.map(\.time) == [2 * S, 3 * S, 4 * S])
+        #expect(ndp(sim, by: "A", ND_NS).filter { $0 >= 2 * S } == [2 * S, 3 * S, 4 * S])
         #expect(drops(sim, .ndTimeout) == 1)
         #expect(ping.result.lines.contains("From 2001:db8::1 icmp_seq=1 Destination unreachable: Address unreachable"))
         #expect(neighbors(a).isEmpty)
@@ -192,6 +212,88 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
         expectError("Ping to link-local or multicast addresses is not supported") { _ = try Ping(node: a, target: "fe80::1") }
         expectError("Ping to link-local or multicast addresses is not supported") { _ = try Ping(node: a, target: "ff02::1") }
         expectError("Invalid IPv6 address: \"2001:db8::g\"") { _ = try Ping(node: a, target: "2001:db8::g") }
+    }
+
+    @Test func theRouterAdvertisesAfterDadAndTheHostAutoconfigures() throws {
+        let (sim, h1, r1) = try edge()
+        sim.run(1 * S)
+        #expect(ndp(sim, by: "R1", ND_RA) == [1 * S] && ndp(sim, by: "H1", ND_RS) == [1 * S])
+        let ra = try #require(sent(sim, by: "R1").last)
+        #expect(formatIp6(ra.p.src) == "fe80::ff:fe00:2" && formatIp6(ra.p.dst) == "ff02::1" && ra.p.hopLimit == 255)
+        #expect(ra.p.payload == sealedLike(ra.p)(.ndp(NdpMessage(body: .ra(RouterAdvert(
+            slla: try r1.iface("Gi0/0").mac, prefixes: [PrefixInfo(prefix: try parseIp6("2001:db8:1::"), length: 64)]))))))
+        let rs = try #require(sent(sim, by: "H1").last)
+        #expect(formatIp6(rs.p.src) == "fe80::ff:fe00:1" && formatIp6(rs.p.dst) == "ff02::2" && rs.dst == "33:33:00:00:00:02")
+        sim.run(1 * MS) // the RA has arrived
+        #expect(states(h1) == ["fe80::ff:fe00:1 preferred", "2001:db8:1::ff:fe00:1 tentative"])
+        #expect(h1.v6.lookup(ELSEWHERE).map { "\($0.iface.name) \(formatIp6($0.nextHop))" } == "eth0 fe80::ff:fe00:2")
+        #expect(neighbors(h1) == ["fe80::ff:fe00:2 02:00:00:00:00:02 STALE"]) // learned from the RA
+        sim.run(1 * S)
+        #expect(states(h1).last == "2001:db8:1::ff:fe00:1 preferred")
+        sim.run(10 * S)
+        #expect(ndp(sim, by: "R1", ND_RA) == [1 * S, 4 * S]) // the RS waited out MIN_DELAY_BETWEEN_RAS
+        #expect(ndp(sim, by: "H1", ND_RS) == [1 * S]) // the RA stopped the solicitations
+        sim.run(200 * S)
+        #expect(ndp(sim, by: "R1", ND_RA) == [1 * S, 4 * S, 204 * S])
+    }
+
+    @Test func solicitationsBackOffUntilARouterAdvertises() throws {
+        let (sim, h1, r1) = try edge(routing: false)
+        sim.run(70 * S)
+        #expect(ndp(sim, by: "H1", ND_RS) == [1, 5, 13, 29, 61].map { $0 * S })
+        #expect(ndp(sim, by: "R1", ND_RA).isEmpty && h1.v6.lookup(ELSEWHERE) == nil)
+        r1.v6.setRouting(true)
+        sim.run(100 * S)
+        #expect(ndp(sim, by: "R1", ND_RA) == [70 * S] && ndp(sim, by: "H1", ND_RS).count == 5)
+        #expect(states(h1).last == "2001:db8:1::ff:fe00:1 preferred")
+        // Without a router the interval stops doubling at 3600 s.
+        let (alone, _, _) = try edge(routing: false)
+        alone.run(8000 * S)
+        #expect(ndp(alone, by: "H1", ND_RS) == [1, 5, 13, 29, 61, 125, 253, 509, 1021, 2045, 4093, 7693].map { $0 * S })
+    }
+
+    @Test func theDefaultRouterLastsTheRouterLifetimeAndAFinalAdvertisementRemovesIt() throws {
+        let (sim, h1, r1) = try edge()
+        sim.run(10 * S)
+        #expect(h1.v6.lookup(ELSEWHERE) != nil)
+        r1.v6.setRouting(false) // 10 s: a last RA with lifetime 0
+        sim.run(1 * MS)
+        #expect(h1.v6.lookup(ELSEWHERE) == nil && ndp(sim, by: "R1", ND_RA).last == 10 * S)
+        r1.v6.setRouting(true) // 10.001 s: advertises at once
+        sim.run(10 * S)
+        #expect(h1.v6.lookup(ELSEWHERE) != nil && ndp(sim, by: "R1", ND_RA).last == 10 * S + 1 * MS)
+        r1.powered = false
+        r1.reset()
+        sim.run(1_789_999 * MS) // 1810.000 s: the RA of 10.001 s still counts
+        #expect(h1.v6.lookup(ELSEWHERE) != nil)
+        sim.run(2 * MS)
+        #expect(h1.v6.lookup(ELSEWHERE) == nil)
+        #expect(states(h1).last == "2001:db8:1::ff:fe00:1 preferred") // SLAAC addresses do not expire with the router
+    }
+
+    @Test func withoutSlaacTheHostLearnsOnlyTheDefaultRouterAndTurningItOnSolicitsAtOnce() throws {
+        let (sim, h1, _) = try edge(slaac: false)
+        sim.run(10 * S)
+        #expect(states(h1) == ["fe80::ff:fe00:1 preferred"] && h1.v6.lookup(ELSEWHERE) != nil)
+        try h1.v6.configure("eth0", Ipv6Config(autoconfig: true))
+        sim.run(2 * S)
+        #expect(ndp(sim, by: "H1", ND_RS) == [1 * S, 10 * S] && ndp(sim, by: "R1", ND_RA).count == 3)
+        #expect(states(h1).last == "2001:db8:1::ff:fe00:1 preferred")
+        try h1.v6.configure("eth0", Ipv6Config(autoconfig: false))
+        #expect(states(h1) == ["fe80::ff:fe00:1 preferred"])
+    }
+
+    @Test func routersNeitherAutoconfigureNorLearnDefaultRoutes() throws {
+        let sim = Sim()
+        let r1 = Router(sim: sim, id: "R1", ports: 1)
+        let r2 = Router(sim: sim, id: "R2", ports: 1)
+        _ = try Link(sim: sim, try r1.iface("Gi0/0"), try r2.iface("Gi0/0"))
+        try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:12::1/64"))
+        try r2.v6.configure("Gi0/0", Ipv6Config(autoconfig: true)) // the runtime refuses this; the engine ignores RAs anyway
+        for r in [r1, r2] { r.v6.setRouting(true) }
+        sim.run(5 * S)
+        #expect(ndp(sim, by: "R1", ND_RA).first == 1 * S)
+        #expect(states(r2, "Gi0/0") == ["fe80::ff:fe00:2 preferred"] && r2.v6.lookup(ELSEWHERE) == nil)
     }
 }
 
