@@ -2,6 +2,24 @@
 /// dead interval.
 let OSPF_HELLO_NS = OSPF_HELLO_S * S
 let OSPF_DEAD_NS = OSPF_DEAD_S * S
+let OSPF_RXMT_NS = 5 * S
+/// LSRefreshTime: own LSAs are originated again this often.
+let OSPF_REFRESH_NS = 1800 * S
+
+/// > 0 when `a` is the more recent instance, < 0 when `b` is, 0 when they are the same (RFC 2328 §13.1).
+func newer(_ a: LsaHeader, _ b: LsaHeader) -> Int {
+    if a.seq != b.seq { return a.seq > b.seq ? 1 : -1 }
+    if a.checksum != b.checksum { return a.checksum > b.checksum ? 1 : -1 }
+    if (a.age >= OSPF_MAX_AGE) != (b.age >= OSPF_MAX_AGE) { return a.age >= OSPF_MAX_AGE ? 1 : -1 }
+    if abs(a.age - b.age) > 900 { return a.age < b.age ? 1 : -1 } // MaxAgeDiff, 15 minutes
+    return 0
+}
+
+/// One LSA of the database; its age grows from the time it was installed.
+struct LsdbEntry {
+    var lsa: Lsa
+    var installedAt: Int
+}
 
 /// IOS cost (spec M8 §4): reference bandwidth 100 Mb/s over the cable's bandwidth, at least 1.
 func ospfCost(_ bandwidthBps: Double) -> Int {
@@ -32,6 +50,16 @@ final class OspfNeighbor {
     var bdr: UInt32 = 0
     var state = OspfNbrState.down
     var deadDue: Int?
+    /// Database exchange (RFC 2328 §10.6): this router's role, the DD sequence number, the last DBD sent and its retransmission.
+    var master = false
+    var ddSeq: UInt32 = 0
+    var lastDbd: OspfDbd?
+    var dbdDue: Int?
+    /// LSAs still to ask for (Loading), and those flooded to it and not acknowledged yet.
+    var requests: [LsaKey] = []
+    var requestDue: Int?
+    var rxmt: [LsaKey] = []
+    var rxmtDue: Int?
 
     init(id: UInt32, addr: UInt32, priority: Int) {
         self.id = id
@@ -76,6 +104,11 @@ final class Ospf {
     private(set) var interfaces: [OspfInterface] = []
     private var running = false
     private var startDue: Int?
+    /// The link-state database, sorted by key.
+    private(set) var lsdb: [LsdbEntry] = []
+    private var originateDue: Int?
+    /// Own LSAs that came back newer than ours (after a restart): the next origination goes past them (RFC 2328 §13.4).
+    private var stale: Set<LsaKey> = []
 
     init(node: IpNode, config: OspfConfig) {
         self.node = node
@@ -97,6 +130,9 @@ final class Ospf {
         running = false
         startDue = nil
         interfaces = []
+        lsdb = []
+        originateDue = nil
+        stale = []
     }
 
     /// New settings; a new router ID waits for the process to restart (spec M8 §4).
@@ -137,13 +173,22 @@ final class Ospf {
         }
         let order = node.interfaces
         interfaces.sort { a, b in (order.firstIndex { $0 === a.iface } ?? 0) < (order.firstIndex { $0 === b.iface } ?? 0) }
+        originate()
     }
 
     /// RFC 2328 §8.2: only from a neighbour on the subnet of an interface running OSPF; AllDRouters only reaches the DR and the BDR.
     func receive(_ p: Ipv4Packet, _ o: OspfPacket, on iface: Interface) {
         guard running, let oi = interfaces.first(where: { $0.iface === iface }), o.routerId != routerId, inSubnet(p.src, oi.addr, oi.prefix),
               p.dst != OSPF_ALL_DROUTERS || oi.state == .dr || oi.state == .backup else { return }
-        if case .hello(let h) = o.body { hello(h, from: o.routerId, addr: p.src, on: oi) }
+        if case .hello(let h) = o.body { return hello(h, from: o.routerId, addr: p.src, on: oi) }
+        guard let n = oi.neighbors.first(where: { $0.id == o.routerId }) else { return }
+        switch o.body {
+        case .dbd(let d): dbd(d, from: n, on: oi)
+        case .request(let keys): request(keys, from: n, on: oi)
+        case .update(let lsas): update(lsas, from: n, on: oi)
+        case .ack(let headers): ack(headers, from: n)
+        case .hello: break
+        }
     }
 
     private func cost(_ i: Interface) -> Int {
@@ -215,9 +260,15 @@ final class Ospf {
         oi.config.pointToPoint || [oi.addr, n.addr].contains(oi.dr) || [oi.addr, n.addr].contains(oi.bdr)
     }
 
-    /// ExStart (RFC 2328 §10.3): the database exchange begins.
+    /// ExStart (RFC 2328 §10.3): claim to be master with a new DD sequence number (the time in ms, spec M8 §4) until the
+    /// neighbour answers.
     private func startExchange(_ n: OspfNeighbor, on oi: OspfInterface) {
         setState(n, on: oi, .exStart)
+        n.requests = []
+        n.rxmt = []
+        n.master = true
+        n.ddSeq = UInt32(now / MS)
+        sendDbd(OspfDbd(initial: true, more: true, master: true, seq: n.ddSeq, headers: []), to: n, on: oi)
     }
 
     /// NeighborChange: the election runs again once the wait is over.
@@ -267,6 +318,7 @@ final class Ospf {
                 setState(n, on: oi, .twoWay)
             }
         }
+        originate()
     }
 
     private func setState(_ oi: OspfInterface, _ s: OspfIfState) {
@@ -275,16 +327,287 @@ final class Ospf {
         oi.state = s
     }
 
-    /// Every change is a state event with protocol OSPF (spec M8 §4).
+    /// Every change is a state event with protocol OSPF (spec M8 §4). Below ExStart the exchange is forgotten; becoming or
+    /// ceasing to be Full changes this router's LSAs.
     private func setState(_ n: OspfNeighbor, on oi: OspfInterface, _ s: OspfNbrState) {
         guard n.state != s else { return }
         log(oi, "vicino \(formatIp(n.id)): \(n.state.label) → \(s.label)")
+        let wasFull = n.state == .full
         n.state = s
         if s == .down { n.deadDue = nil }
+        if s < .exStart {
+            n.requests = []
+            n.rxmt = []
+            n.lastDbd = nil
+            n.dbdDue = nil
+            n.requestDue = nil
+            n.rxmtDue = nil
+        }
+        if wasFull != (s == .full) { originate() }
     }
 
     private func log(_ oi: OspfInterface, _ note: String) {
         node.sim.emit(.state, node: node.id, iface: oi.iface.name, note: note, proto: .ospf)
+    }
+
+    // MARK: Database exchange (RFC 2328 §10.6–10.8)
+
+    private func sendDbd(_ d: OspfDbd, to n: OspfNeighbor, on oi: OspfInterface) {
+        n.lastDbd = d
+        send(.dbd(d), on: oi, to: n.addr)
+        // The master repeats its DBD until it is answered; in ExStart both sides are master.
+        n.dbdDue = n.master ? arm(now + OSPF_RXMT_NS) : nil
+    }
+
+    /// The whole database summary goes in one DBD (spec M8 §4); the M bit keeps its RFC meaning.
+    private func dbd(_ d: OspfDbd, from n: OspfNeighbor, on oi: OspfInterface) {
+        if n.state == .initial { twoWayReceived(n, on: oi) }
+        switch n.state {
+        case .exStart:
+            if d.initial && d.more && d.master && d.headers.isEmpty && n.id > routerId {
+                // The neighbour is master: answer with our summary under its sequence number.
+                n.master = false
+                n.ddSeq = d.seq
+                setState(n, on: oi, .exchange)
+                sendDbd(OspfDbd(initial: false, more: false, master: false, seq: n.ddSeq, headers: summary()), to: n, on: oi)
+            } else if !d.initial && !d.master && d.seq == n.ddSeq && n.id < routerId {
+                // The slave answered: we are master.
+                setState(n, on: oi, .exchange)
+                accept(d.headers, for: n)
+                n.ddSeq &+= 1
+                sendDbd(OspfDbd(initial: false, more: false, master: true, seq: n.ddSeq, headers: summary()), to: n, on: oi)
+            }
+        case .exchange where n.master:
+            guard !d.master, !d.initial, d.seq == n.ddSeq else {
+                if d.master || d.initial || d.seq != n.ddSeq &- 1 { startExchange(n, on: oi) } // SeqNumberMismatch; else a duplicate
+                return
+            }
+            accept(d.headers, for: n)
+            if !d.more && n.lastDbd?.more == false {
+                exchangeDone(n, on: oi)
+            } else {
+                n.ddSeq &+= 1
+                sendDbd(OspfDbd(initial: false, more: false, master: true, seq: n.ddSeq, headers: []), to: n, on: oi)
+            }
+        case .exchange:
+            if d.master && d.seq == n.ddSeq, let last = n.lastDbd { return send(.dbd(last), on: oi, to: n.addr) } // a duplicate
+            guard d.master, !d.initial, d.seq == n.ddSeq &+ 1 else { return startExchange(n, on: oi) }
+            n.ddSeq = d.seq
+            accept(d.headers, for: n)
+            sendDbd(OspfDbd(initial: false, more: false, master: false, seq: n.ddSeq, headers: []), to: n, on: oi)
+            if !d.more { exchangeDone(n, on: oi) }
+        case .loading, .full:
+            if !n.master && d.master && d.seq == n.ddSeq, let last = n.lastDbd {
+                send(.dbd(last), on: oi, to: n.addr) // the slave answers a repeated DBD again
+            } else if d.initial || d.seq != n.ddSeq {
+                startExchange(n, on: oi)
+            }
+        default:
+            break
+        }
+    }
+
+    /// The database as headers with their current age.
+    private func summary() -> [LsaHeader] {
+        lsdb.map(header)
+    }
+
+    /// Headers the neighbour has and we lack, or have older: to request.
+    private func accept(_ headers: [LsaHeader], for n: OspfNeighbor) {
+        for h in headers where !n.requests.contains(h.key) {
+            if let e = entry(h.key), newer(h, header(e)) <= 0 { continue }
+            n.requests.append(h.key)
+        }
+    }
+
+    private func exchangeDone(_ n: OspfNeighbor, on oi: OspfInterface) {
+        n.dbdDue = nil
+        if n.requests.isEmpty { return setState(n, on: oi, .full) }
+        setState(n, on: oi, .loading)
+        sendRequest(n, on: oi)
+    }
+
+    private func sendRequest(_ n: OspfNeighbor, on oi: OspfInterface) {
+        send(.request(n.requests), on: oi, to: n.addr)
+        n.requestDue = arm(now + OSPF_RXMT_NS)
+    }
+
+    /// An LSR: the LSAs asked for go back in one LSU; one we do not have restarts the exchange (BadLSReq).
+    private func request(_ keys: [LsaKey], from n: OspfNeighbor, on oi: OspfInterface) {
+        guard n.state >= .exchange else { return }
+        let found = keys.compactMap(entry)
+        guard found.count == keys.count else { return startExchange(n, on: oi) }
+        send(.update(found.map(outgoing)), on: oi, to: n.addr)
+    }
+
+    // MARK: Flooding (RFC 2328 §13)
+
+    /// Newer instances are installed and flooded on; duplicates acknowledge our own floods; for older ones our copy goes back.
+    /// Every LSA received is acknowledged at once (spec M8 §4).
+    private func update(_ lsas: [Lsa], from n: OspfNeighbor, on oi: OspfInterface) {
+        guard n.state >= .exchange else { return }
+        var acks: [LsaHeader] = []
+        for l in lsas {
+            let key = l.header.key
+            let mine = entry(key)
+            let cmp = mine.map { newer(l.header, header($0)) } ?? 1
+            let exchanging = interfaces.contains { $0.neighbors.contains { $0.state == .exchange || $0.state == .loading } }
+            if l.header.age >= OSPF_MAX_AGE && mine == nil && !exchanging {
+                acks.append(l.header)
+            } else if cmp > 0 {
+                install(l, from: n, on: oi)
+                acks.append(l.header)
+                if l.header.adv == routerId {
+                    stale.insert(key)
+                    originate()
+                }
+            } else if cmp == 0 {
+                n.rxmt.removeAll { $0 == key } // an implied acknowledgement
+                acks.append(l.header)
+            } else if let mine {
+                send(.update([outgoing(mine)]), on: oi, to: n.addr)
+            }
+            if cmp >= 0 { n.requests.removeAll { $0 == key } }
+        }
+        if !acks.isEmpty { send(.ack(acks), on: oi, to: oi.config.pointToPoint || oi.state == .dr || oi.state == .backup ? OSPF_ALL_ROUTERS : OSPF_ALL_DROUTERS) }
+        if n.state == .loading && n.requests.isEmpty {
+            n.requestDue = nil
+            setState(n, on: oi, .full)
+        }
+    }
+
+    private func ack(_ headers: [LsaHeader], from n: OspfNeighbor) {
+        for h in headers {
+            if let e = entry(h.key), newer(h, header(e)) == 0 { n.rxmt.removeAll { $0 == h.key } }
+        }
+        if n.rxmt.isEmpty { n.rxmtDue = nil }
+    }
+
+    /// RFC 2328 §13.3: onto the retransmission list of every adjacent neighbour but the sender, then out of each interface that
+    /// got one, unless it came in there from the DR or the BDR, or this router is the BDR there.
+    private func flood(_ l: Lsa, from sender: OspfNeighbor?, on inIf: OspfInterface?) {
+        for oi in interfaces {
+            var added = false
+            for n in oi.neighbors where n.state >= .exchange && n !== sender {
+                if !n.rxmt.contains(l.header.key) { n.rxmt.append(l.header.key) }
+                if n.rxmtDue == nil { n.rxmtDue = arm(now + OSPF_RXMT_NS) }
+                added = true
+            }
+            guard added else { continue }
+            if oi === inIf, let sender, sender.addr == oi.dr || sender.addr == oi.bdr || oi.state == .backup { continue }
+            send(.update([l]), on: oi, to: oi.config.pointToPoint || oi.state == .dr || oi.state == .backup ? OSPF_ALL_ROUTERS : OSPF_ALL_DROUTERS)
+        }
+    }
+
+    /// Every RxmtInterval, what a neighbour has not acknowledged goes again, straight to it.
+    private func retransmit(_ n: OspfNeighbor, on oi: OspfInterface) {
+        n.rxmt = n.rxmt.filter { entry($0) != nil }
+        guard !n.rxmt.isEmpty else {
+            n.rxmtDue = nil
+            return
+        }
+        send(.update(n.rxmt.compactMap(entry).map(outgoing)), on: oi, to: n.addr)
+        n.rxmtDue = arm(now + OSPF_RXMT_NS)
+    }
+
+    /// RFC 2328 §13 (c, b, d): the old instance leaves the retransmission lists, the new one is flooded and stored; own LSAs
+    /// are refreshed at LSRefreshTime, the others leave at MaxAge.
+    private func install(_ l: Lsa, from sender: OspfNeighbor?, on inIf: OspfInterface?) {
+        for oi in interfaces {
+            for n in oi.neighbors { n.rxmt.removeAll { $0 == l.header.key } }
+        }
+        flood(l, from: sender, on: inIf)
+        lsdb.removeAll { $0.lsa.header.key == l.header.key }
+        // ponytail: a MaxAge LSA leaves the database once flooded, not once acknowledged; its retransmissions stop there
+        guard l.header.age < OSPF_MAX_AGE else { return }
+        lsdb.insert(LsdbEntry(lsa: l, installedAt: now), at: lsdb.firstIndex { $0.lsa.header.key > l.header.key } ?? lsdb.endIndex)
+        _ = arm(now + (l.header.adv == routerId ? OSPF_REFRESH_NS : (OSPF_MAX_AGE - l.header.age) * S))
+    }
+
+    // MARK: Origination (RFC 2328 §12.4)
+
+    /// Own LSAs are brought up to date once per instant, after everything that happened in it.
+    private func originate() {
+        if running, startDue == nil, originateDue == nil { originateDue = arm(now) }
+    }
+
+    private func originateNow() {
+        put(LsaKey(type: 1, id: routerId, adv: routerId), .router(routerLinks()))
+        for e in lsdb where e.lsa.header.type == 2 && e.lsa.header.adv == routerId && networkBody(e.lsa.header.id) == nil {
+            put(e.lsa.header.key, nil)
+        }
+        for oi in interfaces {
+            if let body = networkBody(oi.addr) { put(LsaKey(type: 2, id: oi.addr, adv: routerId), body) }
+        }
+    }
+
+    /// Point-to-point: the Full neighbour and the subnet as a stub. Broadcast: a transit link once Full with the DR (or DR with a
+    /// Full neighbour), else the subnet as a stub. Passive interfaces with the line up: their subnet as a stub. In the router's order.
+    private func routerLinks() -> [RouterLink] {
+        var links: [RouterLink] = []
+        for i in node.interfaces {
+            if let oi = interfaces.first(where: { $0.iface === i }) {
+                let stub = RouterLink(type: LINK_STUB, id: networkOf(oi.addr, oi.prefix), data: prefixMask(oi.prefix), metric: oi.cost)
+                if oi.config.pointToPoint {
+                    if let n = oi.neighbors.first(where: { $0.state == .full }) {
+                        links.append(RouterLink(type: LINK_P2P, id: n.id, data: oi.addr, metric: oi.cost))
+                    }
+                    links.append(stub)
+                } else if oi.state != .waiting && oi.neighbors.contains(where: { $0.state == .full && (oi.state == .dr || $0.addr == oi.dr) }) {
+                    links.append(RouterLink(type: LINK_TRANSIT, id: oi.dr, data: oi.addr, metric: oi.cost))
+                } else {
+                    links.append(stub)
+                }
+            } else if config.interfaces.contains(where: { $0.name == i.name && $0.passive }), let a = i.ipv4, i.lineUp {
+                links.append(RouterLink(type: LINK_STUB, id: networkOf(a.addr, a.prefix), data: prefixMask(a.prefix), metric: cost(i)))
+            }
+        }
+        return links
+    }
+
+    /// The network-LSA for the network where `addr` is this router's address: only as DR with at least one Full neighbour.
+    private func networkBody(_ addr: UInt32) -> LsaBody? {
+        guard let oi = interfaces.first(where: { $0.addr == addr && $0.state == .dr }) else { return nil }
+        let full = oi.neighbors.filter { $0.state == .full }.map(\.id)
+        return full.isEmpty ? nil : .network(prefix: oi.prefix, routers: [routerId] + full)
+    }
+
+    /// Originates `body` under `key` when it differs from the current instance (or a newer copy of ours came back), with the
+    /// next sequence number; nil flushes the key (premature aging, RFC 2328 §14.1).
+    private func put(_ key: LsaKey, _ body: LsaBody?) {
+        let old = entry(key)
+        guard let body else {
+            guard var l = old?.lsa else { return }
+            l.header.age = OSPF_MAX_AGE
+            return install(l, from: nil, on: nil)
+        }
+        guard old?.lsa.body != body || stale.contains(key) else { return }
+        stale.remove(key)
+        install(makeLsa(type: key.type, id: key.id, adv: routerId, seq: old.map { $0.lsa.header.seq &+ 1 } ?? OSPF_INITIAL_SEQ, body: body),
+                from: nil, on: nil)
+    }
+
+    // MARK: Database
+
+    func age(_ e: LsdbEntry) -> Int {
+        min(OSPF_MAX_AGE, e.lsa.header.age + (now - e.installedAt) / S)
+    }
+
+    private func entry(_ key: LsaKey) -> LsdbEntry? {
+        lsdb.first { $0.lsa.header.key == key }
+    }
+
+    private func header(_ e: LsdbEntry) -> LsaHeader {
+        var h = e.lsa.header
+        h.age = age(e)
+        return h
+    }
+
+    /// The instance as it leaves: one second older (InfTransDelay).
+    private func outgoing(_ e: LsdbEntry) -> Lsa {
+        var l = e.lsa
+        l.header.age = min(OSPF_MAX_AGE, age(e) + 1)
+        return l
     }
 
     // MARK: Packets
@@ -316,6 +639,10 @@ final class Ospf {
             startDue = nil
             boot()
         }
+        if originateDue == due {
+            originateDue = nil
+            originateNow()
+        }
         for oi in interfaces {
             // The election first, so a Hello due at the same instant already carries its result.
             if oi.waitDue == due {
@@ -326,7 +653,24 @@ final class Ospf {
                 oi.helloDue = arm(due + OSPF_HELLO_NS)
                 sendHello(oi)
             }
-            for n in oi.neighbors where n.deadDue == due { neighborDown(n, on: oi) }
+            for n in oi.neighbors {
+                if n.deadDue == due { neighborDown(n, on: oi) }
+                if n.dbdDue == due, let d = n.lastDbd {
+                    send(.dbd(d), on: oi, to: n.addr)
+                    n.dbdDue = arm(due + OSPF_RXMT_NS)
+                }
+                if n.requestDue == due { sendRequest(n, on: oi) }
+                if n.rxmtDue == due { retransmit(n, on: oi) }
+            }
+        }
+        for e in lsdb {
+            let h = e.lsa.header
+            if h.adv == routerId && e.installedAt + OSPF_REFRESH_NS == due {
+                stale.insert(h.key) // LSRefreshTime: same contents, next sequence number
+                originate()
+            } else if h.adv != routerId && e.installedAt + (OSPF_MAX_AGE - h.age) * S == due {
+                lsdb.removeAll { $0.lsa.header.key == h.key }
+            }
         }
     }
 }

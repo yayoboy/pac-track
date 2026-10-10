@@ -45,6 +45,41 @@ private func hub(_ count: Int) throws -> (sim: Sim, routers: [Router]) {
     return (sim, routers)
 }
 
+/// The spec's lab (M8 §1) with OSPF: R1–R2 10.0.12.0/30 (Gi0/1–Gi0/1), R1–R3 10.0.13.0/30 (Gi0/2–Gi0/1), R2–R3 10.0.23.0/30
+/// (Gi0/2–Gi0/2), H1 on R1 Gi0/0, H2 on R2 Gi0/0; OSPF everywhere from t = 0, the LANs passive. Router IDs: R1 192.168.1.1,
+/// R2 192.168.2.1, R3 10.0.23.2.
+private func triangle() throws -> (sim: Sim, h1: Host, h2: Host, r1: Router, r2: Router, r3: Router, l12: Link) {
+    let sim = Sim()
+    let h1 = Host(sim: sim, id: "H1")
+    let h2 = Host(sim: sim, id: "H2")
+    let r1 = Router(sim: sim, id: "R1", ports: 3)
+    let r2 = Router(sim: sim, id: "R2", ports: 3)
+    let r3 = Router(sim: sim, id: "R3", ports: 3)
+    _ = try Link(sim: sim, try h1.iface("eth0"), try r1.iface("Gi0/0"))
+    _ = try Link(sim: sim, try h2.iface("eth0"), try r2.iface("Gi0/0"))
+    let l12 = try Link(sim: sim, try r1.iface("Gi0/1"), try r2.iface("Gi0/1"))
+    _ = try Link(sim: sim, try r1.iface("Gi0/2"), try r3.iface("Gi0/1"))
+    _ = try Link(sim: sim, try r2.iface("Gi0/2"), try r3.iface("Gi0/2"))
+    for (r, i, cidr) in [(r1, "Gi0/0", "192.168.1.1/24"), (r1, "Gi0/1", "10.0.12.1/30"), (r1, "Gi0/2", "10.0.13.1/30"),
+                         (r2, "Gi0/0", "192.168.2.1/24"), (r2, "Gi0/1", "10.0.12.2/30"), (r2, "Gi0/2", "10.0.23.1/30"),
+                         (r3, "Gi0/1", "10.0.13.2/30"), (r3, "Gi0/2", "10.0.23.2/30")] {
+        try r.setIp(i, cidr)
+    }
+    try h1.setIp("eth0", "192.168.1.10/24")
+    try h1.setGateway("192.168.1.1")
+    try h2.setIp("eth0", "192.168.2.10/24")
+    try h2.setGateway("192.168.2.1")
+    try ospf(r1, passive: ["Gi0/0"])
+    try ospf(r2, passive: ["Gi0/0"])
+    try ospf(r3)
+    return (sim, h1, h2, r1, r2, r3, l12)
+}
+
+/// `r`'s database: "<type> <id> <adv> <seq>".
+private func lsdb(_ r: Router) -> [String] {
+    r.ospf?.lsdb.map { "\($0.lsa.header.type) \(formatIp($0.lsa.header.id)) \(formatIp($0.lsa.header.adv)) \(String(UInt32(bitPattern: $0.lsa.header.seq), radix: 16))" } ?? []
+}
+
 private struct OspfTx: Equatable {
     let time: Int
     let iface: String
@@ -189,5 +224,77 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
         try r1.addSubinterface("Gi0/0.10")
         try r1.configureOspf(OspfConfig(interfaces: [OspfInterfaceConfig(name: "Gi0/0.10")]))
         expectError("Gi0/0.10 takes part in OSPF") { try r1.removeSubinterface("Gi0/0.10") }
+    }
+
+    @Test func theAdjacencyReachesFullMillisecondsAfterTheElection() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        sim.run(40 * S + 10 * MS)
+        let steps = sim.log.all.filter { $0.node == "R1" && $0.proto == .ospf && ($0.note ?? "").hasPrefix("vicino") }
+        #expect(steps.map { $0.note! } == ["Down → Init", "Init → 2-Way", "2-Way → ExStart", "ExStart → Exchange", "Exchange → Loading", "Loading → Full"]
+            .map { "vicino 192.168.2.1: \($0)" })
+        #expect(steps.last!.time > 40 * S)
+        #expect(oi(r1, "Gi0/1")?.neighbors.first?.master == false && oi(r2, "Gi0/1")?.neighbors.first?.master == true) // R2: higher router ID
+        let dbds = ospfTx(sim, "R2").compactMap { if case .dbd(let d) = $0.packet.body { "\(d.seq)\(d.initial ? " I" : "")\(d.master ? " MS" : "")" } else { nil } }
+        #expect(dbds == ["40000 I MS", "40001 MS"])
+    }
+
+    @Test func bothRoutersEndWithTheSameDatabase() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        sim.run(46 * S)
+        #expect(lsdb(r1) == ["1 192.168.1.1 192.168.1.1 80000002", "1 192.168.2.1 192.168.2.1 80000002", "2 10.0.12.2 192.168.2.1 80000001"])
+        #expect(lsdb(r2) == lsdb(r1))
+        let entries = r1.ospf!.lsdb
+        #expect(entries[1].lsa.body == .router([
+            RouterLink(type: LINK_STUB, id: 0xC0A8_0200, data: 0xFFFF_FF00, metric: 1),
+            RouterLink(type: LINK_TRANSIT, id: 0x0A00_0C02, data: 0x0A00_0C02, metric: 1),
+        ]))
+        #expect(entries[2].lsa.body == .network(prefix: 30, routers: [0xC0A8_0201, 0xC0A8_0101]))
+        for e in entries { #expect(fletcher(Array(serialize(e.lsa).dropFirst(2)), at: 14) == e.lsa.header.checksum) }
+    }
+
+    @Test func aLostUpdateIsRetransmittedAfter5Seconds() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        sim.run(46 * S)
+        let l12 = try #require(try r1.iface("Gi0/1").link)
+        try l12.update(LinkOptions(lossRate: 1))
+        try #require(try r2.iface("Gi0/0").link).update(LinkOptions(bandwidthBps: 10e6)) // R2's LAN stub now costs 10
+        sim.run(1 * S)
+        try l12.update(LinkOptions())
+        sim.run(4 * S - MS) // t ≈ 50.999 s
+        #expect(lsdb(r1).contains("1 192.168.2.1 192.168.2.1 80000002"))
+        sim.run(2 * MS)
+        #expect(lsdb(r1).contains("1 192.168.2.1 192.168.2.1 80000003"))
+        #expect(ospfTx(sim, "R2").contains { $0.time == 51 * S && $0.dst == "10.0.12.1" && $0.packet.body.type == 4 }) // a unicast LS Update
+    }
+
+    @Test func aRouterThatRestartsJumpsPastItsOldSequenceNumbers() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        sim.run(50 * S)
+        r2.powered = false
+        r2.reset()
+        sim.run(10 * S) // t = 60 s
+        r2.powered = true
+        r2.powerOn()
+        sim.run(46 * S) // waits 40 s again, then exchanges
+        #expect(lsdb(r1).contains("1 192.168.2.1 192.168.2.1 80000003"))
+        #expect(lsdb(r2).contains("1 192.168.2.1 192.168.2.1 80000003"))
+    }
+
+    @Test func ownLsasAreRefreshedEvery1800Seconds() throws {
+        let (sim, _, _, r1, r2) = try pair()
+        sim.run(1839 * S)
+        #expect(lsdb(r2).contains("1 192.168.1.1 192.168.1.1 80000002"))
+        sim.run(2 * S) // R1's router-LSA was originated a few µs after 40 s
+        #expect(lsdb(r1).contains("1 192.168.1.1 192.168.1.1 80000003"))
+        #expect(lsdb(r2).contains("1 192.168.1.1 192.168.1.1 80000003"))
+    }
+
+    @Test func aDrThatLosesItsLastNeighbourFlushesItsNetworkLsa() throws {
+        let (sim, _, _, r1, _, r3, l12) = try triangle()
+        sim.run(50 * S)
+        #expect(lsdb(r1).contains { $0.hasPrefix("2 10.0.12.2 192.168.2.1") })
+        l12.up = false
+        sim.run(10 * MS)
+        #expect(!lsdb(r1).contains { $0.hasPrefix("2 10.0.12.2") } && !lsdb(r3).contains { $0.hasPrefix("2 10.0.12.2") })
     }
 }
