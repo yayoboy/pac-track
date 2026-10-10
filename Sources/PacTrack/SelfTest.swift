@@ -86,6 +86,7 @@ enum SelfTest {
         failures += await stickScenario(output: output)
         failures += await stpScenario(output: output)
         failures += await ripScenario(output: output)
+        failures += await ospfScenario(output: output)
         return failures
     }
 
@@ -505,6 +506,58 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m8a-rip")) { failures.append("could not write the M8a RIP image") }
         editor.inspectorTab = .tables
         if !render(editor, to: sibling(output, "m8a-routes")) { failures.append("could not write the M8a routing table image") }
+        return failures
+    }
+
+    /// M8b: R1 and R2 cabled (broadcast), PC1 on R1 and PC2 on R2, OSPF on both with the PC side passive. After the wait timer
+    /// they are Full, at 45 s R1 has 192.168.2.0/24 [110/2] and the ping crosses; R1's Servizi (OSPF section) and Tabelle
+    /// (neighbours, database, O route), a Hello PDU.
+    private static func ospfScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.router, at: Pos(x: 460, y: 160))
+        await editor.addDevice(.router, at: Pos(x: 760, y: 160))
+        await editor.addDevice(.pc, at: Pos(x: 460, y: 380))
+        await editor.addDevice(.pc, at: Pos(x: 760, y: 380))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("R1"), id("PC1")) // R1 Gi0/0
+        await editor.connect(id("R2"), id("PC2")) // R2 Gi0/0
+        await editor.connect(id("R1"), id("R2")) // Gi0/1 — Gi0/1
+        for (node, iface, cidr) in [("R1", "Gi0/0", "192.168.1.1/24"), ("R1", "Gi0/1", "10.0.12.1/30"),
+                                    ("R2", "Gi0/0", "192.168.2.1/24"), ("R2", "Gi0/1", "10.0.12.2/30")] {
+            await editor.edit(.setIp(node: id(node), iface: iface, cidr: cidr))
+        }
+        for (name, cidr, gateway) in [("PC1", "192.168.1.10/24", "192.168.1.1"), ("PC2", "192.168.2.10/24", "192.168.2.1")] {
+            await editor.edit(.setIp(node: id(name), iface: "eth0", cidr: cidr))
+            await editor.edit(.addRoute(node: id(name), cidr: "0.0.0.0/0", nextHop: gateway))
+        }
+        for router in ["R1", "R2"] {
+            await editor.enableOspf(id(router), true)
+            await editor.setOspfRole(id(router), iface: "Gi0/0", .passive)
+        }
+        for _ in 0..<460 { await editor.tick(wallMs: 100) }
+        await editor.run(.ping(node: id("PC1"), target: "192.168.2.10"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        let lines = editor.snapshot.apps.first?.lines ?? []
+        if !lines.contains("4 packets transmitted, 4 received, 0% packet loss") || !lines.contains(where: { $0.contains("ttl=62") }) {
+            failures.append("ping over OSPF \(lines)")
+        }
+        let r1 = editor.snapshot.nodes.first { $0.name == "R1" }
+        if !(r1?.routes.map(routeColumns) ?? []).contains(["O", "192.168.2.0/24", "[110/2]", "10.0.12.2", "Gi0/1"]) {
+            failures.append("R1 routes \(String(describing: r1?.routes))")
+        }
+        if r1?.ospfNeighbors.map(\.state) != ["Full/DR"] { failures.append("R1 neighbours \(String(describing: r1?.ospfNeighbors))") }
+        if let hello = editor.events.last(where: { $0.proto == .ospf && $0.kind == .tx && $0.node == id("R1") && $0.info.contains("Hello") }) {
+            await editor.selectEvent(hello.id)
+            if editor.pdu?.map(\.title) != ["Ethernet II", "IPv4", "OSPF"] { failures.append("OSPF PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no OSPF Hello sent by R1")
+        }
+        editor.select(.node(id("R1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m8b-ospf")) { failures.append("could not write the M8b OSPF image") }
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m8b-tables")) { failures.append("could not write the M8b tables image") }
         return failures
     }
 

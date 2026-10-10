@@ -107,8 +107,8 @@ public struct OspfNeighborRow: Equatable, Sendable {
 
 /// One LSA as `show ip ospf database` lists it.
 public struct OspfLsaRow: Equatable, Sendable {
-    /// "router" or "network".
-    public let type: String
+    /// LS type: 1 router-LSA, 2 network-LSA.
+    public let type: Int
     public let linkId: String
     public let advRouter: String
     public let ageS: Int

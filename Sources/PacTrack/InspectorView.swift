@@ -172,6 +172,12 @@ private struct NodeInspector: View {
                 }
             } else {
                 TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."], rows: node.routes.map(routeColumns))
+                if node.ospf != nil {
+                    TableSection(title: "Vicini OSPF" + (node.ospfRouterId.map { " · router ID \($0)" } ?? ""), head: ["Router ID", "Pri", "Stato", "Indirizzo", "Int."],
+                                 rows: node.ospfNeighbors.map { [$0.routerId, "\($0.priority)", $0.state, $0.address, $0.iface] })
+                    TableSection(title: "Database OSPF · tipo 1 router, 2 network", head: ["Tipo", "Link ID", "ADV router", "Età", "Seq"],
+                                 rows: node.ospfDatabase.map { ["\($0.type)", $0.linkId, $0.advRouter, "\($0.ageS)s", $0.seq] })
+                }
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
                 TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
                 if node.nat != nil {

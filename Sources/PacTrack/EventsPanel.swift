@@ -28,7 +28,7 @@ struct EventsPanel: View {
         HStack(spacing: 6) {
             // Chips never wrap: when the panel is narrower than all of them, the row scrolls sideways.
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     ForEach(Proto.allCases, id: \.self) { p in
                         let on = protos.contains(p)
                         Button {
@@ -38,7 +38,7 @@ struct EventsPanel: View {
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .lineLimit(1)
                                 .fixedSize()
-                                .padding(.horizontal, 6)
+                                .padding(.horizontal, 4)
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(Theme.proto(p).opacity(on ? 0.22 : 0)))
                                 .overlay(Capsule().stroke(Theme.proto(p).opacity(on ? 1 : 0.35)))
@@ -56,7 +56,7 @@ struct EventsPanel: View {
                 ForEach(editor.snapshot.nodes) { Text($0.name).tag(Optional($0.id)) }
             }
             .labelsHidden()
-            .frame(width: 140)
+            .frame(width: 110)
             Text("\(count) eventi").font(Theme.small).foregroundStyle(Theme.muted).fixedSize()
         }
         .padding(.horizontal, 8)

@@ -380,7 +380,7 @@ private func oi(_ r: Router, _ name: String) -> OspfInterface? {
         #expect(r1.ospfRouterId == "10.0.12.1")
         #expect(r1.ospfNeighbors == [OspfNeighborRow(routerId: "192.168.2.1", priority: 1, state: "Full/DR", address: "10.0.12.2", iface: "Gi0/0")])
         #expect(r1.ospfDatabase.map { "\($0.type) \($0.linkId) \($0.advRouter) \($0.seq)" }
-                == ["router 10.0.12.1 10.0.12.1 0x80000002", "router 192.168.2.1 192.168.2.1 0x80000002", "network 10.0.12.2 192.168.2.1 0x80000001"])
+                == ["1 10.0.12.1 10.0.12.1 0x80000002", "1 192.168.2.1 192.168.2.1 0x80000002", "2 10.0.12.2 192.168.2.1 0x80000001"])
         #expect(r1.routes.last == RouteRow(dest: "192.168.2.0/24", nextHop: "10.0.12.2", iface: "Gi0/0", isStatic: false, metric: 2, ospf: true))
         try rt.handle(.setOspf(node: "r1", config: nil))
         #expect(rt.snapshot().nodes[0].ospf == nil && rt.snapshot().nodes[0].ospfNeighbors.isEmpty)

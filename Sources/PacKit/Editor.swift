@@ -568,7 +568,7 @@ public final class Editor {
     }
 
     /// Gives a router interface its part in RIP, keeping the interfaces in the router's order. Errors show under RIP.
-    public func setRipRole(_ id: String, iface: String, _ role: RipRole) async {
+    public func setRipRole(_ id: String, iface: String, _ role: RoutingRole) async {
         await serialized {
             guard let node = self.snapshot.nodes.first(where: { $0.id == id }), var c = node.rip else { return }
             let names = node.ifaces.map(\.name)
@@ -577,6 +577,60 @@ public final class Editor {
             c.interfaces = names.filter(active.contains)
             c.passive = names.filter(passive.contains)
             await self.editNow([.setRip(node: id, config: c)], key: "rip:\(id)")
+        }
+    }
+
+    /// OSPF on with every interface that has an address taking part (broadcast, priority 1), or off. Errors show under OSPF.
+    public func enableOspf(_ id: String, _ on: Bool) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }) else { return }
+            let config = on ? OspfConfig(interfaces: node.ifaces.filter { $0.cidr != nil }.map { OspfInterfaceConfig(name: $0.name) }) : nil
+            await self.editNow([.setOspf(node: id, config: config)], key: "ospf:\(id)")
+        }
+    }
+
+    /// An interface's part in OSPF, keeping the interfaces in the router's order; a new one is broadcast with priority 1.
+    public func setOspfRole(_ id: String, iface: String, _ role: RoutingRole) async {
+        await editOspf(id, key: "ospf:\(id)") { c, node in
+            if role == .off { return c.interfaces.removeAll { $0.name == iface } }
+            if let i = c.interfaces.firstIndex(where: { $0.name == iface }) { return c.interfaces[i].passive = role == .passive }
+            c.interfaces.append(OspfInterfaceConfig(name: iface, passive: role == .passive))
+            let names = node.ifaces.map(\.name)
+            c.interfaces.sort { (names.firstIndex(of: $0.name) ?? 0) < (names.firstIndex(of: $1.name) ?? 0) }
+        }
+    }
+
+    public func setOspfPointToPoint(_ id: String, iface: String, _ on: Bool) async {
+        await editOspf(id, key: "ospf:\(id)") { c, _ in
+            if let i = c.interfaces.firstIndex(where: { $0.name == iface }) { c.interfaces[i].pointToPoint = on }
+        }
+    }
+
+    /// The DR election priority typed for an interface; errors show under its field.
+    public func setOspfPriority(_ id: String, iface: String, _ text: String) async {
+        await editOspf(id, key: "ospf:\(id):\(iface)") { c, _ in
+            guard let p = Int(text.trimmingCharacters(in: .whitespaces)) else { throw EngineError("Invalid number: \"\(text)\"") }
+            if let i = c.interfaces.firstIndex(where: { $0.name == iface }) { c.interfaces[i].priority = p }
+        }
+    }
+
+    /// The router ID typed by hand; blank goes back to the automatic one. Errors show under its field.
+    public func setOspfRouterId(_ id: String, _ text: String) async {
+        await editOspf(id, key: "ospf:\(id):rid") { c, _ in
+            let t = text.trimmingCharacters(in: .whitespaces)
+            c.routerId = t.isEmpty ? nil : t
+        }
+    }
+
+    private func editOspf(_ id: String, key: String, _ change: @escaping (inout OspfConfig, NodeView) throws -> Void) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), var c = node.ospf else { return }
+            do {
+                try change(&c, node)
+            } catch {
+                return self.fail(key, error)
+            }
+            await self.editNow([.setOspf(node: id, config: c)], key: key)
         }
     }
 

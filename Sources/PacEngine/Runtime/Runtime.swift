@@ -436,7 +436,7 @@ public final class Runtime {
                 } ?? [],
                 ospfDatabase: ip?.ospf.map { o in
                     o.lsdb.map { e in
-                        OspfLsaRow(type: e.lsa.header.type == 1 ? "router" : "network", linkId: formatIp(e.lsa.header.id),
+                        OspfLsaRow(type: Int(e.lsa.header.type), linkId: formatIp(e.lsa.header.id),
                                    advRouter: formatIp(e.lsa.header.adv), ageS: o.age(e), seq: String(format: "0x%08x", UInt32(bitPattern: e.lsa.header.seq)))
                     }
                 } ?? []

@@ -2,7 +2,7 @@ import PacEngine
 import PacKit
 import SwiftUI
 
-/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), RIP, NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
+/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), RIP, OSPF, NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
 struct ServicesTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -28,6 +28,7 @@ struct ServicesTab: View {
                 if node.kind == .server { sink }
                 if node.kind == .router {
                     rip
+                    ospf
                     nat
                     firewall
                 }
@@ -89,7 +90,7 @@ struct ServicesTab: View {
                         Picker("", selection: Binding(get: { ripRole(node.rip, iface.name) }, set: { role in
                             Task { await editor.setRipRole(node.id, iface: iface.name, role) }
                         })) {
-                            ForEach(RipRole.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            ForEach(RoutingRole.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -101,6 +102,70 @@ struct ServicesTab: View {
             }
             ErrorLine(editor: editor, key: key)
             Text(node.rip == nil ? "Spento." : "Update ogni 30 s verso 224.0.0.9 dalle interfacce attive; una passiva fa annunciare la sua rete ma non manda nulla. Route apprese in Tabelle.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// OSPF in area 0 (spec M8 §5): on/off, router ID, each interface's part, network type and priority.
+    private var ospf: some View {
+        let key = "ospf:\(node.id)"
+        return VStack(alignment: .leading, spacing: 6) {
+            Toggle("OSPF (area 0)", isOn: Binding(get: { node.ospf != nil }, set: { on in
+                Task { await editor.enableOspf(node.id, on) }
+            }))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .accessibilityIdentifier("ospf-enabled")
+            if let config = node.ospf {
+                CommitField(label: "Router ID (vuoto: automatico)", value: config.routerId ?? "", placeholder: node.ospfRouterId ?? "automatico",
+                            errorKey: "\(key):rid", editor: editor) { text in
+                    await editor.setOspfRouterId(node.id, text)
+                }
+                ForEach(node.ifaces, id: \.name) { iface in
+                    let c = config.interfaces.first { $0.name == iface.name }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(iface.name).font(Theme.mono)
+                            Spacer()
+                            Picker("", selection: Binding(get: { ospfRole(node.ospf, iface.name) }, set: { role in
+                                Task { await editor.setOspfRole(node.id, iface: iface.name, role) }
+                            })) {
+                                ForEach(RoutingRole.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .fixedSize()
+                            .accessibilityIdentifier("ospf-\(iface.name)")
+                        }
+                        if let c, !c.passive {
+                            HStack(alignment: .bottom) {
+                                Picker("", selection: Binding(get: { c.pointToPoint }, set: { on in
+                                    Task { await editor.setOspfPointToPoint(node.id, iface: iface.name, on) }
+                                })) {
+                                    Text("broadcast").tag(false)
+                                    Text("point-to-point").tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .fixedSize()
+                                Spacer()
+                                if !c.pointToPoint {
+                                    CommitField(label: "Priorità", value: String(c.priority), errorKey: "\(key):\(iface.name)", editor: editor) { text in
+                                        await editor.setOspfPriority(node.id, iface: iface.name, text)
+                                    }
+                                    .frame(width: 70)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ErrorLine(editor: editor, key: key)
+            Text(node.ospf == nil ? "Spento." : "Hello ogni 10 s, dead 40 s. Il router ID cambia solo al riavvio di OSPF. Vicini, database e route in Tabelle.")
                 .font(Theme.small)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)

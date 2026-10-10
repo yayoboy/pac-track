@@ -85,18 +85,23 @@ public func natRole(_ config: NatConfig?, _ iface: String) -> NatRole {
     return config?.inside.contains(iface) == true ? .inside : .off
 }
 
-/// A router interface's part in RIP (spec M8 §5): none, active, or passive (its network is advertised, it sends nothing).
-public enum RipRole: String, CaseIterable, Sendable {
+/// A router interface's part in RIP or OSPF (spec M8 §5): none, active, or passive (its network is advertised, it sends nothing).
+public enum RoutingRole: String, CaseIterable, Sendable {
     case off = "—", active = "attiva", passive = "passiva"
 }
 
-public func ripRole(_ config: RipConfig?, _ iface: String) -> RipRole {
+public func ripRole(_ config: RipConfig?, _ iface: String) -> RoutingRole {
     config?.passive.contains(iface) == true ? .passive : config?.interfaces.contains(iface) == true ? .active : .off
 }
 
-/// One row of Tabelle's routing table (spec M8 §5): type (C, S, R), destination, [distance/metric], next hop, interface.
+public func ospfRole(_ config: OspfConfig?, _ iface: String) -> RoutingRole {
+    config?.interfaces.first { $0.name == iface }.map { $0.passive ? .passive : .active } ?? .off
+}
+
+/// One row of Tabelle's routing table (spec M8 §5): type (C, S, R, O), destination, [distance/metric], next hop, interface.
 public func routeColumns(_ r: RouteRow) -> [String] {
-    let (type, distance) = r.metric.map { ("R", "[120/\($0)]") } ?? (r.dhcp ? ("S", "[254/0]") : r.isStatic ? ("S", "[1/0]") : ("C", ""))
+    let (type, distance) = r.metric.map { r.ospf ? ("O", "[110/\($0)]") : ("R", "[120/\($0)]") }
+        ?? (r.dhcp ? ("S", "[254/0]") : r.isStatic ? ("S", "[1/0]") : ("C", ""))
     return [type, r.dest, distance, (r.nextHop ?? "connessa") + (r.dhcp ? " (DHCP)" : ""), r.iface]
 }
 
