@@ -54,6 +54,18 @@ import Testing
         #expect(syncLabel(VDSL2_SYNC) == "100/20 Mb/s")
     }
 
+    /// Review M12: line to line both modems send upstream, 20 Mb/s each way; copies keep the sink, the network, the card and DHCP.
+    @Test func aLineBetweenTwoModemsAndCopiesOfHomeDevices() async {
+        for kind: DeviceKind in [.modem, .modem, .nas, .smartBulb, .console] { await editor.addDevice(kind, at: Pos(x: 0, y: 0)) }
+        await editor.edit(.connect(id: "l", a: IfaceRef(node: node("MODEM1").id, iface: "dsl0"), b: IfaceRef(node: node("MODEM2").id, iface: "dsl0")))
+        #expect(cableRate(editor.snapshot.links[0], in: editor.snapshot.nodes) == "20/20 Mb/s")
+        await editor.setNic(node("CONSOLE1").id, wifi: true)
+        await editor.duplicate(["NAS1", "LAMP1", "CONSOLE1"].map { node($0).id })
+        let (nas, lamp, console) = (node("NAS2"), node("LAMP2"), node("CONSOLE2"))
+        #expect(nas.sink && nas.ifaces[0].mode == .dhcp && lamp.station?.config.ssid == "pac-track" && lamp.ifaces[0].mode == .dhcp)
+        #expect(console.ifaces.map(\.name) == ["wlan0"] && console.ifaces[0].mode == .dhcp)
+    }
+
     private func node(at id: String) -> String { editor.snapshot.nodes.first { $0.id == id }!.name }
 
     /// Spec M12 §1: ISP1 — MODEM1 — R1 (NAT, DHCP) — SW1 with NAS1, CONSOLE1 and AP1; the IoT devices on AP1; nothing typed on them.

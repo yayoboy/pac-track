@@ -283,11 +283,14 @@ public func syncLabel(_ sync: (down: Double, up: Double)) -> String {
     "\(plain(sync.down / 1e6))/\(plain(sync.up / 1e6)) Mb/s"
 }
 
-/// A cable's rate on the canvas: a cable into a modem's line shows the line, capped by the cable (spec M12 §2).
+/// A cable's rate on the canvas: a cable into a modem's line shows the line, capped by the cable (spec M12 §2). Line to line, each
+/// modem sends upstream: the engine's min(sender's up, receiver's down) both ways.
 public func cableRate(_ link: LinkView, in nodes: [NodeView]) -> String {
     let bps = link.options.bandwidthBps
-    let dsl = [link.a, link.b].contains { end in end.iface == "dsl0" && nodes.contains { $0.id == end.node && $0.kind == .modem } }
-    return dsl ? syncLabel((min(bps, VDSL2_SYNC.down), min(bps, VDSL2_SYNC.up))) : formatBandwidth(bps)
+    let isLine = { (end: IfaceRef) in end.iface == "dsl0" && nodes.contains { $0.id == end.node && $0.kind == .modem } }
+    guard isLine(link.a) || isLine(link.b) else { return formatBandwidth(bps) }
+    let bothLines = isLine(link.a) && isLine(link.b)
+    return syncLabel((min(bps, bothLines ? VDSL2_SYNC.up : VDSL2_SYNC.down), min(bps, VDSL2_SYNC.up)))
 }
 
 /// One editable DHCP server setting, in the units people type.

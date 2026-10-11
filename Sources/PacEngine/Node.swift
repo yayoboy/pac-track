@@ -54,7 +54,7 @@ extension Interface {
         return link.map { [$0.peer(self)] } ?? []
     }
 
-    /// IP interfaces in this interface's broadcast domain: across cables, hubs, switches and the air within one VLAN (access ports, a
+    /// IP interfaces in this interface's broadcast domain: across cables, hubs, modems, switches and the air within one VLAN (access ports, a
     /// trunk's allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
     func segmentPeers() -> [Interface] {
         /// An interface reached by a frame carrying `tag` on the wire.

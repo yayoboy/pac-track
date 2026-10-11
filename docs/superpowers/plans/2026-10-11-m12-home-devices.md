@@ -36,7 +36,7 @@ Conventions: `docs/superpowers/plans/2026-10-11-m10-host-devices.md`; ledger `.s
 
 ## Rulings (where the spec is silent)
 
-- **Kinds on a new enum line**, raw values `modem`, `nas`, `console`, `smartBulb`, `thermostat`, `smartSpeaker`. Why: the merge with M11b. Cost if wrong: none.
+- **Kinds on a new enum line**, raw values `modem`, `nas`, `console`, `smartBulb`, `thermostat`, `smartSpeaker`. Why: the merge with M11b. Cost if wrong: a conflict that is a union of the two lines (the review found one anyway: M11b appends `homeRouter` to the original line).
 - **Prefixes** `MODEM`, `NAS`, `CONSOLE`, `LAMP`, `THERM`, `SPK`. Cost if wrong: a name.
 - **Symbols** `phone.connection` (DSL rides the phone line), `externaldrive.connected.to.line.below`, `gamecontroller`, `lightbulb`, `thermometer.medium`, `homepod` (the precedent is `ipad`/`iphone`); all exist on macOS 15 (checked with `NSImage(systemSymbolName:)`). Cost if wrong: an icon.
 - **`Interface.sync`** (a `(down:up:)` tuple) instead of a `Modem` check in `Link`: the link stays device-agnostic. Cost if wrong: one property.
