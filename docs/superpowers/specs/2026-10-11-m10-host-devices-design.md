@@ -6,7 +6,7 @@
 Più dispositivi finali nella palette, ognuno con la sua icona, un nome italiano e default sensati, che funzionano appena trascinati sul canvas: una stampante, una smart TV, un server DNS e un server DHCP.
 
 **Successo M10:** SW1 con un *Server DHCP* (SRV1), una *Smart TV* (TV1), una *Stampante* (PRN1) e un PC (PC1), cavi diretti. Nessuna configurazione su SRV1 e TV1; PRN1 riceve `192.168.1.50/24`, PC1 passa in DHCP.
-- Dopo la convergenza dello switch (30 s, M7) TV1 e PC1 ricevono un indirizzo fra 192.168.1.100 e 192.168.1.199 da SRV1 (192.168.1.2).
+- TV1 e PC1 ricevono un indirizzo fra 192.168.1.100 e 192.168.1.199 da SRV1 (192.168.1.2) a 60 s: le porte dello switch passano in forwarding a 30 s (M7) e il client DHCP ritrasmette il DISCOVER a 4, 12, 28 e 60 s (M3).
 - Il generatore TCP di PC1 verso `192.168.1.50` finisce con `iperf Done.`: la stampante riceve il "lavoro di stampa" e lo scarta.
 - Il file si salva e si riapre uguale; un file di M9 si apre come prima.
 
