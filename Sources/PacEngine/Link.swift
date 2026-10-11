@@ -57,6 +57,7 @@ final class Link {
     init(sim: Sim, _ a: Interface, _ b: Interface, _ opts: LinkOptions = LinkOptions()) throws {
         guard a.node !== b.node else { throw EngineError("Cannot connect a node to itself") }
         guard a.dot1q == nil && b.dot1q == nil else { throw EngineError("Cannot cable a subinterface") }
+        guard a.radio == nil && b.radio == nil else { throw EngineError("Cannot cable a wireless interface") }
         guard a.link == nil, b.link == nil else { throw EngineError("Interface already connected: \(a.link != nil ? a.id : b.id)") }
         try validateLinkOptions(opts)
         self.sim = sim

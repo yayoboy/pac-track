@@ -127,6 +127,34 @@ public struct StpPriority: Codable, Equatable, Sendable {
     }
 }
 
+/// The three 2.4 GHz channels that do not overlap (spec M11 §4), in the order a station scans them.
+public let WIFI_CHANNELS = [1, 6, 11]
+
+/// An access point's network (spec M11 §2): one SSID (1–32 bytes) on channel 1, 6 or 11.
+public struct ApConfig: Codable, Equatable, Sendable {
+    public var ssid: String
+    public var channel: Int
+
+    public init(ssid: String = "pac-track", channel: Int = 6) {
+        self.ssid = ssid
+        self.channel = channel
+    }
+}
+
+/// The network a Wi-Fi client looks for (spec M11 §5); an empty SSID is no network.
+public struct StationConfig: Codable, Equatable, Sendable {
+    public var ssid: String
+
+    public init(ssid: String = "") {
+        self.ssid = ssid
+    }
+}
+
+/// A Wi-Fi client's state (spec M11 §5): `notFound` between a scan nobody answered and the next one.
+public enum StationState: Sendable {
+    case idle, scanning, notFound, authenticating, associating, associated
+}
+
 /// `wifi`: 802.11 management frames (spec M11 §3); data frames keep their packet's protocol.
 public enum Proto: String, CaseIterable, Sendable {
     case arp, icmp, dhcp, dns, udp, tcp, stp, rip, ospf, ndp, wifi

@@ -24,6 +24,8 @@ final class Sim {
     private var nodes: [Node] = []
     /// Removed devices: kept alive while frames on their cables finish (links refer to their interfaces `unowned`), out of the network.
     private var removed: [Node] = []
+    /// One medium per 2.4 GHz channel (spec M11 §4), made when a radio first transmits on it.
+    private var media: [Int: Medium] = [:]
     /// Newest L2 loop warnings, oldest first.
     private(set) var warnings: [SimWarning] = []
     private var warningCount = 0
@@ -89,6 +91,18 @@ final class Sim {
     /// A port's VLANs changed somewhere: every switch brings its PVST+ instances in line.
     func syncStp() {
         for case let sw as Switch in nodes { sw.syncStp() }
+    }
+
+    func medium(_ channel: Int) -> Medium {
+        if let m = media[channel] { return m }
+        let m = Medium(sim: self, channel: channel)
+        media[channel] = m
+        return m
+    }
+
+    /// Every radio in the network, in device and interface order (a removed device is out of it).
+    func radios() -> [Radio] {
+        nodes.flatMap(\.interfaces).compactMap(\.radio)
     }
 
     func run(_ duration: Int) {

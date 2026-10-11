@@ -13,6 +13,8 @@ final class Interface {
     var switchport = Switchport()
     /// Router subinterfaces only (IOS `encapsulation dot1q`): the physical interface it rides on and its VLAN.
     let dot1q: (parent: Interface, vlan: Int)?
+    /// A Wi-Fi interface's radio (spec M11 §4); nil on a cable.
+    var radio: Radio?
 
     init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node
