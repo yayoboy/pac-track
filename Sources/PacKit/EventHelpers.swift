@@ -37,18 +37,31 @@ public struct Flight: Equatable, Identifiable, Sendable {
     public var arrived = false
 }
 
-private func link(at node: String, _ iface: String?, in links: [LinkView]) -> LinkView? {
-    links.first { ($0.a.node == node && $0.a.iface == iface) || ($0.b.node == node && $0.b.iface == iface) }
+/// Prefix of the air links' ids: never a cable's (cable ids come from `newId`).
+private let AIR = "air:"
+
+/// The dashed line from each associated station to its access point (spec M11 §7), as a link PDUs fly along. Not a cable: never in
+/// the topology, never selectable.
+public func airLinks(_ nodes: [NodeView]) -> [LinkView] {
+    nodes.compactMap { n in
+        guard let s = n.station, s.state == .associated, let ap = s.ap, let iface = n.ifaces.first else { return nil }
+        return LinkView(id: AIR + n.id, a: IfaceRef(node: n.id, iface: iface.name), b: IfaceRef(node: ap, iface: "Dot11Radio0"))
+    }
 }
 
 public func updateFlights(_ flights: [Flight], with events: [EventView], links: [LinkView], now: Double) -> [Flight] {
     var out = flights
     for e in events {
-        guard let frame = e.frameId, let cable = link(at: e.node, e.iface, in: links) else { continue }
+        guard let frame = e.frameId else { continue }
+        let here = links.filter { ($0.a.node == e.node && $0.a.iface == e.iface) || ($0.b.node == e.node && $0.b.iface == e.iface) }
+        // An access point's radio reaches several stations: its frames are drawn from the station that receives them (spec M11 §7).
+        let fromAp = here.first.map { $0.id.hasPrefix(AIR) && $0.b.node == e.node } ?? false
         if e.kind == .tx {
-            out.append(Flight(id: e.id, frameId: frame, link: cable.id, from: e.node, proto: e.proto, start: now))
-        } else if let i = out.firstIndex(where: { !$0.arrived && $0.frameId == frame && $0.link == cable.id && $0.from != e.node }) {
+            if let cable = here.first, !fromAp { out.append(Flight(id: e.id, frameId: frame, link: cable.id, from: e.node, proto: e.proto, start: now)) }
+        } else if let i = out.firstIndex(where: { f in !f.arrived && f.frameId == frame && f.from != e.node && here.contains { $0.id == f.link } }) {
             out[i].arrived = true
+        } else if e.kind == .rx, let air = here.first, air.id.hasPrefix(AIR), air.a.node == e.node {
+            out.append(Flight(id: e.id, frameId: frame, link: air.id, from: air.b.node, proto: e.proto, start: now, arrived: true))
         }
     }
     return pruneFlights(Array(out.suffix(MAX_FLIGHTS)), links: links, now: now)

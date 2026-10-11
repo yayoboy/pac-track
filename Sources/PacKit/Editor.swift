@@ -66,6 +66,9 @@ public final class Editor {
     public var canUndo: Bool { !past.isEmpty }
     public var canRedo: Bool { !future.isEmpty }
     public var current: Topology { makeTopology(snapshot, positions) }
+
+    /// Cables and the lines to the access points: where PDUs fly.
+    private var flightLinks: [LinkView] { snapshot.links + airLinks(snapshot.nodes) }
     /// Newest L2 loop warning not dismissed yet.
     public var warning: WarningView? { snapshot.warnings.last.flatMap { $0.id > dismissedWarning ? $0 : nil } }
 
@@ -92,7 +95,7 @@ public final class Editor {
         guard eventEpoch == s.epoch, let last = fresh.last else { return }
         eventCursor = last.id + 1
         events = Array((events + fresh).suffix(Self.eventLimit))
-        flights = updateFlights(flights, with: fresh, links: snapshot.links, now: Date.timeIntervalSinceReferenceDate)
+        flights = updateFlights(flights, with: fresh, links: flightLinks, now: Date.timeIntervalSinceReferenceDate)
     }
 
     private func fail(_ key: String, _ error: any Error) {
@@ -242,6 +245,10 @@ public final class Editor {
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
         if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
+        // Tablets and smartphones look for the network a new access point brings, in DHCP (spec M11 §2).
+        if kind == .tablet || kind == .smartphone {
+            cmds += [.setStation(node: id, config: StationConfig(ssid: ApConfig().ssid)), .setIfaceMode(node: id, iface: "wlan0", mode: .dhcp)]
+        }
         // Server presets (spec M10 §3): 192.168.1.0/24 with .1 left to the router; the pool is the one the Servizi switch suggests.
         switch preset {
         case .dhcp?: cmds += [.setIp(node: id, iface: "eth0", cidr: "192.168.1.2/24"),
@@ -346,7 +353,7 @@ public final class Editor {
     public func tick(wallMs: Double) async {
         accept(await client.advance(wallMs: wallMs))
         await syncEvents()
-        let kept = pruneFlights(flights, links: snapshot.links, now: Date.timeIntervalSinceReferenceDate)
+        let kept = pruneFlights(flights, links: flightLinks, now: Date.timeIntervalSinceReferenceDate)
         if kept.count != flights.count { flights = kept }
     }
 
@@ -406,7 +413,7 @@ public final class Editor {
         }
     }
 
-    /// Adds devices of the same kind, power state, interface modes, sink, IPv6 and SLAAC settings, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
+    /// Adds devices of the same kind, power state, interface modes, sink, Wi-Fi network and card, IPv6 and SLAAC settings, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
     /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
     /// and selects them.
     private func insertCopies(of srcs: [TopologyNode]) async {
@@ -421,6 +428,9 @@ public final class Editor {
             ids.append(id)
             positions[id] = src.pos
             cmds.append(.addNode(id: id, kind: src.kind, name: name))
+            // The network and the card are settings, not addresses (spec M11 §10); the card first, so wlan0 exists for its mode.
+            if let c = src.station { cmds.append(.setStation(node: id, config: c)) }
+            if let c = src.accessPoint { cmds.append(.setAccessPoint(node: id, config: c)) }
             if src.kind == .switch { cmds.append(.setPorts(id: id, count: src.ifaces.count)) }
             // Port VLANs and subinterfaces are structure, like the size; their addresses stay behind.
             for i in src.ifaces {
@@ -526,6 +536,17 @@ public final class Editor {
             var cmds: [Command] = [.addSubinterface(node: id, iface: name)]
             if !ip.isEmpty { cmds.append(.setIp(node: id, iface: name, cidr: ip)) }
             return await self.editNow(cmds, key: key)
+        }
+    }
+
+    /// The Wi-Fi tab's *Scheda di rete* (spec M11 §2): the Wi-Fi card (no network yet) or the Ethernet one, keeping DHCP mode, in one
+    /// undo step. Refused while a cable is plugged in; the error shows under the choice.
+    public func setNic(_ id: String, wifi: Bool) async {
+        await serialized {
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), (node.station != nil) != wifi else { return }
+            var cmds: [Command] = [.setStation(node: id, config: wifi ? StationConfig() : nil)]
+            if node.ifaces.first?.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: wifi ? "wlan0" : "eth0", mode: .dhcp)) }
+            await self.editNow(cmds, key: "nic:\(id)")
         }
     }
 

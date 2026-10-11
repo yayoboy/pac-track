@@ -86,6 +86,26 @@ import Testing
         #expect(pruneFlights(f, links: [], now: 0.1).isEmpty) // cable removed
     }
 
+    /// Spec M11 §7: PDUs fly along the dashed line; a frame from the access point's radio is drawn when a station receives it.
+    @Test func flightsCrossTheAirFromAndToTheStations() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "ap", kind: .accessPoint, name: "AP1"))
+        for id in ["t", "s"] {
+            try rt.handle(.addNode(id: id, kind: .tablet, name: id))
+            try rt.handle(.setStation(node: id, config: StationConfig(ssid: "pac-track")))
+        }
+        for _ in 0..<2 { rt.advance(wallMs: 100) }
+        let air = airLinks(rt.snapshot().nodes)
+        #expect(air == ["t", "s"].map { LinkView(id: "air:\($0)", a: IfaceRef(node: $0, iface: "wlan0"), b: IfaceRef(node: "ap", iface: "Dot11Radio0")) })
+        let ev = { (id: Int, kind: EventKind, node: String, iface: String) in
+            EventView(id: id, timeNs: 0, kind: kind, node: node, iface: iface, proto: .icmp, frameId: 7, bytes: 116, info: "", reason: nil)
+        }
+        var f = updateFlights([], with: [ev(1, .tx, "t", "wlan0")], links: air, now: 0)
+        #expect(f.map { "\($0.link) \($0.from) \($0.arrived)" } == ["air:t t false"])
+        f = updateFlights(f, with: [ev(2, .rx, "ap", "Dot11Radio0"), ev(3, .tx, "ap", "Dot11Radio0"), ev(4, .rx, "s", "wlan0")], links: air, now: 0.1)
+        #expect(f.map { "\($0.link) \($0.from) \($0.arrived)" } == ["air:t t true", "air:s ap true"])
+    }
+
     @Test func parsesAndFormatsLinkFields() throws {
         let o = LinkOptions()
         #expect(LinkField.allCases.map { $0.format(o) } == ["1000", "0.5", "0", "1000"])
