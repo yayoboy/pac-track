@@ -25,7 +25,8 @@ import Testing
         await editor.addDevice(.homeRouter, at: Pos(x: 0, y: 0))
         let hr = node("HR1")
         #expect(hr.kind == .homeRouter && DeviceKind.homeRouter.label == "Router Wi-Fi" && DeviceKind.homeRouter.hasIp && !DeviceKind.homeRouter.isHost)
-        #expect(inspectorTabs(for: .homeRouter) == [.interfaces, .routing, .services, .wifi, .tables, .app])
+        // The Wi-Fi settings sit in Servizi: six tabs do not fit the 300-point inspector.
+        #expect(inspectorTabs(for: .homeRouter) == [.interfaces, .routing, .services, .tables, .app])
         #expect(hr.ifaces.map { "\($0.name) \($0.mode) \($0.cidr ?? "-")" } == [
             "Internet dhcp -", "LAN1 static -", "LAN2 static -", "LAN3 static -", "LAN4 static -", "WLAN static -", "LAN static 192.168.0.1/24",
         ])

@@ -63,7 +63,8 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .hub: [.ports]
     case .router, .server, .cloud, .printer: [.interfaces, .routing, .services, .tables, .app]
     case .accessPoint: [.wifi, .tables]
-    case .homeRouter: [.interfaces, .routing, .services, .wifi, .tables, .app]
+    // Its Wi-Fi settings open Servizi (spec M11 §8): six tabs do not fit the 300-point inspector.
+    case .homeRouter: [.interfaces, .routing, .services, .tables, .app]
     case .pc, .laptop, .tablet, .smartphone: [.interfaces, .routing, .wifi, .tables, .app]
     case .tv: [.interfaces, .routing, .tables, .app]
     }

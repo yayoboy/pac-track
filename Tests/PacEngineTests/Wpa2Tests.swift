@@ -53,8 +53,8 @@ private func isDhcp(_ e: SimEvent) -> Bool {
         let (sim, ap, tab) = try secured(password: "segreta123")
         sim.run(200 * MS)
         #expect(handshakeLog(sim) == [
-            "AP1 EAPOL-Key, messaggio 1 di 4 131", "TAB1 EAPOL-Key, messaggio 2 di 4 153",
-            "AP1 EAPOL-Key, messaggio 3 di 4 187", "TAB1 EAPOL-Key, messaggio 4 di 4 131",
+            "AP1 EAPOL-Key 1 di 4 131", "TAB1 EAPOL-Key 2 di 4 153",
+            "AP1 EAPOL-Key 3 di 4 187", "TAB1 EAPOL-Key 4 di 4 131",
         ])
         let sent = sim.log.all.filter { $0.kind == .tx }
         let rsn = sent.compactMap { e -> Dot11Mgmt? in if case .mgmt(let m)? = e.frame?.payload { m } else { nil } }.filter {
@@ -65,7 +65,7 @@ private func isDhcp(_ e: SimEvent) -> Bool {
         }
         #expect(rsn.count == 2)
         let apSent = sent.filter { $0.node == "AP1" }.map { eventView($0).info }
-        #expect(apSent.firstIndex(of: "EAPOL-Key, messaggio 1 di 4") == apSent.firstIndex(of: "Association Response, stato 0, AID=1")! + 1)
+        #expect(apSent.firstIndex(of: "EAPOL-Key 1 di 4") == apSent.firstIndex(of: "Association Response, stato 0, AID=1")! + 1)
         #expect(sent.filter(isEapol).allSatisfy { $0.frame?.air?.protected == false })
         let msg4 = sent.first { isEapol($0) && $0.node == "TAB1" && eventView($0).info.hasSuffix("4 di 4") }!
         let discover = sent.first { isDhcp($0) && $0.node == "TAB1" }!

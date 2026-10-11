@@ -25,7 +25,13 @@ struct ServicesTab: View {
                 sink
             } else {
                 if node.kind == .cloud { internet }
-                if node.kind == .homeRouter { home }
+                if node.kind == .homeRouter {
+                    home
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Wi-Fi").foregroundStyle(Theme.fgStrong)
+                        WifiTab(node: node, editor: editor)
+                    }
+                }
                 dhcp
                 if node.kind == .server || node.kind == .cloud { dns }
                 if node.kind == .server { sink }
@@ -190,7 +196,8 @@ struct ServicesTab: View {
     private var nat: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("NAT / PAT (overload)").foregroundStyle(Theme.fgStrong)
-            ForEach(node.ifaces, id: \.name) { iface in
+            // A home router's bridge ports have no address of their own: NAT works on LAN and Internet (spec M11 §8).
+            ForEach(node.ifaces.filter { takesAddress(node, $0) }, id: \.name) { iface in
                 HStack {
                     Text(iface.name).font(Theme.mono)
                     Spacer()
@@ -253,7 +260,7 @@ struct ServicesTab: View {
                 }
                 Group {
                     HStack {
-                        Picker("", selection: $ruleIface) { ForEach(node.ifaces, id: \.name) { Text($0.name).tag($0.name) } }
+                        Picker("", selection: $ruleIface) { ForEach(node.ifaces.filter { takesAddress(node, $0) }, id: \.name) { Text($0.name).tag($0.name) } }
                         Picker("", selection: $ruleDirection) { ForEach(FirewallDirection.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
                     }
                     HStack {

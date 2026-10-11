@@ -195,8 +195,8 @@ func eventView(_ e: SimEvent) -> EventView {
     case .ipv6(let p)?: (proto(of: p), describe(p))
     case .bpdu(let b)?: (.stp, describe(b))
     case .mgmt(let m)?: (.wifi, describe(m))
-    // Wireshark's "Key (Message 2 of 4)".
-    case .eapol(let k)?: (.wifi, "EAPOL-Key, messaggio \(k.message) di 4")
+    // Wireshark's "Key (Message 2 of 4)", short enough for the event list's Info column.
+    case .eapol(let k)?: (.wifi, "EAPOL-Key \(k.message) di 4")
     case nil: (e.proto ?? .stp, e.note ?? "") // a state change (spanning tree, or the protocol it names); every other logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,

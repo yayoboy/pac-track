@@ -106,6 +106,7 @@ enum SelfTest {
         failures += await ipv6ServicesScenario(output: output)
         failures += await m10Scenario(output: output)
         failures += await m11aScenario(output: output)
+        failures += await m11bScenario(output: output)
         return failures
     }
 
@@ -801,6 +802,63 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m11a-ap-tables")) { failures.append("could not write the M11a access point tables image") }
         editor.select(.node(id("LAPTOP1")))
         if !render(editor, to: sibling(output, "m11a-tables")) { failures.append("could not write the M11a client tables image") }
+        return failures
+    }
+
+    /// M11b (spec M11 §1, §8): ISP1 + HR1 with `casa` in WPA2-PSK; TAB1 (right password, near), PHONE1 (wrong password), LAPTOP1
+    /// (Wi-Fi card, near the edge). Images: the lab with range circle and rates and EAPOL message 2 in the inspector; a protected data
+    /// frame; PHONE1's "Password errata"; HR1's Wi-Fi tab, Interfacce, Servizi and Tabelle.
+    private static func m11bScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.cloud, at: Pos(x: 560, y: 40))
+        await editor.addDevice(.homeRouter, at: Pos(x: 560, y: 170))
+        await editor.addDevice(.tablet, at: Pos(x: 450, y: 300))
+        await editor.addDevice(.smartphone, at: Pos(x: 560, y: 380))
+        await editor.addDevice(.laptop, at: Pos(x: 690, y: 380))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        let node = { (name: String) in editor.snapshot.nodes.first { $0.name == name } }
+        await editor.connect(id("ISP1"), id("HR1"))
+        await editor.edit(.setAccessPoint(node: id("HR1"), config: ApConfig(ssid: "casa", channel: 6, passphrase: "segreta123")))
+        await editor.setNic(id("LAPTOP1"), wifi: true)
+        await editor.edit([.setStation(node: id("LAPTOP1"), config: StationConfig(ssid: "casa", passphrase: "segreta123")),
+                           .setIfaceMode(node: id("LAPTOP1"), iface: "wlan0", mode: .dhcp)])
+        await editor.edit(.setStation(node: id("TAB1"), config: StationConfig(ssid: "casa", passphrase: "segreta123")))
+        await editor.edit(.setStation(node: id("PHONE1"), config: StationConfig(ssid: "casa", passphrase: "sbagliata1")))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        if node("HR1")?.ifaces.first?.cidr != "203.0.113.100/24" { failures.append("M11b HR1 Internet \(String(describing: node("HR1")?.ifaces.first?.cidr))") }
+        let leases = Set(["TAB1", "LAPTOP1"].map { node($0)?.ifaces.first?.cidr })
+        if leases != ["192.168.0.100/24", "192.168.0.101/24"] { failures.append("M11b leases \(leases)") }
+        if node("PHONE1")?.station.map({ wifiStatus($0, in: editor.snapshot.nodes) }) != "Password errata" { failures.append("M11b PHONE1 status") }
+        if node("LAPTOP1")?.station?.rate != 24 || node("TAB1")?.station?.rate != 54 { failures.append("M11b rates") }
+        if airLinks(editor.snapshot.nodes).count != 2 { failures.append("M11b air links \(airLinks(editor.snapshot.nodes).count)") }
+        editor.bottomTab = .events
+        if let data = editor.events.first(where: { $0.proto == .dhcp && $0.kind == .tx && $0.node == id("TAB1") }) {
+            await editor.selectEvent(data.id)
+            let flag = editor.pdu?.first?.fields.first { $0.name == "Flag" }?.value
+            if flag != "0x41 (To DS, Protected)" { failures.append("M11b protected flag \(String(describing: flag))") }
+            editor.select(.node(id("TAB1")))
+            editor.inspectorTab = .wifi
+            if !render(editor, to: sibling(output, "m11b-data")) { failures.append("could not write the M11b data frame image") }
+        } else {
+            failures.append("no DHCP frame from TAB1 in the M11b event list")
+        }
+        if let msg2 = editor.events.first(where: { $0.node == id("TAB1") && $0.kind == .tx && $0.info == "EAPOL-Key 2 di 4" }) {
+            await editor.selectEvent(msg2.id)
+            if editor.pdu?.map(\.title) != ["IEEE 802.11", "LLC/SNAP", "EAPOL-Key"] { failures.append("M11b EAPOL PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no EAPOL-Key message 2 from TAB1")
+        }
+        editor.select(.node(id("TAB1")))
+        editor.inspectorTab = .wifi
+        if !render(editor, to: sibling(output, "m11b-lab")) { failures.append("could not write the M11b lab image") }
+        editor.select(.node(id("PHONE1")))
+        if !render(editor, to: sibling(output, "m11b-phone")) { failures.append("could not write the M11b phone image") }
+        editor.select(.node(id("HR1")))
+        for tab in [InspectorTab.services, .interfaces, .tables] {
+            editor.inspectorTab = tab
+            if !render(editor, to: sibling(output, "m11b-hr-\(tab.rawValue.lowercased())")) { failures.append("could not write the M11b \(tab) image") }
+        }
         return failures
     }
 

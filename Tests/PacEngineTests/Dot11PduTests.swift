@@ -162,7 +162,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
         let key = EapolKey(message: 2, replay: 1, nonce: nonce, mic: [UInt8](repeating: 0xab, count: 16))
         let f = EthernetFrame(id: 1, src: STA, dst: AP, etherType: ETHERTYPE_EAPOL, payload: .eapol(key), air: Dot11Header(toDS: true, bssid: AP))
         let e = SimEvent(time: 0, kind: .tx, node: "TAB1", iface: "wlan0", frame: f)
-        #expect(eventView(e).proto == .wifi && eventView(e).info == "EAPOL-Key, messaggio 2 di 4" && f.size == 153)
+        #expect(eventView(e).proto == .wifi && eventView(e).info == "EAPOL-Key 2 di 4" && f.size == 153)
         let layers = pduLayers(e)
         #expect(layers.map(\.title) == ["IEEE 802.11", "LLC/SNAP", "EAPOL-Key"] && layers.map(\.bytes) == [153, 8, 121])
         #expect(lines(layers[0])[3] == "Flag: 0x01 (To DS)" && lines(layers[1]).last == "EtherType: 0x888e (EAPOL)")
