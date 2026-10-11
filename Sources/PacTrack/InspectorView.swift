@@ -463,7 +463,7 @@ private struct AppTab: View {
                 Task { await editor.startTraffic(node.id, target: target, kind: kind, amount: amount, seconds: seconds) }
             }
             .accessibilityIdentifier("traffic-start")
-            Text("Destinazione: un server con il sink attivo (Servizi). Risultati in Output app e Metriche.")
+            Text("Destinazione: un server o una stampante con il sink attivo (Servizi). Risultati in Output app e Metriche.")
                 .font(Theme.small)
                 .foregroundStyle(Theme.muted)
         }

@@ -151,7 +151,7 @@ public enum Command: Sendable {
     case setDnsServer(node: String, records: [DnsRecord]?)
     case renewDhcp(node: String)
     case nslookup(node: String, name: String)
-    /// Discard sink on TCP/UDP port 9 (servers only).
+    /// Discard sink on TCP/UDP port 9 (servers and printers).
     case setSink(node: String, on: Bool)
     /// iperf3-style transfer of `bytes` to the target's sink.
     case trafficTcp(node: String, target: String, bytes: Int)
