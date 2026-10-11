@@ -140,4 +140,9 @@ import Testing
         let links = [cable("1", "s1", "s2"), cable("2", "s1", "p"), cable("3", "s2", "s1"), cable("4", "s1", "s2")]
         #expect(links.map { cableSlot($0, in: links) } == [-1, 0, 0, 1])
     }
+
+    /// Spec M11 §3: management frames get their own chip, named after the standard.
+    @Test func theWifiChipReads80211() {
+        #expect(Proto.wifi.label == "802.11" && Proto.ndp.label == "NDP")
+    }
 }

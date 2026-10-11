@@ -273,7 +273,7 @@ class IpNode: Node {
         case .arp(let a): arp.handle(a, on: to)
         case .ipv4(let p): input(p, on: to)
         case .ipv6(let p): v6.input(p, on: to)
-        case .bpdu: break // never reached: the MAC filter above already left out the PVST+ group address
+        case .bpdu, .mgmt: break // never reached: the MAC filter above already left out the PVST+ group address; management frames stay in the radio
         }
     }
 

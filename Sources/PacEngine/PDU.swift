@@ -43,6 +43,36 @@ let RIP_RESPONSE: UInt8 = 2
 let RIP_INFINITY = 16
 /// Route entries per message (RFC 2453 §4: at most 512 bytes of RIP).
 let RIP_MAX_ENTRIES = 25
+/// 802.11g ERP-OFDM timing with short slots (IEEE 802.11-2016 §17.4.3, §18; spec M11 §4), in µs.
+let DOT11_SLOT_US = 9
+let DOT11_SIFS_US = 10
+/// DIFS = SIFS + 2 slots (§10.3.2.3.7).
+let DOT11_DIFS_US = DOT11_SIFS_US + 2 * DOT11_SLOT_US
+/// Always 7 slots, half of CWmin = 15: a fixed value instead of the draw (spec M11 §4).
+let DOT11_BACKOFF_US = 7 * DOT11_SLOT_US
+/// ERP-OFDM's signal extension after every PPDU (§18, aSignalExtension).
+let DOT11_SIGNAL_EXTENSION_US = 6
+/// Mb/s: unicast data; management and group frames (the lowest basic rate); ACKs (the highest basic rate not above 54).
+let DOT11_DATA_RATE = 54
+let DOT11_BASIC_RATE = 6
+let DOT11_ACK_RATE = 24
+/// An ACK: frame control, duration, receiver address, FCS.
+let DOT11_ACK_BYTES = 14
+/// SIFS + the ACK: the Duration of a unicast frame (§9.2.5.2), and how long the medium stays busy after it.
+let DOT11_ACK_US = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: DOT11_ACK_RATE)
+/// Frames a radio holds while the medium is busy, like a cable's default queue (spec M11 §4).
+let DOT11_QUEUE_LIMIT = 1000
+/// Reason 3: deauthenticated because the sending station is leaving the BSS (§9.4.1.7).
+let DOT11_REASON_LEAVING = 3
+/// Capability information: ESS (bit 0) and short slot time (bit 10) (§9.4.1.4).
+let DOT11_CAPABILITY = 0x0401
+/// The beacon interval a Probe Response advertises, in TU of 1024 µs.
+let DOT11_BEACON_TU = 100
+/// The listen interval of an Association Request, in beacon intervals.
+let DOT11_LISTEN_INTERVAL = 10
+/// Supported rates in Mb/s, and the basic ones (spec M11 §3).
+let DOT11_RATES = [6, 9, 12, 18, 24, 36, 48, 54]
+let DOT11_BASIC_RATES: Set = [6, 12, 24]
 
 struct ArpPacket: Equatable, Sendable {
     var op: UInt16
@@ -296,6 +326,64 @@ enum Bpdu: Equatable, Sendable {
     }
 }
 
+/// The 802.11 MAC header of a frame on the air (§9.2.3, spec M11 §3): set by the radio that transmits it, cleared by the access point
+/// that bridges it to Ethernet. The frame keeps its Ethernet source and destination; address 1–3 follow from them and the direction.
+struct Dot11Header: Equatable, Sendable {
+    var toDS = false
+    var fromDS = false
+    /// The access point's radio MAC; broadcast (the wildcard BSSID) in a Probe Request.
+    var bssid: Mac
+    /// 12-bit sequence number of the transmitter (§9.2.4.4); fragment 0.
+    var seq = 0
+}
+
+/// The management frames Pac-Track sends (§9.3.3, spec M11 §3), with the fields that vary.
+enum Dot11Mgmt: Equatable, Sendable {
+    case probeRequest(ssid: String)
+    /// `timestamp`: the access point's clock in µs.
+    case probeResponse(ssid: String, channel: Int, timestamp: Int)
+    /// Open System (algorithm 0): transaction 1 from the station, 2 with the status from the access point.
+    case authentication(seq: Int, status: Int)
+    case associationRequest(ssid: String)
+    case associationResponse(status: Int, aid: Int)
+    case deauthentication(reason: Int)
+
+    /// Subtype (Table 9-1).
+    var subtype: Int {
+        switch self {
+        case .associationRequest: 0
+        case .associationResponse: 1
+        case .probeRequest: 4
+        case .probeResponse: 5
+        case .authentication: 11
+        case .deauthentication: 12
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .probeRequest: "Probe Request"
+        case .probeResponse: "Probe Response"
+        case .authentication: "Authentication"
+        case .associationRequest: "Association Request"
+        case .associationResponse: "Association Response"
+        case .deauthentication: "Deauthentication"
+        }
+    }
+
+    /// Body: fixed fields, then the SSID (2 + length), Supported Rates (2 + 8) and DS Parameter Set (2 + 1) elements (§9.3.3.6–13).
+    var size: Int {
+        switch self {
+        case .probeRequest(let ssid): 2 + ssid.utf8.count + 10
+        case .probeResponse(let ssid, _, _): 8 + 2 + 2 + 2 + ssid.utf8.count + 10 + 3
+        case .authentication: 6
+        case .associationRequest(let ssid): 2 + 2 + 2 + ssid.utf8.count + 10
+        case .associationResponse: 2 + 2 + 2 + 10
+        case .deauthentication: 2
+        }
+    }
+}
+
 enum L3: Equatable, Sendable {
     case arp(ArpPacket)
     case ipv4(Ipv4Packet)
@@ -303,6 +391,8 @@ enum L3: Equatable, Sendable {
     case ipv6(Ipv6Packet)
     /// PVST+ BPDU, in an IEEE 802.3 frame with LLC/SNAP (`EthernetFrame.etherType` holds the 802.3 length).
     case bpdu(Bpdu)
+    /// An 802.11 management frame (spec M11 §3): only on the air, never bridged.
+    case mgmt(Dot11Mgmt)
 }
 
 struct EthernetFrame: Equatable, Sendable {
@@ -313,16 +403,31 @@ struct EthernetFrame: Equatable, Sendable {
     var payload: L3
     /// 802.1Q tag (TPID 0x8100, PCP and DEI 0): the VLAN ID; nil while the frame travels untagged.
     var vlan: Int? = nil
+    /// The 802.11 header while the frame is on the air (spec M11 §3); nil on a cable.
+    var air: Dot11Header? = nil
 
-    /// Size as shown by Wireshark: Ethernet header (+ 4 B with a tag) + payload, no FCS.
+    /// Size as shown by Wireshark: Ethernet header (+ 4 B with a tag) + payload, no FCS; on the air the 802.11 header instead
+    /// (spec M11 §3).
     var size: Int {
-        let header = vlan == nil ? 14 : 18
-        switch payload {
-        case .arp: return header + 28
-        case .ipv4(let p): return header + p.size
-        case .ipv6(let p): return header + p.size
-        case .bpdu(let b): return header + b.size
+        let body = switch payload {
+        case .arp: 28
+        case .ipv4(let p): p.size
+        case .ipv6(let p): p.size
+        case .bpdu(let b): b.size
+        case .mgmt(let m): m.size
         }
+        // On the air: the 802.11 header, then LLC/SNAP before a packet (RFC 1042); a management body follows the header.
+        if air != nil {
+            if case .mgmt = payload { return 24 + body }
+            return 24 + 8 + body
+        }
+        return (vlan == nil ? 14 : 18) + body
+    }
+
+    /// Address 1, the receiver (spec M11 §3): the BSSID of a data frame to the access point, else the destination.
+    var receiver: Mac {
+        if let air, air.toDS { return air.bssid }
+        return dst
     }
 
     /// Bytes occupying the wire: frame + FCS padded to 64, plus preamble/SFD (8) and inter-frame gap (12). Frames are padded
@@ -331,6 +436,23 @@ struct EthernetFrame: Equatable, Sendable {
         let tag = vlan == nil ? 0 : 4
         return max(size - tag + 4, 64) + tag + 20
     }
+}
+
+/// µs on the air of a PPDU carrying `bytes` of MAC frame with its FCS (§17.4.3 and §18): preamble and SIGNAL (20 µs), 4 µs symbols of
+/// 4 × rate data bits for the 16 SERVICE bits, the frame and the 6 tail bits, then the ERP signal extension.
+func dot11TxUs(bytes: Int, rateMbps: Int) -> Int {
+    let bits = 16 + 8 * bytes + 6
+    let perSymbol = 4 * rateMbps
+    return 20 + 4 * ((bits + perSymbol - 1) / perSymbol) + DOT11_SIGNAL_EXTENSION_US
+}
+
+/// The medium's time for one frame (spec M11 §4): DIFS, backoff and the PPDU until it is received, then SIFS + ACK for a unicast
+/// one (its Duration field). Unicast data goes at 54 Mb/s, management and group frames at 6.
+func dot11Airtime(_ f: EthernetFrame) -> (frame: Int, ack: Int) {
+    let group = isGroupMac(f.receiver)
+    let mgmt = if case .mgmt = f.payload { true } else { false }
+    let rate = mgmt || group ? DOT11_BASIC_RATE : DOT11_DATA_RATE
+    return (DOT11_DIFS_US + DOT11_BACKOFF_US + dot11TxUs(bytes: f.size + 4, rateMbps: rate), group ? 0 : DOT11_ACK_US)
 }
 
 func internetChecksum(_ bytes: [UInt8]) -> UInt16 {

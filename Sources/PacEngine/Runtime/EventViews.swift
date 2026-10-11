@@ -171,6 +171,18 @@ private func describe(_ p: Ipv4Packet) -> String {
     }
 }
 
+/// Wireshark's Info column for a management frame.
+private func describe(_ m: Dot11Mgmt) -> String {
+    switch m {
+    case .probeRequest(let ssid): "Probe Request, SSID=\(ssid)"
+    case .probeResponse(let ssid, let channel, _): "Probe Response, SSID=\(ssid), canale \(channel)"
+    case .authentication(let seq, let status): "Authentication, Open System, transazione \(seq)" + (seq == 2 ? ", stato \(status)" : "")
+    case .associationRequest(let ssid): "Association Request, SSID=\(ssid)"
+    case .associationResponse(let status, let aid): "Association Response, stato \(status), AID=\(aid)"
+    case .deauthentication(let reason): "Deauthentication, motivo \(reason)"
+    }
+}
+
 /// Frame payload, or the bare packet of an L3 drop (no route, TTL, ARP or ND timeout).
 private func l3(_ e: SimEvent) -> L3? {
     e.frame?.payload ?? e.packet.map(L3.ipv4) ?? e.packet6.map(L3.ipv6)
@@ -182,6 +194,7 @@ func eventView(_ e: SimEvent) -> EventView {
     case .ipv4(let p)?: (proto(of: p), describe(p))
     case .ipv6(let p)?: (proto(of: p), describe(p))
     case .bpdu(let b)?: (.stp, describe(b))
+    case .mgmt(let m)?: (.wifi, describe(m))
     case nil: (e.proto ?? .stp, e.note ?? "") // a state change (spanning tree, or the protocol it names); every other logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,
@@ -497,15 +510,71 @@ private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
     }
 }
 
+private func etherTypeText(_ t: UInt16) -> String {
+    hex(Int(t), digits: 4) + (t == ETHERTYPE_ARP ? " (ARP)" : t == ETHERTYPE_IPV6 ? " (IPv6)" : " (IPv4)")
+}
+
+/// The 802.11 MAC header (spec M11 §3): type and subtype by name, flags, Duration, the three addresses with their roles, sequence.
+private func dot11Layer(_ f: EthernetFrame, _ h: Dot11Header) -> PduLayer {
+    let (type, subtype) = if case .mgmt(let m) = f.payload { ("0 (gestione)", "\(m.subtype) (\(m.name))") } else { ("2 (dati)", "0 (Data)") }
+    let addresses: [(String, Mac)] = h.toDS ? [("ricevitore, BSSID", h.bssid), ("trasmettitore, sorgente", f.src), ("destinazione", f.dst)]
+        : h.fromDS ? [("ricevitore, destinazione", f.dst), ("trasmettitore, BSSID", h.bssid), ("sorgente", f.src)]
+        : [("ricevitore, destinazione", f.dst), ("trasmettitore, sorgente", f.src), ("BSSID", h.bssid)]
+    return PduLayer(title: "IEEE 802.11", bytes: f.size, fields: [
+        field("Versione", "0"),
+        field("Tipo", type),
+        field("Sottotipo", subtype),
+        field("Flag", h.toDS ? "0x01 (To DS)" : h.fromDS ? "0x02 (From DS)" : "0x00"),
+        field("Duration", "\(dot11Airtime(f).ack) µs"),
+    ] + addresses.enumerated().map { field("Indirizzo \($0.offset + 1) (\($0.element.0))", $0.element.1) }
+      + [field("Numero di sequenza", "\(h.seq)"), field("Frammento", "0")])
+}
+
+/// RFC 1042 encapsulation of a packet on the air.
+private func llcSnapLayer(_ etherType: UInt16) -> PduLayer {
+    PduLayer(title: "LLC/SNAP", bytes: 8, fields: [
+        field("DSAP", "0xaa (SNAP)"),
+        field("SSAP", "0xaa (SNAP)"),
+        field("Controllo", "0x03 (UI)"),
+        field("OUI", "0x000000 (RFC 1042)"),
+        field("EtherType", etherTypeText(etherType)),
+    ])
+}
+
+/// A management body (§9.3.3), field by field.
+private func mgmtLayer(_ m: Dot11Mgmt) -> PduLayer {
+    let rates = DOT11_RATES.map { DOT11_BASIC_RATES.contains($0) ? "\($0)(B)" : "\($0)" }.joined(separator: ", ") + " Mb/s"
+    let status = { (s: Int) in s == 0 ? "0 (successo)" : "\(s)" }
+    let capability = field("Capability", hex(DOT11_CAPABILITY, digits: 4) + " (ESS, short slot)")
+    let fields: [PduField] = switch m {
+    case .probeRequest(let ssid): [field("SSID", ssid), field("Velocità supportate", rates)]
+    case .probeResponse(let ssid, let channel, let timestamp):
+        [field("Timestamp", "\(timestamp) µs"), field("Intervallo di beacon", "\(DOT11_BEACON_TU) TU (102.4 ms)"), capability,
+         field("SSID", ssid), field("Velocità supportate", rates), field("Canale (DS Parameter Set)", "\(channel)")]
+    case .authentication(let seq, let s): [field("Algoritmo", "0 (Open System)"), field("Numero di transazione", "\(seq)"), field("Stato", status(s))]
+    case .associationRequest(let ssid):
+        [capability, field("Intervallo di ascolto", "\(DOT11_LISTEN_INTERVAL)"), field("SSID", ssid), field("Velocità supportate", rates)]
+    case .associationResponse(let s, let aid):
+        // The AID field carries the two high bits set (§9.4.1.8).
+        [capability, field("Stato", status(s)), field("AID", "\(aid) (\(hex(0xC000 | aid, digits: 4)))"), field("Velocità supportate", rates)]
+    case .deauthentication(let reason): [field("Motivo", reason == DOT11_REASON_LEAVING ? "3 (lascia il BSS)" : "\(reason)")]
+    }
+    return PduLayer(title: "Gestione 802.11", bytes: m.size, fields: fields)
+}
+
 /// Header-by-header view of the frame (or packet) an event logged, with real field values.
 func pduLayers(_ e: SimEvent) -> [PduLayer] {
     var layers: [PduLayer] = []
-    if let f = e.frame {
+    if let f = e.frame, let h = f.air {
+        layers.append(dot11Layer(f, h))
+        if case .mgmt(let m) = f.payload { return layers + [mgmtLayer(m)] }
+        layers.append(llcSnapLayer(f.etherType))
+    } else if let f = e.frame {
         // A BPDU rides an IEEE 802.3 frame: a length where Ethernet II has its EtherType.
         let bpdu = if case .bpdu = f.payload { true } else { false }
         let typeName = bpdu ? "Lunghezza" : "EtherType"
         let type = bpdu ? "\(f.etherType) B"
-            : hex(Int(f.etherType), digits: 4) + (f.etherType == ETHERTYPE_ARP ? " (ARP)" : f.etherType == ETHERTYPE_IPV6 ? " (IPv6)" : " (IPv4)")
+            : etherTypeText(f.etherType)
         layers.append(PduLayer(title: bpdu ? "IEEE 802.3 Ethernet" : "Ethernet II", bytes: f.size, fields: [
             field("Destinazione", f.dst),
             field("Sorgente", f.src),
@@ -526,6 +595,7 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
     case .ipv4(let p)?: layers += ipLayers(p)
     case .ipv6(let p)?: layers += ipv6Layers(p)
     case .bpdu(let b)?: layers += bpduLayers(b)
+    case .mgmt?: break // decoded with the 802.11 header above
     case nil: break
     }
     return layers

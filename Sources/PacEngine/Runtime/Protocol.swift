@@ -127,8 +127,9 @@ public struct StpPriority: Codable, Equatable, Sendable {
     }
 }
 
+/// `wifi`: 802.11 management frames (spec M11 §3); data frames keep their packet's protocol.
 public enum Proto: String, CaseIterable, Sendable {
-    case arp, icmp, dhcp, dns, udp, tcp, stp, rip, ospf, ndp
+    case arp, icmp, dhcp, dns, udp, tcp, stp, rip, ospf, ndp, wifi
 }
 
 public enum Command: Sendable {

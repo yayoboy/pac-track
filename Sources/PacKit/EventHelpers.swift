@@ -1,7 +1,7 @@
 import PacEngine
 
 extension Proto {
-    public var label: String { rawValue.uppercased() }
+    public var label: String { self == .wifi ? "802.11" : rawValue.uppercased() }
 }
 
 extension EventKind {
