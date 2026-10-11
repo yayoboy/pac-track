@@ -6,7 +6,7 @@ Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: diseg
 
 ## Cosa fa
 
-- **Dispositivi**: PC, laptop, server, router, switch (8, 24 o 48 porte), hub e Cloud/ISP, un router con un'uscita "Internet" simulata che risponde a ping e fa da DNS pubblico.
+- **Dispositivi**: PC, laptop, stampante (riceve il traffico del generatore), Smart TV (in DHCP), server (anche già pronti come server DNS o DHCP), router, switch (8, 24 o 48 porte), hub e Cloud/ISP, un router con un'uscita "Internet" simulata che risponde a ping e fa da DNS pubblico.
 - **Protocolli**: Ethernet con MAC learning e ARP; IPv4 con routing statico; ICMP (ping, traceroute); DHCP (DORA, rinnovo, scadenza) e DNS (record A, cache con TTL, NXDOMAIN, nslookup); UDP e TCP (handshake, finestra, ritrasmissioni RFC 6298, fast retransmit, Reno); NAT/PAT e firewall stateful sui router.
 - **VLAN e spanning tree**: porte access e trunk 802.1Q (VLAN ammesse, nativa), MAC table per VLAN, router-on-a-stick con sottointerfacce; PVST+ (802.1D per VLAN) con elezione della root, stati e timer reali, topology change, PortFast e priorità per VLAN.
 - **Routing dinamico**: RIPv2 (RFC 2453, split horizon, triggered update) e OSPFv2 in area 0 (hello/dead, elezione DR/BDR, LSA di tipo 1 e 2, SPF), con distanza amministrativa e metrica in tabella.

@@ -39,7 +39,7 @@ Più dispositivi finali nella palette, ognuno con la sua icona, un nome italiano
 ## 5. Palette e menu
 - Sezioni: **Rete** (Router, Switch, Hub, Cloud/ISP), **Host** (PC, Laptop, Stampante, Smart TV), **Server** (Server, Server DNS, Server DHCP), **Cavi**.
 - La ricerca "Cerca" filtra per nome e per sezione, come oggi: `stamp` trova la Stampante, `server` tutta la sezione Server, `tv` la Smart TV.
-- L'elenco scorre quando la finestra è bassa (altezza minima 640 pt); il campo di ricerca resta in alto e il suggerimento in basso. Nessuna voce va a capo o si tronca nei 170 pt della palette.
+- Alla finestra minima (640 pt) la palette entra tutta; l'elenco sta in una vista che scorre, così con meno spazio si scorre invece di tagliare, con il campo di ricerca in alto e il suggerimento in basso. Nessuna voce va a capo o si tronca nei 170 pt della palette.
 - Il menu *Aggiungi dispositivo* del canvas elenca le stesse voci nello stesso ordine, preset compresi.
 
 ## 6. Persistenza e copie
