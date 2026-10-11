@@ -35,4 +35,38 @@ import Testing
         await editor.enableDhcp(editor.snapshot.nodes[0].id, true)
         #expect(editor.snapshot.nodes[0].dhcpServer?.gateway == "203.0.113.1") // the cloud routes: it is the gateway
     }
+
+    @Test func aPrinterArrivesWithTheSinkAndATvInDhcpEachInOneStep() async throws {
+        await editor.addDevice(.printer, at: Pos(x: 0, y: 0))
+        await editor.addDevice(.tv, at: Pos(x: 100, y: 0))
+        let (prn, tv) = (editor.snapshot.nodes[0], editor.snapshot.nodes[1])
+        #expect(prn.name == "PRN1" && prn.sink && prn.ifaces.map(\.name) == ["eth0"] && prn.ifaces[0].cidr == nil && prn.ifaces[0].mode == .static)
+        #expect(tv.name == "TV1" && !tv.sink && tv.ifaces[0].mode == .dhcp)
+        let saved = editor.current
+        #expect(try ProjectFile.decode(try ProjectFile.encode(saved)) == saved)
+        await editor.undo()
+        #expect(editor.snapshot.nodes.map(\.name) == ["PRN1"]) // the TV and its mode in one step
+        await editor.undo()
+        #expect(editor.snapshot.nodes.isEmpty)
+        let opened = await editor.load(saved)
+        #expect(opened && editor.snapshot.nodes.map(\.kind) == [.printer, .tv])
+        #expect(editor.snapshot.nodes[0].sink && editor.snapshot.nodes[1].ifaces[0].mode == .dhcp)
+        // The default is the editor's: a printer saved with the sink off opens with it off.
+        await editor.edit(.setSink(node: editor.snapshot.nodes[0].id, on: false))
+        let off = editor.current
+        _ = await editor.load(off)
+        #expect(!editor.snapshot.nodes[0].sink)
+    }
+
+    @Test func copiesKeepTheSink() async {
+        await editor.addDevice(.printer, at: Pos(x: 0, y: 0))
+        await editor.addDevice(.server, at: Pos(x: 100, y: 0))
+        await editor.addDevice(.printer, at: Pos(x: 200, y: 0))
+        let ids = editor.snapshot.nodes.map(\.id)
+        await editor.edit(.setSink(node: ids[1], on: true))
+        await editor.edit(.setSink(node: ids[2], on: false))
+        await editor.duplicate(ids)
+        #expect(editor.snapshot.nodes.map { "\($0.name) \($0.sink)" }
+            == ["PRN1 true", "SRV1 true", "PRN2 false", "PRN3 true", "SRV2 true", "PRN4 false"])
+    }
 }

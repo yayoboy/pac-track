@@ -239,6 +239,9 @@ public final class Editor {
             cmds += [.setIp(node: id, iface: "Gi0/0", cidr: "203.0.113.1/24"),
                      .setDnsServer(node: id, records: [DnsRecord(name: "www.example.com", ip: "198.51.100.10")])]
         }
+        // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
+        if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
+        if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
         if await editNow(cmds) {
             selection = .node(id)
         }
@@ -396,7 +399,7 @@ public final class Editor {
         }
     }
 
-    /// Adds devices of the same kind, power state, interface modes, IPv6 and SLAAC settings, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
+    /// Adds devices of the same kind, power state, interface modes, sink, IPv6 and SLAAC settings, name server, switch size, port VLANs and subinterfaces as `srcs` (no addresses, routes or cables: a copied IP
     /// would silently conflict on the same segment, and static routes need an address), with distinct default names, in one undo step,
     /// and selects them.
     private func insertCopies(of srcs: [TopologyNode]) async {
@@ -424,6 +427,8 @@ public final class Editor {
             // Modes and the name server are not addresses: a copied DHCP PC asks for its own lease.
             for i in src.ifaces where i.mode == .dhcp { cmds.append(.setIfaceMode(node: id, iface: i.name, mode: .dhcp)) }
             if let server = src.nameServer { cmds.append(.setNameServer(node: id, ip: server)) }
+            // The sink is a switch, not an address (spec M10 §6): a copied printer still receives.
+            if src.sink { cmds.append(.setSink(node: id, on: true)) }
             if !src.powered { cmds.append(.setPower(id: id, on: false)) }
         }
         if await editNow(cmds, key: "paste") { select(nodes: ids) }
