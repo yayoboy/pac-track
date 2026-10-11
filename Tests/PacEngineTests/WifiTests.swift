@@ -292,4 +292,47 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
         expectError("Duplicate address: 10.0.0.1 is already used by TAB1 wlan0 on this segment") { try srv.setIp("eth0", "10.0.0.1/24") }
         expectError("Duplicate address: 10.0.0.100 is already used by SRV eth0 on this segment") { try tab.setIp("wlan0", "10.0.0.100/24") }
     }
+
+    /// Spec M11 §5: two access points with one SSID on channel 6 and one cable. TAB1's Association Response from AP1 waits behind
+    /// 1000 broadcasts (2.2 s of air), so TAB1 gives up after DOT11_TIMEOUT_NS: AP1 keeps no orphan association. Associated with AP2
+    /// (switched on meanwhile, first to answer), TAB1 gets a frame from the cable once, and takes no unicast data from AP1's BSS.
+    @Test func aStationThatGivesUpLeavesNoOrphanAndTakesDataOnlyFromItsBss() throws {
+        let sim = Sim()
+        let ap2 = AccessPoint(sim: sim, id: "AP2")
+        ap2.powered = false
+        ap2.reset()
+        let ap1 = AccessPoint(sim: sim, id: "AP1")
+        let hub = Hub(sim: sim, id: "HUB1")
+        let probe = Probe(sim: sim, id: "P")
+        _ = try Link(sim: sim, try probe.iface("eth0"), try hub.iface("p1"))
+        _ = try Link(sim: sim, try ap1.iface("Gi0"), try hub.iface("p2"))
+        _ = try Link(sim: sim, try ap2.iface("Gi0"), try hub.iface("p3"))
+        let tab = Host(sim: sim, id: "TAB1", wifi: true)
+        try tab.setIp("wlan0", "10.0.0.1/24")
+        try tab.station!.configure(StationConfig(ssid: "pac-track"))
+        sim.sched.runUntil(60_500 * US) // TAB1's Association Request to AP1 is on the air
+        let udp = makeIpv4(src: 1, dst: BROADCAST_IP, ttl: 64, id: 1,
+                           payload: .udp(makeUdp(srcPort: 5001, dstPort: 9, payload: .traffic(TrafficData(flow: 1, seq: 0, sentAt: 0)))))
+        for _ in 0..<1000 {
+            ap1.radio.send(EthernetFrame(id: sim.nextId(), src: ap1.radio.iface.mac, dst: BROADCAST_MAC, etherType: ETHERTYPE_IPV4, payload: .ipv4(udp)))
+        }
+        sim.run(2_500 * MS)
+        #expect(tab.station!.state == .notFound && ap1.radio.clients.isEmpty)
+        ap2.powered = true
+        ap2.powerOn()
+        sim.run(4 * S) // the next scan starts at 6.12 s
+        #expect(tab.station!.ap === ap2.radio)
+        let p = try probe.iface("eth0")
+        let arp = ArpPacket(op: 1, senderMac: p.mac, senderIp: 0x0A00_0009, targetMac: "00:00:00:00:00:00", targetIp: 0x0A00_0001)
+        let request = { EthernetFrame(id: sim.nextId(), src: p.mac, dst: tab.nic.mac, etherType: ETHERTYPE_ARP, payload: .arp(arp)) }
+        let replies = {
+            sim.log.all.filter { if case .arp(let a)? = $0.frame?.payload { $0.kind == .tx && $0.node == "TAB1" && a.op == 2 } else { false } }.count
+        }
+        p.send(request())
+        sim.run(10 * MS)
+        #expect(replies() == 1)
+        ap1.radio.send(request()) // From DS with AP1's BSSID, to TAB1's MAC
+        sim.run(10 * MS)
+        #expect(replies() == 1)
+    }
 }

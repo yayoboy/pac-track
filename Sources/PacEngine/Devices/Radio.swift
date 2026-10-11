@@ -156,8 +156,10 @@ final class StationRadio: Radio {
     }
 
     /// Scans again from channel 1 after leaving any access point; idle without a network or while switched off. Also how an access
-    /// point's going away (switched off, removed, a Deauthentication) reaches the station.
+    /// point's going away (switched off, removed, a Deauthentication) reaches the station. The access point forgets it at once, without
+    /// a frame: one that accepted an Association Request whose answer came too late keeps no orphan.
     func restart() {
+        ap?.forget(self)
         leave()
         guard iface.node.powered, !config.ssid.isEmpty else { return }
         state = .scanning
@@ -214,7 +216,7 @@ final class StationRadio: Radio {
     override func receive(_ f: EthernetFrame, from sender: Radio) {
         guard case .mgmt(let m) = f.payload else {
             // Data from its access point, once associated.
-            if state == .associated { iface.node.receive(f, on: iface) }
+            if state == .associated, f.air?.bssid == bssid { iface.node.receive(f, on: iface) }
             return
         }
         let fromAp = f.src == bssid
