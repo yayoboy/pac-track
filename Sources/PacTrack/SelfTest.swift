@@ -725,6 +725,16 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m10-tv")) { failures.append("could not write the M10 TV image") }
         // The minimum window (640 pt) less the toolbar: the whole palette still fits, nothing cut.
         if !render(editor, to: sibling(output, "m10-palette-short"), height: 588) { failures.append("could not write the short palette image") }
+        // Each port names the device and port at the other end (from v1); a long name shortens in the middle, on one line.
+        await editor.edit(.rename(id: id("PRN1"), name: "Stampante-ufficio-secondo-piano"))
+        let sw = editor.snapshot.nodes.first { $0.name == "SW1" }
+        if sw.map({ peerLabel(IfaceRef(node: $0.id, iface: "Gi0/2"), in: editor.snapshot) }) != "TV1 eth0" { failures.append("SW1 Gi0/2 peer") }
+        editor.select(.node(id("SW1")))
+        editor.inspectorTab = .ports
+        if !render(editor, to: sibling(output, "ux-ports")) { failures.append("could not write the ports peer image") }
+        // The address hints skip SRV1, the leases and the pool .100–.199 (the menu itself opens in its own window: not in the image).
+        let hints = addressSuggestions(IfaceRef(node: id("Stampante-ufficio-secondo-piano"), iface: "eth0"), in: editor.snapshot)
+        if hints != ["192.168.1.1/24", "192.168.1.3/24", "192.168.1.4/24"] { failures.append("address hints \(hints)") }
         return failures
     }
 

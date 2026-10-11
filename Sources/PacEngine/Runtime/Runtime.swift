@@ -442,7 +442,8 @@ public final class Runtime {
                 ifaces: node.interfaces.map {
                     IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.radio?.lineUp ?? (($0.dot1q?.parent ?? $0).link != nil),
                               mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil,
-                              ipv6Config: $0.v6?.config, ipv6: addressLines($0), wireless: $0.radio != nil)
+                              ipv6Config: $0.v6?.config, ipv6: addressLines($0), wireless: $0.radio != nil,
+                              segment: ip == nil ? [] : $0.segmentPeers().map { IfaceRef(node: $0.node.id, iface: $0.name) })
                 },
                 routes: ip.map { ip in
                     ip.routes.view().map {

@@ -40,6 +40,45 @@ import Testing
         #expect(firstFreeIface(nodes[0]) == nil)
     }
 
+    @Test func namesTheDeviceAndPortAtTheOtherEndOfTheCable() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        try rt.handle(.connect(id: "l", a: IfaceRef(node: "r", iface: "Gi0/0"), b: IfaceRef(node: "a", iface: "eth0")))
+        try rt.handle(.addSubinterface(node: "r", iface: "Gi0/0.10"))
+        let s = rt.snapshot()
+        #expect(peerLabel(IfaceRef(node: "a", iface: "eth0"), in: s) == "R1 Gi0/0")
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/0"), in: s) == "PC1 eth0")
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/0.10"), in: s) == "PC1 eth0") // rides on its physical interface's cable
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/1"), in: s) == nil)
+    }
+
+    @Test func suggestsFreeAddressesAndGatewaysFromTheSegment() throws {
+        let rt = Runtime()
+        for (id, kind, name) in [("a", DeviceKind.pc, "PC1"), ("b", .pc, "PC2"), ("c", .pc, "PC3"), ("d", .pc, "PC4"), ("v", .server, "SRV1"),
+                                 ("s", .switch, "SW1"), ("r", .router, "R1")] {
+            try rt.handle(.addNode(id: id, kind: kind, name: name))
+        }
+        for (id, a, ai, b, bi) in [("1", "a", "eth0", "s", "Gi0/1"), ("2", "b", "eth0", "s", "Gi0/2"), ("3", "v", "eth0", "s", "Gi0/3"),
+                                   ("4", "r", "Gi0/0", "s", "Gi0/4"), ("5", "c", "eth0", "r", "Gi0/1")] {
+            try rt.handle(.connect(id: id, a: IfaceRef(node: a, iface: ai), b: IfaceRef(node: b, iface: bi)))
+        }
+        try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "192.168.1.10/24"))
+        try rt.handle(.setIp(node: "r", iface: "Gi0/0", cidr: "192.168.1.1/24"))
+        try rt.handle(.setIp(node: "r", iface: "Gi0/1", cidr: "10.0.0.1/30"))
+        try rt.handle(.setIp(node: "v", iface: "eth0", cidr: "192.168.1.2/24"))
+        try rt.handle(.setDhcpServer(node: "v", config: DhcpConfig(start: "192.168.1.3", end: "192.168.1.9")))
+        let s = rt.snapshot()
+        let address = { (node: String) in addressSuggestions(IfaceRef(node: node, iface: "eth0"), in: s) }
+        #expect(address("b") == ["192.168.1.11/24", "192.168.1.12/24", "192.168.1.13/24"]) // past R1, SRV1, the pool and PC1
+        #expect(address("v") == ["192.168.1.11/24", "192.168.1.12/24", "192.168.1.13/24"]) // SRV1 skips its own pool too
+        #expect(address("c") == ["10.0.0.2/30"]) // the only host left; .3 is the broadcast
+        #expect(address("d").isEmpty) // nothing on its segment
+        #expect(gatewaySuggestions("b", in: s) == ["192.168.1.1"]) // routers only, not SRV1 or PC1
+        #expect(gatewaySuggestions("c", in: s) == ["10.0.0.1"])
+        #expect(gatewaySuggestions("d", in: s).isEmpty)
+    }
+
     @Test func comparesTopologiesIgnoringPositions() throws {
         let s = try snapshot()
         let a = makeTopology(s, [:])

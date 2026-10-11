@@ -91,4 +91,12 @@ private func lab() throws -> Runtime {
         expectError("already used by PC1 eth0") { try rt.handle(.setIp(node: "r", iface: "Gi0/0.10", cidr: "10.0.0.1/24")) } // over the trunk
         try rt.handle(.setIp(node: "r", iface: "Gi0/0.20", cidr: "10.0.0.1/24")) // the trunk does not carry VLAN 20
     }
+
+    @Test func theSnapshotListsEachIpInterfacesSegment() throws {
+        let s = try lab().snapshot()
+        let segment = { (node: Int, iface: Int) in Set(s.nodes[node].ifaces[iface].segment.map { "\($0.node) \($0.iface)" }) }
+        #expect(segment(0, 0) == ["b eth0", "c eth0", "r Gi0/0"]) // PC1: across SW1 and HUB1
+        #expect(segment(3, 0) == ["r Gi0/1"]) // PC4: behind R1
+        #expect(segment(4, 0).isEmpty) // a switch port lists nothing
+    }
 }

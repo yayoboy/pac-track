@@ -75,9 +75,9 @@ private struct NodeInspector: View {
                 let modeKey = "mode:\(node.id):\(iface.name)"
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(iface.name).foregroundStyle(Theme.fgStrong)
+                        Text(iface.name).foregroundStyle(Theme.fgStrong).layoutPriority(1)
                         Spacer()
-                        Text(iface.wireless ? (iface.linked ? "● associata" : "○ non associata") : iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        cableEnd(iface)
                         if iface.name.contains(".") {
                             Button("Elimina", role: .destructive) {
                                 Task { await editor.edit(.removeSubinterface(node: node.id, iface: iface.name), key: "sub:\(node.id)") }
@@ -108,7 +108,8 @@ private struct NodeInspector: View {
                             Text(dhcpStatus(client)).font(Theme.small).foregroundStyle(Theme.muted)
                         }
                     } else {
-                        CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24", errorKey: key, editor: editor) { text in
+                        CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24",
+                                    suggestions: addressSuggestions(IfaceRef(node: node.id, iface: iface.name), in: editor.snapshot), errorKey: key, editor: editor) { text in
                             let trimmed = text.trimmingCharacters(in: .whitespaces)
                             await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
                         }
@@ -146,15 +147,24 @@ private struct NodeInspector: View {
             ForEach(node.ifaces, id: \.name) { iface in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(iface.name)
+                        Text(iface.name).layoutPriority(1)
                         Spacer()
-                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        cableEnd(iface)
                     }
                     .font(Theme.mono)
                     if let port = iface.switchport { SwitchportFields(node: node.id, iface: iface.name, port: port, editor: editor) }
                 }
             }
         }
+    }
+
+    /// "● SW1 Gi0/2", the device and port at the other end of the cable, or "○ libera"; one line, shortened in the middle.
+    private func cableEnd(_ iface: IfaceView) -> some View {
+        Text(iface.wireless ? (iface.linked ? "● associata" : "○ non associata")
+             : iface.linked ? "● " + (peerLabel(IfaceRef(node: node.id, iface: iface.name), in: editor.snapshot) ?? "collegata") : "○ libera")
+            .foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     private var tables: some View {
@@ -376,7 +386,8 @@ private struct RoutingTab: View {
                     }
                 }
             }
-            CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1", errorKey: gwKey, editor: editor) { text in
+            CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1",
+                        suggestions: node.kind.isHost ? gatewaySuggestions(node.id, in: editor.snapshot) : [], errorKey: gwKey, editor: editor) { text in
                 let trimmed = text.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty {
                     await editor.edit(.addRoute(node: node.id, cidr: "0.0.0.0/0", nextHop: trimmed), key: gwKey)

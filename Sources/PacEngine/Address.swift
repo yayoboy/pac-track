@@ -16,7 +16,7 @@ private func decimal(_ s: Substring, max: Int) -> Int? {
     return value
 }
 
-func parseIp(_ s: String) throws -> UInt32 {
+public func parseIp(_ s: String) throws -> UInt32 {
     let parts = s.split(separator: ".", omittingEmptySubsequences: false)
     guard parts.count == 4 else { throw EngineError("Invalid IPv4 address: \"\(s)\"") }
     var n: UInt32 = 0
@@ -27,7 +27,7 @@ func parseIp(_ s: String) throws -> UInt32 {
     return n
 }
 
-func formatIp(_ n: UInt32) -> String {
+public func formatIp(_ n: UInt32) -> String {
     "\(n >> 24).\((n >> 16) & 255).\((n >> 8) & 255).\(n & 255)"
 }
 

@@ -17,6 +17,8 @@ struct CommitField: View {
     let label: String
     let value: String
     var placeholder = ""
+    /// Offered under the field while they start with the typed text; picking one fills the field, Return still commits.
+    var suggestions: [String] = []
     let errorKey: String
     let editor: Editor
     let commit: (String) async -> Void
@@ -30,6 +32,7 @@ struct CommitField: View {
                 .textFieldStyle(.roundedBorder)
                 .font(Theme.mono)
                 .focused($focused)
+                .textInputSuggestions(suggestions.filter { $0.hasPrefix(draft) && $0 != draft }, id: \.self) { Text($0).textInputCompletion($0) }
                 .onAppear { draft = value }
                 .onChange(of: value) { _, newValue in if !focused { draft = newValue } }
                 .onChange(of: focused) { _, isFocused in if !isFocused { submit() } }

@@ -288,6 +288,8 @@ public struct IfaceView: Equatable, Sendable {
     public let ipv6: [String]
     /// Has a radio (spec M11).
     public let wireless: Bool
+    /// IP interfaces only: the other IP interfaces in its broadcast domain, as the duplicate-address check sees them.
+    public let segment: [IfaceRef]
 }
 
 public struct RouteRow: Equatable, Sendable {
