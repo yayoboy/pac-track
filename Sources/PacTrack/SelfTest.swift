@@ -103,6 +103,7 @@ enum SelfTest {
         failures += await ipv6Scenario(output: output)
         failures += await ipv6ServicesScenario(output: output)
         failures += await m10Scenario(output: output)
+        failures += await m11aScenario(output: output)
         return failures
     }
 
@@ -724,6 +725,60 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m10-tv")) { failures.append("could not write the M10 TV image") }
         // The minimum window (640 pt) less the toolbar: the whole palette still fits, nothing cut.
         if !render(editor, to: sibling(output, "m10-palette-short"), height: 588) { failures.append("could not write the short palette image") }
+        return failures
+    }
+
+    /// M11a (spec M11 §1): the Wi-Fi lab as dropped. Images: the lab with TAB1's Wi-Fi tab and an Association Response in the PDU
+    /// inspector under the full chip row; AP1's Wi-Fi tab with an SSID error and its tables; LAPTOP1's tables.
+    private static func m11aScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 60))
+        await editor.addDevice(.server, at: Pos(x: 300, y: 180), preset: .dhcp)
+        await editor.addDevice(.accessPoint, at: Pos(x: 560, y: 200))
+        // Stations symmetric under AP1, LAPTOP1 clear of the minimap in the bottom-right corner.
+        await editor.addDevice(.tablet, at: Pos(x: 430, y: 370))
+        await editor.addDevice(.smartphone, at: Pos(x: 560, y: 390))
+        await editor.addDevice(.laptop, at: Pos(x: 690, y: 370))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        let cidr = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.ifaces.first?.cidr }
+        for name in ["SRV1", "AP1"] { await editor.connect(id("SW1"), id(name)) }
+        await editor.setNic(id("LAPTOP1"), wifi: true)
+        await editor.edit([.setStation(node: id("LAPTOP1"), config: StationConfig(ssid: "pac-track")),
+                           .setIfaceMode(node: id("LAPTOP1"), iface: "wlan0", mode: .dhcp)])
+        for _ in 0..<610 { await editor.tick(wallMs: 100) }
+        if airLinks(editor.snapshot.nodes).count != 3 { failures.append("M11a air links \(airLinks(editor.snapshot.nodes).map(\.id))") }
+        let ips = Set(["TAB1", "PHONE1", "LAPTOP1"].map(cidr))
+        if ips != ["192.168.1.100/24", "192.168.1.101/24", "192.168.1.102/24"] { failures.append("M11a leases \(ips)") }
+        await editor.run(.ping(node: id("TAB1"), target: cidr("PHONE1")?.split(separator: "/").first.map(String.init) ?? ""))
+        for _ in 0..<50 { await editor.tick(wallMs: 100) }
+        if !(editor.snapshot.apps.last?.lines.contains("4 packets transmitted, 4 received, 0% packet loss") ?? false) {
+            failures.append("M11a ping \(editor.snapshot.apps.last?.lines ?? [])")
+        }
+        if let discover = editor.events.first(where: { $0.proto == .dhcp && $0.kind == .tx && $0.node == id("TAB1") }) {
+            await editor.selectEvent(discover.id)
+            if editor.pdu?.map(\.title) != ["IEEE 802.11", "LLC/SNAP", "IPv4", "UDP", "DHCP"] { failures.append("M11a data PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no DHCP frame from TAB1 in the event list")
+        }
+        if let response = editor.events.first(where: { $0.proto == .wifi && $0.kind == .rx && $0.info.hasPrefix("Association Response") }) {
+            await editor.selectEvent(response.id)
+            if editor.pdu?.map(\.title) != ["IEEE 802.11", "Gestione 802.11"] { failures.append("M11a management PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no Association Response in the event list")
+        }
+        editor.bottomTab = .events
+        editor.select(.node(id("TAB1")))
+        editor.inspectorTab = .wifi
+        if !render(editor, to: sibling(output, "m11a-lab")) { failures.append("could not write the M11a lab image") }
+        await editor.edit(.setAccessPoint(node: id("AP1"), config: ApConfig(ssid: "", channel: 6)), key: "ssid:\(id("AP1"))")
+        if editor.error?.message != "SSID must be 1 to 32 bytes" { failures.append("M11a SSID error \(String(describing: editor.error))") }
+        editor.select(.node(id("AP1")))
+        if !render(editor, to: sibling(output, "m11a-ap")) { failures.append("could not write the M11a access point image") }
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m11a-ap-tables")) { failures.append("could not write the M11a access point tables image") }
+        editor.select(.node(id("LAPTOP1")))
+        if !render(editor, to: sibling(output, "m11a-tables")) { failures.append("could not write the M11a client tables image") }
         return failures
     }
 

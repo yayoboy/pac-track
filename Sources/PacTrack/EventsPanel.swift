@@ -24,8 +24,10 @@ struct EventsPanel: View {
         }
     }
 
+    /// Two rows (spec M11 §7): every chip on the full width, then the node and the count. Under the panel's minimum width the chips
+    /// scroll sideways instead of wrapping.
     private func filters(count: Int) -> some View {
-        HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             // Chips never wrap: when the panel is narrower than all of them, the row scrolls sideways.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
@@ -51,13 +53,16 @@ struct EventsPanel: View {
                 }
                 .padding(.vertical, 1) // room for the capsule strokes
             }
-            Picker("Nodo", selection: $node) {
-                Text("Tutti i nodi").tag(String?.none)
-                ForEach(editor.snapshot.nodes) { Text($0.name).tag(Optional($0.id)) }
+            HStack(spacing: 6) {
+                Picker("Nodo", selection: $node) {
+                    Text("Tutti i nodi").tag(String?.none)
+                    ForEach(editor.snapshot.nodes) { Text($0.name).tag(Optional($0.id)) }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+                Spacer()
+                Text("\(count) eventi").font(Theme.small).foregroundStyle(Theme.muted).fixedSize()
             }
-            .labelsHidden()
-            .frame(width: 110)
-            Text("\(count) eventi").font(Theme.small).foregroundStyle(Theme.muted).fixedSize()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

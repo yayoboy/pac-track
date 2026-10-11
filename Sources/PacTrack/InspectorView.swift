@@ -176,7 +176,9 @@ private struct NodeInspector: View {
                 TableSection(title: "Client associati", head: ["AID", "MAC", "Client"], rows: associationRows(ap, in: editor.snapshot.nodes))
             } else {
                 if let s = node.station {
-                    TableSection(title: "Wi-Fi", head: ["Stato", "SSID", "BSSID", "Canale"], rows: [wifiRow(s)])
+                    // SSID over BSSID, as the IPv6 tables do: four columns on one line wrap the BSSID in the 300 pt column.
+                    TableSection(title: "Wi-Fi", head: ["Stato", "SSID\nBSSID", "Canale"],
+                                 rows: [wifiRow(s)].map { [$0[0], "\($0[1])\n\($0[2])", $0[3]] })
                 }
                 TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."],
                              rows: node.routes.filter { !$0.dest.contains(":") }.map(routeColumns))
