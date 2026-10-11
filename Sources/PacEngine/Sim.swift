@@ -105,6 +105,14 @@ final class Sim {
         nodes.flatMap(\.interfaces).compactMap(\.radio)
     }
 
+    /// A device moved (spec M11 §8): a station whose access point is now out of range loses it at once, without a frame, and scans
+    /// again.
+    func rangeChanged() {
+        for case let s as StationRadio in radios() {
+            if let ap = s.ap, dot11Signal(s.iface.node, ap.iface.node) == nil { s.restart() }
+        }
+    }
+
     func run(_ duration: Int) {
         sched.runUntil(now + duration)
     }

@@ -78,7 +78,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
         #expect(lines(layers[0]) == [
             "Versione: 0", "Tipo: 2 (dati)", "Sottotipo: 0 (Data)", "Flag: 0x01 (To DS)", "Duration: 44 µs",
             "Indirizzo 1 (ricevitore, BSSID): 02:00:00:00:00:0a", "Indirizzo 2 (trasmettitore, sorgente): 02:00:00:00:00:01",
-            "Indirizzo 3 (destinazione): 02:00:00:00:00:02", "Numero di sequenza: 7", "Frammento: 0",
+            "Indirizzo 3 (destinazione): 02:00:00:00:00:02", "Numero di sequenza: 7", "Frammento: 0", "Velocità: 54 Mb/s",
         ])
         #expect(lines(layers[1]) == ["DSAP: 0xaa (SNAP)", "SSAP: 0xaa (SNAP)", "Controllo: 0x03 (UI)", "OUI: 0x000000 (RFC 1042)",
                                      "EtherType: 0x0800 (IPv4)"])
@@ -108,7 +108,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
         #expect(lines(response[0]) == [
             "Versione: 0", "Tipo: 0 (gestione)", "Sottotipo: 1 (Association Response)", "Flag: 0x00", "Duration: 60 µs",
             "Indirizzo 1 (ricevitore, destinazione): 02:00:00:00:00:01", "Indirizzo 2 (trasmettitore, sorgente): 02:00:00:00:00:0a",
-            "Indirizzo 3 (BSSID): 02:00:00:00:00:0a", "Numero di sequenza: 0", "Frammento: 0",
+            "Indirizzo 3 (BSSID): 02:00:00:00:00:0a", "Numero di sequenza: 0", "Frammento: 0", "Velocità: 6 Mb/s",
         ])
         #expect(lines(response[1]) == ["Capability: 0x0401 (ESS, short slot)", "Stato: 0 (successo)", "AID: 1 (0xc001)",
                                        "Velocità supportate: 6(B), 9, 12(B), 18, 24(B), 36, 48, 54 Mb/s"])
@@ -128,5 +128,23 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
              "Velocità supportate: 6(B), 9, 12(B), 18, 24(B), 36, 48, 54 Mb/s"],
             ["Motivo: 3 (lascia il BSS)"],
         ])
+    }
+
+    /// Spec M11 §8: unicast data goes at the rate in its header (the station's, from the distance); the ACK at the highest basic rate
+    /// (6, 12, 24) not above it (§10.7.6.5.2): 12 after 18, 6 after 9, 24 after 36.
+    @Test func dataGoesAtItsHeadersRateAndTheAckAtTheBasicRateBelow() {
+        var f = echo(toDS: true)
+        let acks = [(18, 12), (9, 6), (36, 24), (54, 24)].map { rate, ack -> Bool in
+            f.air?.rate = rate
+            return air(f) == [DOT11_DIFS_US + DOT11_BACKOFF_US + dot11TxUs(bytes: 120, rateMbps: rate),
+                              DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: ack)]
+        }
+        #expect(acks == [true, true, true, true])
+        f.air?.rate = 18
+        #expect(lines(pduLayers(SimEvent(time: 0, kind: .tx, node: "TAB1", iface: "wlan0", frame: f))[0]).last == "Velocità: 18 Mb/s")
+        // Management and group frames go at 6 whatever the header says.
+        var probe = mgmt(.probeRequest(ssid: "pac-track"), to: BROADCAST_MAC, bssid: BROADCAST_MAC)
+        probe.air?.rate = 18
+        #expect(air(probe) == [189, 0])
     }
 }

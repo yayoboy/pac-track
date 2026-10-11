@@ -4,6 +4,26 @@ let SCAN_DWELL_NS = 20 * MS
 let RESCAN_NS = 5 * S
 let DOT11_TIMEOUT_NS = 1 * S
 
+/// How far a radio reaches on the canvas, in points (spec M11 §8).
+public let WIFI_RANGE = 300.0
+/// Minimum sensitivity in dBm of each 802.11g rate (IEEE 802.11-2016 Table 17-18), slowest first.
+let DOT11_SENSITIVITY: [(rate: Int, dbm: Int)] = [(6, -82), (9, -81), (12, -79), (18, -77), (24, -74), (36, -70), (48, -66), (54, -65)]
+
+/// What a radio on `b` hears of one on `a` (spec M11 §8): −30 dBm side by side down to −82 dBm (the 6 Mb/s sensitivity) at
+/// WIFI_RANGE, linear in dB; nil beyond, where they do not hear each other at all.
+// ponytail: linear in dB rather than log-distance, so 54 Mb/s reaches two thirds of the circle at canvas scale
+func dot11Signal(_ a: Node, _ b: Node) -> Int? {
+    let (dx, dy) = (a.pos.x - b.pos.x, a.pos.y - b.pos.y)
+    let d = (dx * dx + dy * dy).squareRoot()
+    guard d <= WIFI_RANGE else { return nil }
+    return Int((-30 - 52 * d / WIFI_RANGE).rounded())
+}
+
+/// The highest rate whose minimum sensitivity `signal` reaches.
+func dot11Rate(signal: Int) -> Int {
+    DOT11_SENSITIVITY.last { signal >= $0.dbm }?.rate ?? DOT11_BASIC_RATE
+}
+
 /// An SSID is at most 32 bytes (IEEE 802.11-2016 §9.4.2.2); an access point's is never empty.
 func checkSsid(_ ssid: String, empty: Bool) throws {
     guard ssid.utf8.count <= 32, empty || !ssid.isEmpty else {
@@ -41,7 +61,8 @@ final class Medium {
         sim.emit(.tx, node: radio.iface.node.id, iface: radio.iface.name, frame: frame)
         let t = dot11Airtime(frame)
         sim.sched.after(t.frame * US) { [self] in
-            for r in sim.radios() where r !== radio && r.channel == channel && r.iface.node.powered && r.hears(frame) {
+            for r in sim.radios() where r !== radio && r.channel == channel && r.iface.node.powered && r.hears(frame)
+                && dot11Signal(radio.iface.node, r.iface.node) != nil {
                 sim.emit(.rx, node: r.iface.node.id, iface: r.iface.name, frame: frame)
                 r.receive(frame, from: radio)
             }
@@ -104,11 +125,17 @@ class Radio {
         return isGroupMac(f.receiver) && h.bssid == bss
     }
 
-    /// On the air with `header` and the next sequence number.
-    func transmit(_ frame: EthernetFrame, _ header: Dot11Header) {
+    /// The unicast data rate toward `other` at their distance (spec M11 §8).
+    func rate(to other: Radio) -> Int {
+        dot11Signal(iface.node, other.iface.node).map { dot11Rate(signal: $0) } ?? DOT11_BASIC_RATE
+    }
+
+    /// On the air with `header`, the next sequence number and the rate it goes at (6 Mb/s unless a unicast data rate is given).
+    func transmit(_ frame: EthernetFrame, _ header: Dot11Header, rate: Int = DOT11_BASIC_RATE) {
         var f = frame
         f.air = header
         f.air!.seq = seq
+        f.air!.rate = rate
         seq = (seq + 1) % 4096
         sim.medium(channel).transmit(f, from: self)
     }
@@ -128,6 +155,7 @@ final class StationRadio: Radio {
     /// The first access point that answered the scan under way, and the channel it announced.
     private weak var found: ApRadio?
     private var foundChannel = 0
+    private var foundSignal = 0
     private var generation = 0
 
     init(iface: Interface) {
@@ -137,13 +165,15 @@ final class StationRadio: Radio {
     override var bssid: Mac? { ap?.iface.mac }
     override var lineUp: Bool { state == .associated }
     override var peers: [Interface] { state == .associated ? ap.map { [$0.iface] } ?? [] : [] }
+    /// dBm from its access point while associated (spec M11 §8).
+    var signal: Int? { state == .associated ? ap.flatMap { dot11Signal(iface.node, $0.iface.node) } : nil }
 
     /// To its access point (To DS), once associated (spec M11 §3, §5).
     override func send(_ frame: EthernetFrame) {
         guard state == .associated, let bssid else {
             return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: frame, reason: .notAssociated)
         }
-        transmit(frame, Dot11Header(toDS: true, bssid: bssid))
+        transmit(frame, Dot11Header(toDS: true, bssid: bssid), rate: ap.map { rate(to: $0) } ?? DOT11_DATA_RATE)
     }
 
     /// A new network (spec M11 §5): leaving an access point says so with a Deauthentication (reason 3), then the scan starts over.
@@ -200,7 +230,8 @@ final class StationRadio: Radio {
         later(SCAN_DWELL_NS) { $0.scan(k + 1) }
     }
 
-    /// The scan is over: authenticate with the first access point that answered, or scan again in RESCAN_NS.
+    /// The scan is over: authenticate with the strongest access point that answered (the first of equals, spec M11 §8), or scan again
+    /// in RESCAN_NS.
     private func choose() {
         guard let found else {
             state = .notFound
@@ -221,9 +252,13 @@ final class StationRadio: Radio {
         }
         let fromAp = f.src == bssid
         switch m {
-        case .probeResponse(let ssid, let channel, _) where state == .scanning && ssid == config.ssid && found == nil:
-            found = sender as? ApRadio
-            foundChannel = channel
+        case .probeResponse(let ssid, let channel, _) where state == .scanning && ssid == config.ssid:
+            let signal = dot11Signal(iface.node, sender.iface.node) ?? Int.min
+            if found == nil || signal > foundSignal {
+                found = sender as? ApRadio
+                foundChannel = channel
+                foundSignal = signal
+            }
         case .authentication(seq: 2, status: 0) where state == .authenticating && fromAp:
             generation += 1
             state = .associating
@@ -263,9 +298,10 @@ final class ApRadio: Radio {
     override var lineUp: Bool { !clients.isEmpty }
     override var peers: [Interface] { clients.map(\.station.iface) }
 
-    /// A frame of the bridge for the stations (From DS).
+    /// A frame of the bridge for the stations (From DS): to one of them at its rate, to a group at 6 Mb/s.
     override func send(_ frame: EthernetFrame) {
-        transmit(frame, Dot11Header(fromDS: true, bssid: iface.mac))
+        let to = clients.first { $0.station.iface.mac == frame.dst }?.station
+        transmit(frame, Dot11Header(fromDS: true, bssid: iface.mac), rate: to.map { rate(to: $0) } ?? DOT11_BASIC_RATE)
     }
 
     func associated(_ mac: Mac) -> Bool {

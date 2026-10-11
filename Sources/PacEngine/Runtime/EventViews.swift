@@ -527,7 +527,9 @@ private func dot11Layer(_ f: EthernetFrame, _ h: Dot11Header) -> PduLayer {
         field("Flag", h.toDS ? "0x01 (To DS)" : h.fromDS ? "0x02 (From DS)" : "0x00"),
         field("Duration", "\(dot11Airtime(f).ack) µs"),
     ] + addresses.enumerated().map { field("Indirizzo \($0.offset + 1) (\($0.element.0))", $0.element.1) }
-      + [field("Numero di sequenza", "\(h.seq)"), field("Frammento", "0")])
+      + [field("Numero di sequenza", "\(h.seq)"), field("Frammento", "0"),
+         // Not a header field: the radio information Wireshark shows with it (spec M11 §8).
+         field("Velocità", "\(dot11FrameRate(f)) Mb/s")])
 }
 
 /// RFC 1042 encapsulation of a packet on the air.

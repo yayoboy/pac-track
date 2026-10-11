@@ -165,6 +165,8 @@ public enum Command: Sendable {
     case addNode(id: String, kind: DeviceKind, name: String)
     case removeNode(id: String)
     case rename(id: String, name: String)
+    /// Where a device sits on the canvas (spec M11 §8): radios hear each other within WIFI_RANGE of it.
+    case move(node: String, to: Pos)
     case connect(id: String, a: IfaceRef, b: IfaceRef)
     case disconnect(id: String)
     case setIp(node: String, iface: String, cidr: String?)
@@ -231,6 +233,7 @@ public enum Command: Sendable {
         case .addNode: "addNode"
         case .removeNode: "removeNode"
         case .rename: "rename"
+        case .move: "move"
         case .connect: "connect"
         case .disconnect: "disconnect"
         case .setIp: "setIp"
@@ -369,6 +372,9 @@ public struct AssociationRow: Equatable, Sendable {
     public let aid: Int
     public let mac: String
     public let node: String
+    /// What the access point hears of it (spec M11 §8): dBm and the data rate in Mb/s.
+    public let signal: Int
+    public let rate: Int
 }
 
 /// A Wi-Fi client (spec M11 §7): its network and state and, once it chose one, the access point's BSSID, node id and channel.
@@ -378,6 +384,9 @@ public struct StationView: Equatable, Sendable {
     public let bssid: String?
     public let ap: String?
     public let channel: Int?
+    /// While associated (spec M11 §8): dBm from its access point and the data rate in Mb/s.
+    public let signal: Int?
+    public let rate: Int?
 }
 
 /// One 100 ms point of a traffic flow (spec §5.6).

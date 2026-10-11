@@ -96,6 +96,8 @@ class Node {
     /// Interfaces taken away (a smaller switch): kept alive while a frame that was on their cable finishes (links refer to them `unowned`).
     // ponytail: never freed before the Sim is replaced; at most 40 per resize
     private var retired: [Interface] = []
+    /// Where it sits on the canvas (spec M11 §8): radios measure their distance from here. The origin until the editor says.
+    var pos = Pos(x: 0, y: 0)
     var powered = true {
         // The devices at the other end of its cables see their ports go down, or up, at once (spec M7 §4).
         didSet {

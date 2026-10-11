@@ -62,7 +62,7 @@ Files: `Sources/PacEngine/Node.swift`, `Devices/Radio.swift`, `PDU.swift`, `Sim.
   - `theStationPicksTheStrongestAccessPoint`: AP1 (6) at 250 pt, AP2 (11) at 50 pt, same SSID → associated to AP2 although AP1 answered first.
   - `movingOutOfRangeDropsTheAssociationAndComingBackRestoresIt` (Runtime): `.move` TAB1 beyond 300 → not associated at once, AP has no clients, no Deauthentication; move back → associated within 5.1 s.
   - `stationAndAccessPointViewsShowSignalAndRate` (Runtime snapshot) and `positionsComeBackFromTheProjectFile` (load sets `pos`).
-  - Dot11PduTests: ACK rate after 18 Mb/s is 12; inspector layer *Informazioni radio* (Velocità, Tempo in aria).
+  - Dot11PduTests: ACK rate after 18 Mb/s is 12; the IEEE 802.11 layer ends with "Velocità: … Mb/s" (a 0-byte layer of its own would read "· 0 B").
 - [ ] GREEN: `Node.pos`; `WIFI_RANGE`, `DOT11_SENSITIVITY`, `dot11Signal(_:_:)`, `dot11Rate(signal:)` in Radio.swift; `Medium.start` filters `dot11Signal(radio.iface.node, r.iface.node) != nil`; `Dot11Header.rate`; `dot11Airtime` uses it; `Radio.transmit(_:_:rate:)`; `StationRadio.send` and `ApRadio.send` pick the rate; strongest Probe Response; `Sim.rangeChanged()`; `Command.move(node:to:)`; `Runtime.load` sets `pos`; views.
 - [ ] Full suite green; commit `feat(engine): M11b range — signal, rate and association follow the distance`.
 

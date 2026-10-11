@@ -18,7 +18,7 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(s.nodes.map { $0.ifaces.map(\.name) } == [["Gi0", "Dot11Radio0"], ["wlan0"], ["wlan0"], ["eth0"]])
         #expect(s.nodes.map { $0.ifaces.map(\.wireless) } == [[false, true], [true], [true], [false]])
         #expect(s.nodes[0].accessPoint == AccessPointView(config: ApConfig(ssid: "pac-track", channel: 6), clients: []))
-        #expect(s.nodes[1].station == StationView(config: StationConfig(), state: .idle, bssid: nil, ap: nil, channel: nil))
+        #expect(s.nodes[1].station == StationView(config: StationConfig(), state: .idle, bssid: nil, ap: nil, channel: nil, signal: nil, rate: nil))
         #expect(s.nodes[3].station == nil && s.nodes[3].accessPoint == nil && s.nodes[1].accessPoint == nil)
         expectError("SSID must be 1 to 32 bytes") { try rt.handle(.setAccessPoint(node: "ap", config: ApConfig(ssid: "", channel: 6))) }
         expectError("SSID must be 1 to 32 bytes") {
@@ -34,9 +34,10 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         runFor(rt, wallMs: 200)
         s = rt.snapshot()
         let radio = s.nodes[0].ifaces[1].mac
-        #expect(s.nodes[0].accessPoint?.clients == [AssociationRow(aid: 1, mac: s.nodes[1].ifaces[0].mac, node: "t"),
-                                                    AssociationRow(aid: 2, mac: s.nodes[2].ifaces[0].mac, node: "s")])
-        #expect(s.nodes[1].station == StationView(config: StationConfig(ssid: "lab"), state: .associated, bssid: radio, ap: "ap", channel: 11))
+        #expect(s.nodes[0].accessPoint?.clients == [AssociationRow(aid: 1, mac: s.nodes[1].ifaces[0].mac, node: "t", signal: -30, rate: 54),
+                                                    AssociationRow(aid: 2, mac: s.nodes[2].ifaces[0].mac, node: "s", signal: -30, rate: 54)])
+        #expect(s.nodes[1].station == StationView(config: StationConfig(ssid: "lab"), state: .associated, bssid: radio, ap: "ap", channel: 11,
+                                                  signal: -30, rate: 54))
         #expect(s.nodes[1].ifaces[0].linked && s.nodes[0].ifaces[1].linked && !s.nodes[0].ifaces[0].linked)
         expectError("Cannot cable a wireless interface") {
             try rt.handle(.connect(id: "l", a: IfaceRef(node: "t", iface: "wlan0"), b: IfaceRef(node: "ap", iface: "Gi0")))

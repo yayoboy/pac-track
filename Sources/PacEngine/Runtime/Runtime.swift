@@ -157,6 +157,9 @@ public final class Runtime {
             sim.remove(node)
             nodes[id] = nil
             nodeOrder.removeAll { $0 == id }
+        case let .move(id, pos):
+            try get(id).pos = pos
+            sim.rangeChanged()
         case let .rename(id, name):
             let trimmed = name.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { throw EngineError("Name cannot be empty") }
@@ -503,11 +506,15 @@ public final class Runtime {
                 rdnss: ip?.v6.rdnss.map(formatIp6),
                 accessPoint: (node as? AccessPoint).map { ap in
                     AccessPointView(config: ap.radio.config, clients: ap.radio.clients.map {
-                        AssociationRow(aid: $0.aid, mac: $0.station.iface.mac, node: $0.station.iface.node.id)
+                        // Associated stations are in range (a move out of it ends the association).
+                        let signal = dot11Signal(node, $0.station.iface.node) ?? DOT11_SENSITIVITY[0].dbm
+                        return AssociationRow(aid: $0.aid, mac: $0.station.iface.mac, node: $0.station.iface.node.id, signal: signal,
+                                              rate: dot11Rate(signal: signal))
                     })
                 },
                 station: host?.station.map { s in
-                    StationView(config: s.config, state: s.state, bssid: s.bssid, ap: s.ap?.iface.node.id, channel: s.ap == nil ? nil : s.channel)
+                    StationView(config: s.config, state: s.state, bssid: s.bssid, ap: s.ap?.iface.node.id, channel: s.ap == nil ? nil : s.channel,
+                                signal: s.signal, rate: s.signal.map { dot11Rate(signal: $0) })
                 }
             )
         }
@@ -589,6 +596,7 @@ public final class Runtime {
         // Addresses before cables: a duplicate made by cabling two segments together (never refused) still opens.
         for n in t.nodes {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
+            try next.get(n.id).pos = n.pos
             // The card before the interfaces' settings: a PC with the Wi-Fi card has wlan0 (spec M11 §10).
             if let c = n.station { try next.handle(.setStation(node: n.id, config: c)) }
             if let c = n.accessPoint { try next.handle(.setAccessPoint(node: n.id, config: c)) }

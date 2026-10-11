@@ -336,6 +336,8 @@ struct Dot11Header: Equatable, Sendable {
     var bssid: Mac
     /// 12-bit sequence number of the transmitter (§9.2.4.4); fragment 0.
     var seq = 0
+    /// Mb/s the transmitter chose for a unicast data frame (spec M11 §8); management and group frames go at 6 whatever it says.
+    var rate = DOT11_DATA_RATE
 }
 
 /// The management frames Pac-Track sends (§9.3.3, spec M11 §3), with the fields that vary.
@@ -449,13 +451,19 @@ func dot11TxUs(bytes: Int, rateMbps: Int) -> Int {
 }
 
 /// The medium's time for one frame (spec M11 §4): DIFS, backoff and the PPDU until it is received, then SIFS + ACK for a unicast
-/// one (its Duration field). Unicast data goes at 54 Mb/s, management and group frames at 6; the ACK at 24 or 6.
+/// one (its Duration field). Unicast data goes at the rate in its header (54 Mb/s up close, spec M11 §8), management and group frames
+/// at 6; the ACK at the highest basic rate not above the frame's (§10.7.6.5.2).
 func dot11Airtime(_ f: EthernetFrame) -> (frame: Int, ack: Int) {
     let group = isGroupMac(f.receiver)
-    let mgmt = if case .mgmt = f.payload { true } else { false }
-    let rate = mgmt || group ? DOT11_BASIC_RATE : DOT11_DATA_RATE
-    let ack = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: min(rate, DOT11_ACK_RATE))
+    let rate = dot11FrameRate(f)
+    let ack = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: DOT11_BASIC_RATES.sorted().last { $0 <= rate }!)
     return (DOT11_DIFS_US + DOT11_BACKOFF_US + dot11TxUs(bytes: f.size + 4, rateMbps: rate), group ? 0 : ack)
+}
+
+/// Mb/s a frame goes at on the air: 6 for management and group frames, else its header's.
+func dot11FrameRate(_ f: EthernetFrame) -> Int {
+    let mgmt = if case .mgmt = f.payload { true } else { false }
+    return mgmt || isGroupMac(f.receiver) ? DOT11_BASIC_RATE : f.air?.rate ?? DOT11_DATA_RATE
 }
 
 func internetChecksum(_ bytes: [UInt8]) -> UInt16 {
