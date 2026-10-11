@@ -31,9 +31,10 @@ struct PaletteView: View {
         ("Host", [.pc, .laptop, .printer, .tv].map { PaletteItem(kind: $0) }),
         ("Server", [PaletteItem(kind: .server), PaletteItem(kind: .server, preset: .dns), PaletteItem(kind: .server, preset: .dhcp)]),
         ("Wireless", [.accessPoint, .tablet, .smartphone].map { PaletteItem(kind: $0) }),
+        ("Casa", [.modem, .nas, .console, .smartBulb, .thermostat, .smartSpeaker].map { PaletteItem(kind: $0) }),
     ]
-    /// Words that find a whole section besides its title (spec M11 §7).
-    private static let aliases = ["Wireless": "wifi wi-fi ap"]
+    /// Words that find a whole section besides its title (spec M11 §7, M12 §6).
+    private static let aliases = ["Wireless": "wifi wi-fi ap", "Casa": "iot home"]
     @State private var query = ""
 
     /// Categories with the devices whose name (or category) contains `query`.
