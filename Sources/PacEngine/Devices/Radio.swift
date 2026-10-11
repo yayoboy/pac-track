@@ -3,6 +3,8 @@
 let SCAN_DWELL_NS = 20 * MS
 let RESCAN_NS = 5 * S
 let DOT11_TIMEOUT_NS = 1 * S
+/// Messages 1 an access point sends, a second apart, before giving up on a station's handshake (hostapd's default, spec M11 §8).
+let EAPOL_ATTEMPTS = 4
 
 /// How far a radio reaches on the canvas, in points (spec M11 §8).
 public let WIFI_RANGE = 300.0
@@ -28,6 +30,14 @@ func dot11Rate(signal: Int) -> Int {
 func checkSsid(_ ssid: String, empty: Bool) throws {
     guard ssid.utf8.count <= 32, empty || !ssid.isEmpty else {
         throw EngineError(empty ? "SSID must be at most 32 bytes" : "SSID must be 1 to 32 bytes")
+    }
+}
+
+/// A WPA2 passphrase (802.11i): 8 to 63 printable ASCII characters; nil is an open network, or a station without one.
+func checkPassphrase(_ p: String?) throws {
+    guard let p else { return }
+    guard (8...63).contains(p.utf8.count), p.utf8.allSatisfy({ (32...126).contains($0) }) else {
+        throw EngineError("The password must be 8 to 63 printable ASCII characters")
     }
 }
 
@@ -143,6 +153,17 @@ class Radio {
     func sendMgmt(_ m: Dot11Mgmt, to dst: Mac, bssid: Mac) {
         transmit(EthernetFrame(id: sim.nextId(), src: iface.mac, dst: dst, etherType: 0, payload: .mgmt(m)), Dot11Header(bssid: bssid))
     }
+
+    /// A handshake message to `peer` (spec M11 §8): a data frame, unprotected, at the peer's rate.
+    func sendEapol(_ k: EapolKey, to peer: Radio, _ header: Dot11Header) {
+        transmit(EthernetFrame(id: sim.nextId(), src: iface.mac, dst: peer.iface.mac, etherType: ETHERTYPE_EAPOL, payload: .eapol(k)), header,
+                 rate: rate(to: peer))
+    }
+
+    /// 32 B from the seed: an ANonce or SNonce.
+    func nonce() -> [UInt8] {
+        (0..<32).map { _ in UInt8(sim.rng.int(256)) }
+    }
 }
 
 /// A Wi-Fi client's radio (spec M11 §5): active scanning, Open System authentication, association with the first access point that
@@ -156,6 +177,11 @@ final class StationRadio: Radio {
     private weak var found: ApRadio?
     private var foundChannel = 0
     private var foundSignal = 0
+    private var foundRsn = false
+    /// WPA2 with the access point it chose (it announced RSN): a 4-way handshake after the association, then protected data.
+    private var rsn = false
+    private var anonce: [UInt8] = []
+    private var snonce: [UInt8] = []
     private var generation = 0
 
     init(iface: Interface) {
@@ -173,12 +199,13 @@ final class StationRadio: Radio {
         guard state == .associated, let bssid else {
             return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: frame, reason: .notAssociated)
         }
-        transmit(frame, Dot11Header(toDS: true, bssid: bssid), rate: ap.map { rate(to: $0) } ?? DOT11_DATA_RATE)
+        transmit(frame, Dot11Header(toDS: true, bssid: bssid, protected: rsn), rate: ap.map { rate(to: $0) } ?? DOT11_DATA_RATE)
     }
 
     /// A new network (spec M11 §5): leaving an access point says so with a Deauthentication (reason 3), then the scan starts over.
     func configure(_ c: StationConfig) throws {
         try checkSsid(c.ssid, empty: true)
+        try checkPassphrase(c.passphrase)
         guard c != config else { return }
         if state == .associated, let ap { sendMgmt(.deauthentication(reason: DOT11_REASON_LEAVING), to: ap.iface.mac, bssid: ap.iface.mac) }
         config = c
@@ -239,37 +266,74 @@ final class StationRadio: Radio {
         }
         ap = found
         channel = foundChannel
+        rsn = foundRsn
         state = .authenticating
         sendMgmt(.authentication(seq: 1, status: 0), to: found.iface.mac, bssid: found.iface.mac)
         later(DOT11_TIMEOUT_NS) { $0.restart() }
     }
 
     override func receive(_ f: EthernetFrame, from sender: Radio) {
+        let fromAp = f.src == bssid
         guard case .mgmt(let m) = f.payload else {
-            // Data from its access point, once associated.
-            if state == .associated, f.air?.bssid == bssid { iface.node.receive(f, on: iface) }
+            // The handshake with its access point; data from it once associated.
+            if case .eapol(let k) = f.payload {
+                if state == .handshake && fromAp { handshake(k) }
+            } else if state == .associated, f.air?.bssid == bssid {
+                iface.node.receive(f, on: iface)
+            }
             return
         }
-        let fromAp = f.src == bssid
         switch m {
-        case .probeResponse(let ssid, let channel, _) where state == .scanning && ssid == config.ssid:
+        case .probeResponse(let ssid, let channel, _, let rsn) where state == .scanning && ssid == config.ssid:
             let signal = dot11Signal(iface.node, sender.iface.node) ?? Int.min
             if found == nil || signal > foundSignal {
                 found = sender as? ApRadio
                 foundChannel = channel
                 foundSignal = signal
+                foundRsn = rsn
             }
         case .authentication(seq: 2, status: 0) where state == .authenticating && fromAp:
             generation += 1
             state = .associating
-            sendMgmt(.associationRequest(ssid: config.ssid), to: f.src, bssid: f.src)
+            sendMgmt(.associationRequest(ssid: config.ssid, rsn: rsn), to: f.src, bssid: f.src)
             later(DOT11_TIMEOUT_NS) { $0.restart() }
         case .associationResponse(status: 0, aid: _) where state == .associating && fromAp:
             generation += 1
+            // WPA2 waits for the access point's message 1, with no timer of its own: the access point's Deauthentication, its going
+            // away or a new network ends the wait (spec M11 §8).
+            guard !rsn else {
+                state = .handshake
+                snonce = nonce()
+                return
+            }
             state = .associated
             iface.node.linkChanged(iface)
-        case .deauthentication where fromAp:
-            restart()
+        case .deauthentication(let reason) where fromAp:
+            // The access point gave up on the handshake: the password is wrong, and trying again would fail again (spec M11 §8).
+            guard reason == DOT11_REASON_HANDSHAKE_TIMEOUT && state == .handshake else { return restart() }
+            leave()
+            state = .wrongPassword
+        default:
+            break
+        }
+    }
+
+    /// Supplicant side of the 4-way handshake (spec M11 §8): message 2 answers each message 1 with the SNonce and a MIC of its own
+    /// password; a message 3 whose MIC matches installs the keys: message 4, and the line comes up.
+    private func handshake(_ k: EapolKey) {
+        guard let ap else { return }
+        let pass = config.passphrase ?? ""
+        let header = Dot11Header(toDS: true, bssid: ap.iface.mac)
+        switch k.message {
+        case 1:
+            anonce = k.nonce
+            let mic = eapolMic(passphrase: pass, ssid: config.ssid, anonce: anonce, snonce: snonce, message: 2)
+            sendEapol(EapolKey(message: 2, replay: k.replay, nonce: snonce, mic: mic), to: ap, header)
+        case 3 where k.nonce == anonce && k.mic == eapolMic(passphrase: pass, ssid: config.ssid, anonce: anonce, snonce: snonce, message: 3):
+            let mic = eapolMic(passphrase: pass, ssid: config.ssid, anonce: anonce, snonce: snonce, message: 4)
+            sendEapol(EapolKey(message: 4, replay: k.replay, nonce: [UInt8](repeating: 0, count: 32), mic: mic), to: ap, header)
+            state = .associated
+            iface.node.linkChanged(iface)
         default:
             break
         }
@@ -284,6 +348,13 @@ final class ApRadio: Radio {
     struct Client {
         let aid: Int
         let station: StationRadio
+        /// Open network, or a WPA2 handshake done (spec M11 §8): its data crosses the bridge.
+        var authorized: Bool
+        /// The handshake under way: nonces (the SNonce once a valid message 2 came), replay counter, messages 1 sent.
+        var anonce: [UInt8] = []
+        var snonce: [UInt8] = []
+        var replay = 0
+        var tries = 0
     }
 
     private(set) var config = ApConfig()
@@ -295,23 +366,27 @@ final class ApRadio: Radio {
     }
 
     override var bssid: Mac? { iface.mac }
-    override var lineUp: Bool { !clients.isEmpty }
-    override var peers: [Interface] { clients.map(\.station.iface) }
+    /// Stations whose data crosses the bridge: a WPA2 one only after its handshake (spec M11 §8).
+    private var authorized: [Client] { clients.filter(\.authorized) }
+    override var lineUp: Bool { !authorized.isEmpty }
+    override var peers: [Interface] { authorized.map(\.station.iface) }
 
-    /// A frame of the bridge for the stations (From DS): to one of them at its rate, to a group at 6 Mb/s.
+    /// A frame of the bridge for the stations (From DS): to one of them at its rate, to a group at 6 Mb/s; protected on a WPA2 network.
     override func send(_ frame: EthernetFrame) {
         let to = clients.first { $0.station.iface.mac == frame.dst }?.station
-        transmit(frame, Dot11Header(fromDS: true, bssid: iface.mac), rate: to.map { rate(to: $0) } ?? DOT11_BASIC_RATE)
+        transmit(frame, Dot11Header(fromDS: true, bssid: iface.mac, protected: config.passphrase != nil),
+                 rate: to.map { rate(to: $0) } ?? DOT11_BASIC_RATE)
     }
 
     func associated(_ mac: Mac) -> Bool {
-        clients.contains { $0.station.iface.mac == mac }
+        authorized.contains { $0.station.iface.mac == mac }
     }
 
-    /// A new SSID or channel (spec M11 §5): a group Deauthentication (reason 3) on the old channel; the stations scan again when they
+    /// A new SSID, channel or security (spec M11 §5, §8): a group Deauthentication (reason 3) on the old channel; the stations scan again when they
     /// hear it.
     func configure(_ c: ApConfig) throws {
         try checkSsid(c.ssid, empty: false)
+        try checkPassphrase(c.passphrase)
         guard WIFI_CHANNELS.contains(c.channel) else { throw EngineError("Channel must be 1, 6 or 11") }
         guard c != config else { return }
         if !clients.isEmpty { sendMgmt(.deauthentication(reason: DOT11_REASON_LEAVING), to: BROADCAST_MAC, bssid: iface.mac) }
@@ -333,29 +408,76 @@ final class ApRadio: Radio {
 
     override func receive(_ f: EthernetFrame, from sender: Radio) {
         guard case .mgmt(let m) = f.payload else {
-            // Data only from the stations it associated (spec M11 §5).
-            guard clients.contains(where: { $0.station === sender }) else {
+            // The handshake from the stations it associated; their data once authorized (spec M11 §5, §8).
+            if case .eapol(let k) = f.payload, let station = sender as? StationRadio, clients.contains(where: { $0.station === station }) {
+                return handshake(k, f, from: station)
+            }
+            guard authorized.contains(where: { $0.station === sender }) else {
                 return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: f, reason: .notAssociated)
             }
             return iface.node.receive(f, on: iface)
         }
         guard let station = sender as? StationRadio else { return }
+        let wpa2 = config.passphrase != nil
         switch m {
         case .probeRequest(let ssid) where ssid == config.ssid:
-            sendMgmt(.probeResponse(ssid: ssid, channel: config.channel, timestamp: sim.now / US), to: f.src, bssid: iface.mac)
+            sendMgmt(.probeResponse(ssid: ssid, channel: config.channel, timestamp: sim.now / US, rsn: wpa2), to: f.src, bssid: iface.mac)
         case .authentication(seq: 1, status: _):
             sendMgmt(.authentication(seq: 2, status: 0), to: f.src, bssid: iface.mac)
-        case .associationRequest(let ssid) where ssid == config.ssid:
+        case .associationRequest(let ssid, _) where ssid == config.ssid:
             let aid = clients.first { $0.station === station }?.aid ?? freeAid()
-            if !clients.contains(where: { $0.station === station }) {
-                clients.append(Client(aid: aid, station: station))
-                clients.sort { $0.aid < $1.aid }
-            }
+            clients.removeAll { $0.station === station }
+            clients.append(Client(aid: aid, station: station, authorized: !wpa2, anonce: wpa2 ? nonce() : []))
+            clients.sort { $0.aid < $1.aid }
             sendMgmt(.associationResponse(status: 0, aid: aid), to: f.src, bssid: iface.mac)
+            // WPA2: message 1 right after the Association Response (spec M11 §8).
+            if wpa2 { sendMessage1(station) }
         case .deauthentication:
             forget(station)
         default:
             break
+        }
+    }
+
+    /// Authenticator side of the 4-way handshake (spec M11 §8): a valid message 2 gets message 3 at once; message 4 opens the port.
+    /// A wrong MIC is dropped and logged; the timer of message 1 deals with the silence.
+    private func handshake(_ k: EapolKey, _ f: EthernetFrame, from s: StationRadio) {
+        guard let pass = config.passphrase, let i = clients.firstIndex(where: { $0.station === s }), !clients[i].authorized,
+              k.replay == clients[i].replay else { return }
+        let c = clients[i]
+        switch k.message {
+        case 2 where c.snonce.isEmpty:
+            guard k.mic == eapolMic(passphrase: pass, ssid: config.ssid, anonce: c.anonce, snonce: k.nonce, message: 2) else {
+                return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: f, reason: .micFailure)
+            }
+            clients[i].snonce = k.nonce
+            clients[i].replay += 1
+            let mic = eapolMic(passphrase: pass, ssid: config.ssid, anonce: c.anonce, snonce: k.nonce, message: 3)
+            sendEapol(EapolKey(message: 3, replay: clients[i].replay, nonce: c.anonce, mic: mic), to: s, Dot11Header(fromDS: true, bssid: iface.mac))
+        case 4 where !c.snonce.isEmpty:
+            guard k.mic == eapolMic(passphrase: pass, ssid: config.ssid, anonce: c.anonce, snonce: c.snonce, message: 4) else {
+                return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: f, reason: .micFailure)
+            }
+            clients[i].authorized = true
+        default:
+            break
+        }
+    }
+
+    /// Message 1 with a new replay counter; repeated a second later while no valid message 2 came, and after the last attempt a
+    /// Deauthentication with reason 15 (spec M11 §8). The timer acts only if the station is still in this handshake.
+    private func sendMessage1(_ s: StationRadio) {
+        guard let i = clients.firstIndex(where: { $0.station === s }) else { return }
+        clients[i].tries += 1
+        clients[i].replay += 1
+        let (anonce, tries) = (clients[i].anonce, clients[i].tries)
+        sendEapol(EapolKey(message: 1, replay: clients[i].replay, nonce: anonce, mic: [UInt8](repeating: 0, count: 16)), to: s,
+                  Dot11Header(fromDS: true, bssid: iface.mac))
+        sim.sched.after(DOT11_TIMEOUT_NS) { [self] in
+            guard let c = clients.first(where: { $0.station === s }), c.anonce == anonce, c.tries == tries, c.snonce.isEmpty else { return }
+            if tries < EAPOL_ATTEMPTS { return sendMessage1(s) }
+            forget(s)
+            sendMgmt(.deauthentication(reason: DOT11_REASON_HANDSHAKE_TIMEOUT), to: s.iface.mac, bssid: iface.mac)
         }
     }
 

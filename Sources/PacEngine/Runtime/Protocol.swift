@@ -131,29 +131,35 @@ public struct StpPriority: Codable, Equatable, Sendable {
 /// The three 2.4 GHz channels that do not overlap (spec M11 §4), in the order a station scans them.
 public let WIFI_CHANNELS = [1, 6, 11]
 
-/// An access point's network (spec M11 §2): one SSID (1–32 bytes) on channel 1, 6 or 11.
+/// An access point's network (spec M11 §2): one SSID (1–32 bytes) on channel 1, 6 or 11; WPA2-PSK with a passphrase, open without
+/// (spec M11 §8).
 public struct ApConfig: Codable, Equatable, Sendable {
     public var ssid: String
     public var channel: Int
+    public var passphrase: String?
 
-    public init(ssid: String = "pac-track", channel: Int = 6) {
+    public init(ssid: String = "pac-track", channel: Int = 6, passphrase: String? = nil) {
         self.ssid = ssid
         self.channel = channel
+        self.passphrase = passphrase
     }
 }
 
-/// The network a Wi-Fi client looks for (spec M11 §5); an empty SSID is no network.
+/// The network a Wi-Fi client looks for (spec M11 §5); an empty SSID is no network. The password is for a WPA2 network (spec M11 §8).
 public struct StationConfig: Codable, Equatable, Sendable {
     public var ssid: String
+    public var passphrase: String?
 
-    public init(ssid: String = "") {
+    public init(ssid: String = "", passphrase: String? = nil) {
         self.ssid = ssid
+        self.passphrase = passphrase
     }
 }
 
-/// A Wi-Fi client's state (spec M11 §5): `notFound` between a scan nobody answered and the next one.
+/// A Wi-Fi client's state (spec M11 §5): `notFound` between a scan nobody answered and the next one. WPA2 (spec M11 §8): `handshake`
+/// from the association to message 4 (the line still down), `wrongPassword` after the access point gave up on it.
 public enum StationState: Sendable {
-    case idle, scanning, notFound, authenticating, associating, associated
+    case idle, scanning, notFound, authenticating, associating, handshake, associated, wrongPassword
 }
 
 /// `wifi`: 802.11 management frames (spec M11 §3); data frames keep their packet's protocol.

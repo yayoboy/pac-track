@@ -232,4 +232,17 @@ import Testing
         #expect(associationRows(nodes[0].accessPoint!, in: nodes) == [["1", nodes[1].ifaces[0].mac, "TAB1"]])
         #expect(firstFreeIface(nodes[1]) == nil && firstFreeIface(nodes[0]) == "Gi0")
     }
+
+    /// Spec M11 §8: the two WPA2 states in Tabelle and under the network.
+    @Test func theWpa2StatesHaveTheirWords() throws {
+        #expect([StationState.handshake, .wrongPassword].map(\.label) == ["handshake", "password errata"])
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "ap", kind: .accessPoint, name: "AP1"))
+        try rt.handle(.addNode(id: "t", kind: .tablet, name: "TAB1"))
+        try rt.handle(.setAccessPoint(node: "ap", config: ApConfig(ssid: "casa", channel: 6, passphrase: "segreta123")))
+        try rt.handle(.setStation(node: "t", config: StationConfig(ssid: "casa", passphrase: "sbagliata1")))
+        for _ in 0..<50 { rt.advance(wallMs: 100) }
+        let nodes = rt.snapshot().nodes
+        #expect(wifiStatus(nodes[1].station!, in: nodes) == "Password errata")
+    }
 }

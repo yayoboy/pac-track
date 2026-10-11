@@ -175,9 +175,9 @@ private func describe(_ p: Ipv4Packet) -> String {
 private func describe(_ m: Dot11Mgmt) -> String {
     switch m {
     case .probeRequest(let ssid): "Probe Request, SSID=\(ssid)"
-    case .probeResponse(let ssid, let channel, _): "Probe Response, SSID=\(ssid), canale \(channel)"
+    case .probeResponse(let ssid, let channel, _, _): "Probe Response, SSID=\(ssid), canale \(channel)"
     case .authentication(let seq, let status): "Authentication, Open System, transazione \(seq)" + (seq == 2 ? ", stato \(status)" : "")
-    case .associationRequest(let ssid): "Association Request, SSID=\(ssid)"
+    case .associationRequest(let ssid, _): "Association Request, SSID=\(ssid)"
     case .associationResponse(let status, let aid): "Association Response, stato \(status), AID=\(aid)"
     case .deauthentication(let reason): "Deauthentication, motivo \(reason)"
     }
@@ -195,6 +195,8 @@ func eventView(_ e: SimEvent) -> EventView {
     case .ipv6(let p)?: (proto(of: p), describe(p))
     case .bpdu(let b)?: (.stp, describe(b))
     case .mgmt(let m)?: (.wifi, describe(m))
+    // Wireshark's "Key (Message 2 of 4)".
+    case .eapol(let k)?: (.wifi, "EAPOL-Key, messaggio \(k.message) di 4")
     case nil: (e.proto ?? .stp, e.note ?? "") // a state change (spanning tree, or the protocol it names); every other logged event carries a frame or a packet
     }
     return EventView(id: e.seq, timeNs: e.time, kind: e.kind, node: e.node, iface: e.iface, proto: proto,
@@ -511,7 +513,7 @@ private func ipv6Layers(_ p: Ipv6Packet) -> [PduLayer] {
 }
 
 private func etherTypeText(_ t: UInt16) -> String {
-    hex(Int(t), digits: 4) + (t == ETHERTYPE_ARP ? " (ARP)" : t == ETHERTYPE_IPV6 ? " (IPv6)" : " (IPv4)")
+    hex(Int(t), digits: 4) + (t == ETHERTYPE_ARP ? " (ARP)" : t == ETHERTYPE_IPV6 ? " (IPv6)" : t == ETHERTYPE_EAPOL ? " (EAPOL)" : " (IPv4)")
 }
 
 /// The 802.11 MAC header (spec M11 §3): type and subtype by name, flags, Duration, the three addresses with their roles, sequence.
@@ -524,12 +526,38 @@ private func dot11Layer(_ f: EthernetFrame, _ h: Dot11Header) -> PduLayer {
         field("Versione", "0"),
         field("Tipo", type),
         field("Sottotipo", subtype),
-        field("Flag", h.toDS ? "0x01 (To DS)" : h.fromDS ? "0x02 (From DS)" : "0x00"),
+        field("Flag", flags(h)),
         field("Duration", "\(dot11Airtime(f).ack) µs"),
     ] + addresses.enumerated().map { field("Indirizzo \($0.offset + 1) (\($0.element.0))", $0.element.1) }
       + [field("Numero di sequenza", "\(h.seq)"), field("Frammento", "0"),
          // Not a header field: the radio information Wireshark shows with it (spec M11 §8).
          field("Velocità", "\(dot11FrameRate(f)) Mb/s")])
+}
+
+/// Frame Control flags (§9.2.4.1.1): To DS 0x01, From DS 0x02, Protected Frame 0x40.
+private func flags(_ h: Dot11Header) -> String {
+    let names = [(h.toDS, 0x01, "To DS"), (h.fromDS, 0x02, "From DS"), (h.protected, 0x40, "Protected")].filter(\.0)
+    let value = hex(names.reduce(0) { $0 | $1.1 }, digits: 2)
+    return names.isEmpty ? value : "\(value) (\(names.map(\.2).joined(separator: ", ")))"
+}
+
+/// An EAPOL-Key frame (IEEE 802.1X-2004 header, then the RSN key descriptor of §12.7.2), as Wireshark decodes it.
+private func eapolLayer(_ k: EapolKey) -> PduLayer {
+    let bits = [(0x08, "Pairwise"), (0x40, "Install"), (0x80, "ACK"), (0x100, "MIC"), (0x200, "Secure"), (0x1000, "dati cifrati")]
+    let info = bits.filter { k.keyInfo & $0.0 != 0 }.map(\.1).joined(separator: ", ")
+    let bytes = { (b: [UInt8]) in b.map { String(format: "%02x", $0) }.joined() }
+    return PduLayer(title: "EAPOL-Key", bytes: k.size, fields: [
+        field("Versione", "2 (802.1X-2004)"),
+        field("Tipo", "3 (Key)"),
+        field("Lunghezza", "\(k.size - 4)"),
+        field("Descrittore", "2 (RSN)"),
+        field("Key Information", "\(hex(k.keyInfo, digits: 4)) (\(info))"),
+        field("Lunghezza chiave", k.message == 1 || k.message == 3 ? "16" : "0"),
+        field("Replay counter", "\(k.replay)"),
+        field("Nonce", bytes(Array(k.nonce.prefix(8))) + "…"),
+        field("MIC", k.mic.isEmpty ? String(repeating: "0", count: 32) : bytes(k.mic)),
+        field("Lunghezza dati chiave", "\(k.keyDataLength)"),
+    ])
 }
 
 /// RFC 1042 encapsulation of a packet on the air.
@@ -548,16 +576,18 @@ private func mgmtLayer(_ m: Dot11Mgmt) -> PduLayer {
     let rates = DOT11_RATES.map { DOT11_BASIC_RATES.contains($0) ? "\($0)(B)" : "\($0)" }.joined(separator: ", ") + " Mb/s"
     let status = { (s: Int) in s == 0 ? "0 (successo)" : "\(s)" }
     let capability = field("Capability", hex(DOT11_CAPABILITY, digits: 4) + " (ESS, short slot)")
+    let rsnField = field("RSN", "CCMP, PSK (2 + 20 B)")
     let fields: [PduField] = switch m {
     case .probeRequest(let ssid): [field("SSID", ssid), field("Velocità supportate", rates)]
-    case .probeResponse(let ssid, let channel, let timestamp):
+    case .probeResponse(let ssid, let channel, let timestamp, let rsn):
         [field("Timestamp", "\(timestamp) µs"), field("Intervallo di beacon", "\(DOT11_BEACON_TU) TU (102.4 ms)"), capability,
          field("SSID", ssid), field("Velocità supportate", rates), field("Canale (DS Parameter Set)", "\(channel)"),
          // No non-ERP station, no protection, long preamble not required (§9.4.2.12).
-         field("ERP", "0x00")]
+         field("ERP", "0x00")] + (rsn ? [rsnField] : [])
     case .authentication(let seq, let s): [field("Algoritmo", "0 (Open System)"), field("Numero di transazione", "\(seq)"), field("Stato", status(s))]
-    case .associationRequest(let ssid):
+    case .associationRequest(let ssid, let rsn):
         [capability, field("Intervallo di ascolto", "\(DOT11_LISTEN_INTERVAL)"), field("SSID", ssid), field("Velocità supportate", rates)]
+            + (rsn ? [rsnField] : [])
     case .associationResponse(let s, let aid):
         // The AID field carries the two high bits set (§9.4.1.8).
         [capability, field("Stato", status(s)), field("AID", "\(aid) (\(hex(0xC000 | aid, digits: 4)))"), field("Velocità supportate", rates)]
@@ -573,6 +603,7 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
         layers.append(dot11Layer(f, h))
         if case .mgmt(let m) = f.payload { return layers + [mgmtLayer(m)] }
         layers.append(llcSnapLayer(f.etherType))
+        if case .eapol(let k) = f.payload { return layers + [eapolLayer(k)] }
     } else if let f = e.frame {
         // A BPDU rides an IEEE 802.3 frame: a length where Ethernet II has its EtherType.
         let bpdu = if case .bpdu = f.payload { true } else { false }
@@ -599,7 +630,7 @@ func pduLayers(_ e: SimEvent) -> [PduLayer] {
     case .ipv4(let p)?: layers += ipLayers(p)
     case .ipv6(let p)?: layers += ipv6Layers(p)
     case .bpdu(let b)?: layers += bpduLayers(b)
-    case .mgmt?: break // decoded with the 802.11 header above
+    case .mgmt?, .eapol?: break // decoded with the 802.11 header above
     case nil: break
     }
     return layers

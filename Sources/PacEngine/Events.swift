@@ -30,6 +30,8 @@ enum DropReason: String, Sendable {
     case ndPendingFull = "nd-pending-full"
     /// A Wi-Fi client sent data before it was associated, or an access point got data from a station it does not know (spec M11 §5).
     case notAssociated = "not-associated"
+    /// A 4-way handshake message whose MIC does not match the access point's password (spec M11 §8), as hostapd logs it.
+    case micFailure = "mic-failure"
 }
 
 struct SimEvent: Sendable {

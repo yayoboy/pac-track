@@ -147,4 +147,44 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
         probe.air?.rate = 18
         #expect(air(probe) == [189, 0])
     }
+
+    /// Spec M11 §8: the RSN element (22 B: CCMP, PSK) in the Probe Response and the Association Request of a WPA2 network; EAPOL-Key
+    /// frames as data with LLC/SNAP 0x888e; a protected data frame carries the Protected flag and 16 B more (CCMP header and MIC).
+    @Test func wpa2FramesShowRsnEapolAndProtection() {
+        #expect(Dot11Mgmt.probeResponse(ssid: "casa", channel: 6, timestamp: 0, rsn: true).size == 8 + 2 + 2 + 2 + 4 + 10 + 3 + 3 + 22)
+        #expect(Dot11Mgmt.associationRequest(ssid: "casa", rsn: true).size == 2 + 2 + 2 + 4 + 10 + 22)
+        let probe = pduLayers(SimEvent(time: 0, kind: .tx, node: "AP1", iface: "Dot11Radio0",
+                                       frame: mgmt(.probeResponse(ssid: "casa", channel: 6, timestamp: 0, rsn: true), from: AP, to: STA)))
+        #expect(lines(probe[1]).last == "RSN: CCMP, PSK (2 + 20 B)")
+        let request = pduLayers(SimEvent(time: 0, kind: .tx, node: "TAB1", iface: "wlan0", frame: mgmt(.associationRequest(ssid: "casa", rsn: true))))
+        #expect(lines(request[1]).last == "RSN: CCMP, PSK (2 + 20 B)")
+        let nonce = [UInt8](0..<32)
+        let key = EapolKey(message: 2, replay: 1, nonce: nonce, mic: [UInt8](repeating: 0xab, count: 16))
+        let f = EthernetFrame(id: 1, src: STA, dst: AP, etherType: ETHERTYPE_EAPOL, payload: .eapol(key), air: Dot11Header(toDS: true, bssid: AP))
+        let e = SimEvent(time: 0, kind: .tx, node: "TAB1", iface: "wlan0", frame: f)
+        #expect(eventView(e).proto == .wifi && eventView(e).info == "EAPOL-Key, messaggio 2 di 4" && f.size == 153)
+        let layers = pduLayers(e)
+        #expect(layers.map(\.title) == ["IEEE 802.11", "LLC/SNAP", "EAPOL-Key"] && layers.map(\.bytes) == [153, 8, 121])
+        #expect(lines(layers[0])[3] == "Flag: 0x01 (To DS)" && lines(layers[1]).last == "EtherType: 0x888e (EAPOL)")
+        #expect(lines(layers[2]) == [
+            "Versione: 2 (802.1X-2004)", "Tipo: 3 (Key)", "Lunghezza: 117", "Descrittore: 2 (RSN)",
+            "Key Information: 0x010a (Pairwise, MIC)", "Lunghezza chiave: 0", "Replay counter: 1",
+            "Nonce: 0001020304050607…", "MIC: abababababababababababababababab", "Lunghezza dati chiave: 22",
+        ])
+        let infos = [(1, "0x008a (Pairwise, ACK)", 16, 0), (3, "0x13ca (Pairwise, Install, ACK, MIC, Secure, dati cifrati)", 16, 56),
+                     (4, "0x030a (Pairwise, MIC, Secure)", 0, 0)].map { m, info, length, data in
+            let fields = pduLayers(SimEvent(time: 0, kind: .tx, node: "AP1", iface: "Dot11Radio0", frame: EthernetFrame(
+                id: 1, src: AP, dst: STA, etherType: ETHERTYPE_EAPOL, payload: .eapol(EapolKey(message: m, replay: 1, nonce: nonce, mic: [])),
+                air: Dot11Header(fromDS: true, bssid: AP))))[2].fields
+            return fields[4].value == info && fields[5].value == "\(length)" && fields[9].value == "\(data)"
+        }
+        #expect(infos == [true, true, true])
+        var protected = echo(toDS: true)
+        protected.air?.protected = true
+        #expect(protected.size == 116 + 16 && lines(pduLayers(SimEvent(time: 0, kind: .tx, node: "TAB1", iface: "wlan0", frame: protected))[0])[3]
+            == "Flag: 0x41 (To DS, Protected)")
+        protected.air = Dot11Header(fromDS: true, bssid: AP, protected: true)
+        #expect(lines(pduLayers(SimEvent(time: 0, kind: .tx, node: "AP1", iface: "Dot11Radio0", frame: protected))[0])[3]
+            == "Flag: 0x42 (From DS, Protected)")
+    }
 }

@@ -1,5 +1,7 @@
 let ETHERTYPE_IPV4: UInt16 = 0x0800
 let ETHERTYPE_ARP: UInt16 = 0x0806
+/// EAPOL (IEEE 802.1X), the 4-way handshake's frames (spec M11 §8).
+let ETHERTYPE_EAPOL: UInt16 = 0x888E
 let IPPROTO_ICMP: UInt8 = 1
 let IPPROTO_UDP: UInt8 = 17
 let IPPROTO_TCP: UInt8 = 6
@@ -65,6 +67,12 @@ let DOT11_ACK_US = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: D
 let DOT11_QUEUE_LIMIT = 1000
 /// Reason 3: deauthenticated because the sending station is leaving the BSS (§9.4.1.7).
 let DOT11_REASON_LEAVING = 3
+/// Reason 15: 4-way handshake timeout (§9.4.1.7).
+let DOT11_REASON_HANDSHAKE_TIMEOUT = 15
+/// The RSN element of a WPA2-PSK network (§9.4.2.25): version, CCMP group and pairwise cipher, PSK AKM, capabilities; 2 + 20 B.
+let DOT11_RSN_BYTES = 22
+/// What CCMP adds to a protected frame: its header (8 B) and MIC (8 B).
+let DOT11_CCMP_BYTES = 16
 /// Capability information: ESS (bit 0) and short slot time (bit 10) (§9.4.1.4).
 let DOT11_CAPABILITY = 0x0401
 /// The beacon interval a Probe Response advertises, in TU of 1024 µs.
@@ -338,16 +346,48 @@ struct Dot11Header: Equatable, Sendable {
     var seq = 0
     /// Mb/s the transmitter chose for a unicast data frame (spec M11 §8); management and group frames go at 6 whatever it says.
     var rate = DOT11_DATA_RATE
+    /// Protected Frame: a data frame of a WPA2 network after the handshake (spec M11 §8); the content stays readable.
+    var protected = false
+}
+
+/// One EAPOL-Key frame of the 4-way handshake (IEEE 802.11-2016 §12.7.6, spec M11 §8), with the fields that vary.
+struct EapolKey: Equatable, Sendable {
+    /// 1 to 4.
+    var message: Int
+    var replay: Int
+    /// ANonce in messages 1 and 3, SNonce in 2, zero in 4; 32 B.
+    var nonce: [UInt8]
+    /// 16 B; zero in message 1.
+    var mic: [UInt8]
+
+    /// Key Information with HMAC-SHA1/AES (version 2), as hostapd and wpa_supplicant send it (§12.7.2).
+    var keyInfo: Int { [0x008A, 0x010A, 0x13CA, 0x030A][message - 1] }
+    /// Key Data: none, the station's RSN element, the GTK wrapped with its RSN element and padding, none.
+    var keyDataLength: Int { [0, 22, 56, 0][message - 1] }
+    /// EAPOL header (4 B) + key descriptor (95 B) + key data.
+    var size: Int { 99 + keyDataLength }
+}
+
+/// The MIC of a handshake message (spec M11 §8): a fingerprint of password, SSID, both nonces and the message number that the other
+/// side recomputes with its own password.
+// ponytail: two FNV-1a passes instead of PBKDF2 → PTK → HMAC-SHA1; no real cryptography, the lesson is the handshake
+func eapolMic(passphrase: String, ssid: String, anonce: [UInt8], snonce: [UInt8], message: Int) -> [UInt8] {
+    let input = Array(passphrase.utf8) + [0] + Array(ssid.utf8) + [0] + anonce + snonce + [UInt8(message)]
+    func fnv(_ basis: UInt64) -> [UInt8] {
+        let h = input.reduce(basis) { ($0 ^ UInt64($1)) &* 0x0000_0100_0000_01B3 }
+        return (0..<8).map { UInt8(truncatingIfNeeded: h >> (56 - 8 * $0)) }
+    }
+    return fnv(0xCBF2_9CE4_8422_2325) + fnv(0x8422_2325_CBF2_9CE4)
 }
 
 /// The management frames Pac-Track sends (§9.3.3, spec M11 §3), with the fields that vary.
 enum Dot11Mgmt: Equatable, Sendable {
     case probeRequest(ssid: String)
-    /// `timestamp`: the access point's clock in µs.
-    case probeResponse(ssid: String, channel: Int, timestamp: Int)
+    /// `timestamp`: the access point's clock in µs. `rsn`: a WPA2-PSK network (spec M11 §8).
+    case probeResponse(ssid: String, channel: Int, timestamp: Int, rsn: Bool = false)
     /// Open System (algorithm 0): transaction 1 from the station, 2 with the status from the access point.
     case authentication(seq: Int, status: Int)
-    case associationRequest(ssid: String)
+    case associationRequest(ssid: String, rsn: Bool = false)
     case associationResponse(status: Int, aid: Int)
     case deauthentication(reason: Int)
 
@@ -375,13 +415,13 @@ enum Dot11Mgmt: Equatable, Sendable {
     }
 
     /// Body: fixed fields, then the SSID (2 + length), Supported Rates (2 + 8) and DS Parameter Set (2 + 1) elements (§9.3.3.6–13);
-    /// a Probe Response also the ERP element (2 + 1, §9.4.2.12).
+    /// a Probe Response also the ERP element (2 + 1, §9.4.2.12); both with the RSN element on a WPA2 network.
     var size: Int {
         switch self {
         case .probeRequest(let ssid): 2 + ssid.utf8.count + 10
-        case .probeResponse(let ssid, _, _): 8 + 2 + 2 + 2 + ssid.utf8.count + 10 + 3 + 3
+        case .probeResponse(let ssid, _, _, let rsn): 8 + 2 + 2 + 2 + ssid.utf8.count + 10 + 3 + 3 + (rsn ? DOT11_RSN_BYTES : 0)
         case .authentication: 6
-        case .associationRequest(let ssid): 2 + 2 + 2 + ssid.utf8.count + 10
+        case .associationRequest(let ssid, let rsn): 2 + 2 + 2 + ssid.utf8.count + 10 + (rsn ? DOT11_RSN_BYTES : 0)
         case .associationResponse: 2 + 2 + 2 + 10
         case .deauthentication: 2
         }
@@ -397,6 +437,8 @@ enum L3: Equatable, Sendable {
     case bpdu(Bpdu)
     /// An 802.11 management frame (spec M11 §3): only on the air, never bridged.
     case mgmt(Dot11Mgmt)
+    /// A 4-way handshake message (spec M11 §8), EtherType 0x888E: a data frame between a station and its access point, never bridged.
+    case eapol(EapolKey)
 }
 
 struct EthernetFrame: Equatable, Sendable {
@@ -419,11 +461,13 @@ struct EthernetFrame: Equatable, Sendable {
         case .ipv6(let p): p.size
         case .bpdu(let b): b.size
         case .mgmt(let m): m.size
+        case .eapol(let k): k.size
         }
-        // On the air: the 802.11 header, then LLC/SNAP before a packet (RFC 1042); a management body follows the header.
-        if air != nil {
+        // On the air: the 802.11 header, then LLC/SNAP before a packet (RFC 1042); a management body follows the header. CCMP wraps a
+        // protected frame's body in its header and MIC.
+        if let air {
             if case .mgmt = payload { return 24 + body }
-            return 24 + 8 + body
+            return 24 + 8 + body + (air.protected ? DOT11_CCMP_BYTES : 0)
         }
         return (vlan == nil ? 14 : 18) + body
     }

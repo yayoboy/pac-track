@@ -330,7 +330,9 @@ extension StationState {
         case .notFound: "nessuna rete trovata"
         case .authenticating: "autenticazione"
         case .associating: "associazione"
+        case .handshake: "handshake"
         case .associated: "associato"
+        case .wrongPassword: "password errata"
         }
     }
 }
@@ -343,6 +345,8 @@ public func wifiStatus(_ s: StationView, in nodes: [NodeView]) -> String {
     case .notFound: "Nessuna rete trovata"
     case .authenticating: "Autenticazione…"
     case .associating: "Associazione…"
+    case .handshake: "Handshake WPA2…"
+    case .wrongPassword: "Password errata"
     case .associated:
         "Associato a \(s.config.ssid) · \(nodes.first { $0.id == s.ap }?.name ?? "?") · canale \(s.channel.map(String.init) ?? "?")"
     }
