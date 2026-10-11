@@ -245,8 +245,11 @@ public final class Editor {
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
         if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
-        // Tablets and smartphones look for the network a new access point brings, in DHCP (spec M11 §2).
-        if kind == .tablet || kind == .smartphone {
+        // A NAS stores what is copied to it; a NAS and a console take their address like out of the box (spec M12 §3–§4).
+        if kind == .nas { cmds.append(.setSink(node: id, on: true)) }
+        if kind == .nas || kind == .console { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
+        // Tablets and smartphones look for the network a new access point brings, in DHCP (spec M11 §2); IoT devices too (spec M12 §5).
+        if [.tablet, .smartphone, .smartBulb, .thermostat, .smartSpeaker].contains(kind) {
             cmds += [.setStation(node: id, config: StationConfig(ssid: ApConfig().ssid)), .setIfaceMode(node: id, iface: "wlan0", mode: .dhcp)]
         }
         // Server presets (spec M10 §3): 192.168.1.0/24 with .1 left to the router; the pool is the one the Servizi switch suggests.
@@ -267,7 +270,7 @@ public final class Editor {
 
     private func connectNow(_ aId: String, _ bId: String) async {
         guard aId != bId, let a = snapshot.nodes.first(where: { $0.id == aId }), let b = snapshot.nodes.first(where: { $0.id == bId }) else { return }
-        guard let ia = firstFreeIface(a), let ib = firstFreeIface(b) else {
+        guard let ia = firstFreeIface(a, toward: b), let ib = firstFreeIface(b, toward: a) else {
             error = EditorError(key: "connect", message: "\(firstFreeIface(a) == nil ? a.name : b.name) has no free port")
             return
         }

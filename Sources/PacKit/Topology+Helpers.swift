@@ -166,9 +166,12 @@ func defaultName(_ kind: DeviceKind, taken: Set<String>) -> String {
     return "\(kind.namePrefix)\(i)"
 }
 
-/// A cable never goes into a Wi-Fi interface (spec M11 §7).
-public func firstFreeIface(_ node: NodeView) -> String? {
-    node.ifaces.first { !$0.linked && !$0.wireless }?.name
+/// A cable never goes into a Wi-Fi interface (spec M11 §7). A modem's line faces a Cloud/ISP and its Ethernet port anything else,
+/// the other port when that one is taken (spec M12 §2).
+public func firstFreeIface(_ node: NodeView, toward peer: NodeView? = nil) -> String? {
+    let free = node.ifaces.filter { !$0.linked && !$0.wireless }.map(\.name)
+    guard node.kind == .modem, let peer else { return free.first }
+    return free.first { ($0 == "dsl0") == (peer.kind == .cloud) } ?? free.first
 }
 
 public func firstIp(_ node: NodeView) -> String? {
@@ -273,6 +276,18 @@ public func formatBandwidth(_ bps: Double) -> String {
     let units: [(Double, String)] = [(1e9, "Gb/s"), (1e6, "Mb/s"), (1e3, "kb/s")]
     let (scale, unit) = units.first { bps >= $0.0 } ?? (1, "b/s")
     return "\(plain(bps / scale)) \(unit)"
+}
+
+/// A DSL line's rates, down/up: "100/20 Mb/s" (spec M12 §2).
+public func syncLabel(_ sync: (down: Double, up: Double)) -> String {
+    "\(plain(sync.down / 1e6))/\(plain(sync.up / 1e6)) Mb/s"
+}
+
+/// A cable's rate on the canvas: a cable into a modem's line shows the line, capped by the cable (spec M12 §2).
+public func cableRate(_ link: LinkView, in nodes: [NodeView]) -> String {
+    let bps = link.options.bandwidthBps
+    let dsl = [link.a, link.b].contains { end in end.iface == "dsl0" && nodes.contains { $0.id == end.node && $0.kind == .modem } }
+    return dsl ? syncLabel((min(bps, VDSL2_SYNC.down), min(bps, VDSL2_SYNC.up))) : formatBandwidth(bps)
 }
 
 /// One editable DHCP server setting, in the units people type.
