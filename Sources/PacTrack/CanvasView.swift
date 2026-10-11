@@ -102,8 +102,8 @@ struct CanvasView: View {
                 monitor = nil
             }
             .dropDestination(for: String.self) { items, location in
-                guard let kind = items.first.flatMap(DeviceKind.init(rawValue:)) else { return false }
-                Task { await editor.addDevice(kind, at: editor.aligned(toWorld(location))) }
+                guard let item = items.first.flatMap(PaletteItem.init(payload:)) else { return false }
+                Task { await editor.addDevice(item.kind, at: editor.aligned(toWorld(location)), preset: item.preset) }
                 return true
             }
             .simultaneousGesture(
@@ -317,11 +317,11 @@ struct CanvasView: View {
     @ViewBuilder
     private func paneMenu(size: CGSize) -> some View {
         Menu("Aggiungi dispositivo") {
-            ForEach(DeviceKind.allCases, id: \.self) { kind in
+            ForEach(PaletteView.groups(matching: "").flatMap(\.1), id: \.self) { item in
                 Button {
                     let at = editor.aligned(toWorld(menuPoint))
-                    Task { await editor.addDevice(kind, at: at) }
-                } label: { Label(kind.label, systemImage: kind.symbol) }
+                    Task { await editor.addDevice(item.kind, at: at, preset: item.preset) }
+                } label: { Label(item.label, systemImage: item.kind.symbol) }
             }
         }
         Button("Incolla") {

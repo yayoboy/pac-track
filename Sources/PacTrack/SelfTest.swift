@@ -66,7 +66,14 @@ enum SelfTest {
         await editor.duplicate([id("PC2")])
         await editor.edit(.setPower(id: id("PC3"), on: false))
         if editor.snapshot.nodes.first(where: { $0.name == "PC3" })?.powered != false { failures.append("PC3 should be off") }
-        if PaletteView.groups(matching: "rou").map(\.1) != [[.router]] { failures.append("palette search") }
+        if PaletteView.groups(matching: "rou").map(\.1) != [[PaletteItem(kind: .router)]] { failures.append("palette search") }
+        if PaletteView.groups(matching: "stamp").map(\.1) != [[PaletteItem(kind: .printer)]] { failures.append("palette search: printer") }
+        if PaletteView.groups(matching: "server").map(\.0) != ["Server"] || PaletteView.groups(matching: "server").first?.1.count != 3 {
+            failures.append("palette search: servers")
+        }
+        if PaletteItem(payload: "server-dhcp") != PaletteItem(kind: .server, preset: .dhcp) || PaletteItem(payload: "tv")?.label != "Smart TV" {
+            failures.append("palette payloads")
+        }
         if !PaletteView.groups(matching: "zzz").isEmpty { failures.append("palette search should find nothing") }
         editor.select(.link(cable))
         // Pinch anchored at the pointer: the world point under the fingers stays put.
@@ -89,6 +96,7 @@ enum SelfTest {
         failures += await ospfScenario(output: output)
         failures += await ipv6Scenario(output: output)
         failures += await ipv6ServicesScenario(output: output)
+        failures += await m10Scenario(output: output)
         return failures
     }
 
@@ -682,6 +690,37 @@ enum SelfTest {
         return failures
     }
 
+    /// M10 (spec M10 §1): the lab of the new devices as dropped; images of the lab, the printer and the palette in a short window.
+    private static func m10Scenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        // Staggered so the four cable labels and the minimap do not overlap.
+        await editor.addDevice(.switch, at: Pos(x: 560, y: 60))
+        await editor.addDevice(.server, at: Pos(x: 260, y: 220), preset: .dhcp)
+        await editor.addDevice(.tv, at: Pos(x: 420, y: 330))
+        await editor.addDevice(.printer, at: Pos(x: 700, y: 330))
+        await editor.addDevice(.pc, at: Pos(x: 860, y: 220))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        for name in ["SRV1", "TV1", "PRN1", "PC1"] { await editor.connect(id("SW1"), id(name)) }
+        await editor.edit(.setIp(node: id("PRN1"), iface: "eth0", cidr: "192.168.1.50/24"))
+        await editor.edit(.setIfaceMode(node: id("PC1"), iface: "eth0", mode: .dhcp))
+        for _ in 0..<610 { await editor.tick(wallMs: 100) }
+        let ips = Set(["TV1", "PC1"].map { name in editor.snapshot.nodes.first { $0.name == name }?.ifaces.first?.cidr })
+        if ips != ["192.168.1.100/24", "192.168.1.101/24"] { failures.append("M10 leases \(ips)") }
+        await editor.startTraffic(id("PC1"), target: "192.168.1.50", kind: .tcp, amount: "100000", seconds: "")
+        for _ in 0..<20 { await editor.tick(wallMs: 100) }
+        if editor.snapshot.apps.last?.lines.last != "iperf Done." { failures.append("M10 print job \(editor.snapshot.apps.last?.lines ?? [])") }
+        editor.select(.node(id("PRN1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m10-lab")) { failures.append("could not write the M10 lab image") }
+        editor.select(.node(id("TV1")))
+        editor.inspectorTab = .interfaces
+        if !render(editor, to: sibling(output, "m10-tv")) { failures.append("could not write the M10 TV image") }
+        // The minimum window (640 pt) less the toolbar: the whole palette still fits, nothing cut.
+        if !render(editor, to: sibling(output, "m10-palette-short"), height: 588) { failures.append("could not write the short palette image") }
+        return failures
+    }
+
     /// "build/selftest.png" → "build/selftest-m3.png".
     static func sibling(_ path: String, _ suffix: String) -> String {
         URL(fileURLWithPath: path).deletingPathExtension().path + "-\(suffix).png"
@@ -710,8 +749,8 @@ enum SelfTest {
         return failures
     }
 
-    static func render(_ editor: Editor, to path: String) -> Bool {
-        let size = NSSize(width: 1400, height: 860)
+    static func render(_ editor: Editor, to path: String, height: CGFloat = 860) -> Bool {
+        let size = NSSize(width: 1400, height: height)
         let host = NSHostingView(rootView: MainContent(editor: editor).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
