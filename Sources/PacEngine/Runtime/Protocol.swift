@@ -1,6 +1,6 @@
-/// `cloud`: an ISP edge router whose "Internet" answers by itself (spec §5.5).
+/// `cloud`: an ISP edge router whose "Internet" answers by itself (spec §5.5). `printer`, `tv`: hosts (spec M10 §2).
 public enum DeviceKind: String, Codable, Sendable, CaseIterable {
-    case pc, laptop, server, router, `switch`, hub, cloud
+    case pc, laptop, server, router, `switch`, hub, cloud, printer, tv
 }
 
 public struct IfaceRef: Codable, Hashable, Sendable {

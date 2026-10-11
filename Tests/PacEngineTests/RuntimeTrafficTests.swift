@@ -102,6 +102,31 @@ private let GOODPUT_10MB = 9_492_848.0
         #expect(rt.snapshot().apps.isEmpty)
     }
 
+    /// Spec M10 §2: both are hosts; the printer runs the sink, the Smart TV runs no service.
+    @Test func aPrinterReceivesTrafficAndATvIsAPlainHost() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "p", kind: .printer, name: "PRN1"))
+        try rt.handle(.addNode(id: "t", kind: .tv, name: "TV1"))
+        try rt.handle(.connect(id: "l", a: IfaceRef(node: "t", iface: "eth0"), b: IfaceRef(node: "p", iface: "eth0")))
+        try rt.handle(.setIp(node: "p", iface: "eth0", cidr: "10.0.0.50/24"))
+        try rt.handle(.setIp(node: "t", iface: "eth0", cidr: "10.0.0.1/24"))
+        try rt.handle(.setSink(node: "p", on: true))
+        try rt.handle(.trafficTcp(node: "t", target: "10.0.0.50", bytes: 100_000))
+        try rt.handle(.ping(node: "p", target: "10.0.0.1"))
+        runFor(rt, wallMs: 5_000)
+        let s = rt.snapshot()
+        #expect(s.nodes.map(\.kind) == [.printer, .tv] && s.nodes[0].sink)
+        #expect(s.apps[0].lines.last == "iperf Done.")
+        #expect(s.apps[1].lines.contains("4 packets transmitted, 4 received, 0% packet loss"))
+        expectError("TV1 cannot run a traffic sink") { try rt.handle(.setSink(node: "t", on: true)) }
+        expectError("PRN1 cannot run a DHCP server") {
+            try rt.handle(.setDhcpServer(node: "p", config: DhcpConfig(start: "10.0.0.100", end: "10.0.0.199")))
+        }
+        expectError("TV1 cannot run a DNS server") { try rt.handle(.setDnsServer(node: "t", records: [])) }
+        try rt.handle(.setIfaceMode(node: "t", iface: "eth0", mode: .dhcp))
+        #expect(rt.snapshot().nodes[1].ifaces[0].mode == .dhcp)
+    }
+
     @Test func poweringTheSenderOffEndsItsFlow() throws {
         let rt = try trafficRuntime()
         try rt.handle(.trafficTcp(node: "a", target: "10.0.0.2", bytes: 100_000_000))

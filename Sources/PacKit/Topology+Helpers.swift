@@ -12,6 +12,8 @@ extension DeviceKind {
         case .switch: "Switch"
         case .hub: "Hub"
         case .cloud: "Cloud/ISP"
+        case .printer: "Stampante"
+        case .tv: "Smart TV"
         }
     }
 
@@ -24,13 +26,15 @@ extension DeviceKind {
         case .switch: "SW"
         case .hub: "HUB"
         case .cloud: "ISP"
+        case .printer: "PRN"
+        case .tv: "TV"
         }
     }
 
     public var hasIp: Bool { self != .switch && self != .hub }
 
-    /// PCs, laptops and servers: DHCP client and a name server setting.
-    public var isHost: Bool { self == .pc || self == .laptop || self == .server }
+    /// PCs, laptops, servers, printers and Smart TVs: DHCP client and a name server setting.
+    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv].contains(self) }
 }
 
 /// Node inspector tabs, in display order.
@@ -42,8 +46,8 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     switch kind {
     case .switch: [.ports, .services, .tables]
     case .hub: [.ports]
-    case .router, .server, .cloud: [.interfaces, .routing, .services, .tables, .app]
-    case .pc, .laptop: [.interfaces, .routing, .tables, .app]
+    case .router, .server, .cloud, .printer: [.interfaces, .routing, .services, .tables, .app]
+    case .pc, .laptop, .tv: [.interfaces, .routing, .tables, .app]
     }
 }
 

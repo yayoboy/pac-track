@@ -225,7 +225,7 @@ public final class Runtime {
             start(node, "nslookup \(t)", .nslookup(try NsLookup(node: try liveIpNode(node), name: t)))
         case let .setSink(node, on):
             let n = try ipNode(node)
-            guard !on || nodes[node]?.kind == .server else { throw EngineError("\(n.name) cannot run a traffic sink") }
+            guard !on || nodes[node]?.kind == .server || nodes[node]?.kind == .printer else { throw EngineError("\(n.name) cannot run a traffic sink") }
             try n.configureSink(on)
         case let .trafficTcp(node, target, bytes):
             let t = target.trimmingCharacters(in: .whitespaces)
@@ -509,7 +509,7 @@ public final class Runtime {
 
     private func create(_ id: String, _ kind: DeviceKind) -> Node {
         switch kind {
-        case .pc, .laptop, .server: Host(sim: sim, id: id)
+        case .pc, .laptop, .server, .printer, .tv: Host(sim: sim, id: id)
         case .router: Router(sim: sim, id: id)
         case .switch: Switch(sim: sim, id: id)
         case .hub: Hub(sim: sim, id: id)

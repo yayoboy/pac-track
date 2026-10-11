@@ -2,7 +2,7 @@ import PacEngine
 import PacKit
 import SwiftUI
 
-/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers), RIP, OSPF, NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
+/// DHCP server (routers, servers, clouds), DNS server (servers, clouds), sink (servers, printers), RIP, OSPF, NAT and firewall (routers): settings plus live tables; on a switch, the Spanning Tree priorities (spec §7.1 ④).
 struct ServicesTab: View {
     let node: NodeView
     @Bindable var editor: Editor
@@ -21,6 +21,8 @@ struct ServicesTab: View {
         VStack(alignment: .leading, spacing: 18) {
             if node.kind == .switch {
                 spanningTree
+            } else if node.kind == .printer {
+                sink
             } else {
                 if node.kind == .cloud { internet }
                 dhcp

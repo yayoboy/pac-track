@@ -49,6 +49,8 @@ extension DeviceKind {
         case .switch: "rectangle.connected.to.line.below"
         case .hub: "circle.hexagongrid"
         case .cloud: "cloud"
+        case .printer: "printer"
+        case .tv: "tv"
         }
     }
 }

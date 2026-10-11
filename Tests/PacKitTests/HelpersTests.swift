@@ -15,6 +15,15 @@ import Testing
         return rt.snapshot()
     }
 
+    @Test func printersAndTvsAreHostsWithItalianNamesAndTabs() {
+        #expect([DeviceKind.printer, .tv].map(\.label) == ["Stampante", "Smart TV"])
+        #expect(defaultName(.printer, taken: ["PRN1"]) == "PRN2" && defaultName(.tv, taken: []) == "TV1")
+        #expect(DeviceKind.printer.isHost && DeviceKind.tv.isHost && DeviceKind.printer.hasIp)
+        #expect(inspectorTabs(for: .printer) == [.interfaces, .routing, .services, .tables, .app])
+        #expect(inspectorTabs(for: .tv) == [.interfaces, .routing, .tables, .app])
+        #expect(inspectorTabs(for: .pc) == [.interfaces, .routing, .tables, .app]) // unchanged
+    }
+
     @Test func picksTheLowestFreeDefaultNamePerKind() throws {
         let nodes = try snapshot().nodes
         #expect(defaultName(.pc, existing: nodes) == "PC2")
