@@ -90,7 +90,7 @@ import Testing
         await editor.addDevice(.smartphone, at: Pos(x: -100, y: 250))
         await editor.edit(.setStation(node: node("TAB1").id, config: StationConfig(ssid: "casa", passphrase: "segreta123")))
         await editor.edit(.setStation(node: node("PHONE1").id, config: StationConfig(ssid: "casa", passphrase: "sbagliata1")))
-        // HR1's first DISCOVER left before the cable: the Internet port has its address after the retry at 4 s.
+        // The PHONE1 handshake gives up at ~4 s; by then everything else has long settled.
         await tick(60)
         #expect(node("TAB1").station?.state == .associated && airLinks(editor.snapshot.nodes).map(\.b) == [IfaceRef(node: hr, iface: "WLAN")])
         #expect(node("TAB1").ifaces[0].cidr == "192.168.0.100/24" && node("TAB1").learnedNameServer == "192.168.0.1")
