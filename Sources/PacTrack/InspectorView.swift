@@ -74,9 +74,9 @@ private struct NodeInspector: View {
                 let modeKey = "mode:\(node.id):\(iface.name)"
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(iface.name).foregroundStyle(Theme.fgStrong)
+                        Text(iface.name).foregroundStyle(Theme.fgStrong).layoutPriority(1)
                         Spacer()
-                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        cableEnd(iface)
                         if iface.name.contains(".") {
                             Button("Elimina", role: .destructive) {
                                 Task { await editor.edit(.removeSubinterface(node: node.id, iface: iface.name), key: "sub:\(node.id)") }
@@ -145,15 +145,23 @@ private struct NodeInspector: View {
             ForEach(node.ifaces, id: \.name) { iface in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(iface.name)
+                        Text(iface.name).layoutPriority(1)
                         Spacer()
-                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        cableEnd(iface)
                     }
                     .font(Theme.mono)
                     if let port = iface.switchport { SwitchportFields(node: node.id, iface: iface.name, port: port, editor: editor) }
                 }
             }
         }
+    }
+
+    /// "● SW1 Gi0/2", the device and port at the other end of the cable, or "○ libera"; one line, shortened in the middle.
+    private func cableEnd(_ iface: IfaceView) -> some View {
+        Text(iface.linked ? "● " + (peerLabel(IfaceRef(node: node.id, iface: iface.name), in: editor.snapshot) ?? "collegata") : "○ libera")
+            .foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     private var tables: some View {

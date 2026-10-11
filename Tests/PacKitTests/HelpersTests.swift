@@ -40,6 +40,19 @@ import Testing
         #expect(firstFreeIface(nodes[0]) == nil)
     }
 
+    @Test func namesTheDeviceAndPortAtTheOtherEndOfTheCable() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        try rt.handle(.connect(id: "l", a: IfaceRef(node: "r", iface: "Gi0/0"), b: IfaceRef(node: "a", iface: "eth0")))
+        try rt.handle(.addSubinterface(node: "r", iface: "Gi0/0.10"))
+        let s = rt.snapshot()
+        #expect(peerLabel(IfaceRef(node: "a", iface: "eth0"), in: s) == "R1 Gi0/0")
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/0"), in: s) == "PC1 eth0")
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/0.10"), in: s) == "PC1 eth0") // rides on its physical interface's cable
+        #expect(peerLabel(IfaceRef(node: "r", iface: "Gi0/1"), in: s) == nil)
+    }
+
     @Test func comparesTopologiesIgnoringPositions() throws {
         let s = try snapshot()
         let a = makeTopology(s, [:])

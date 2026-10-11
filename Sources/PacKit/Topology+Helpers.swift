@@ -353,6 +353,15 @@ public func isTrunk(_ link: LinkView, in nodes: [NodeView]) -> Bool {
     }
 }
 
+/// The device and port at the other end of the cable in `end` ("SW1 Gi0/2"); a subinterface answers for its physical interface.
+/// nil while the interface is free.
+public func peerLabel(_ end: IfaceRef, in s: Snapshot) -> String? {
+    let physical = IfaceRef(node: end.node, iface: String(end.iface.split(separator: ".")[0]))
+    guard let link = s.links.first(where: { $0.a == physical || $0.b == physical }) else { return nil }
+    let peer = link.a == physical ? link.b : link.a
+    return "\(s.nodes.first { $0.id == peer.node }?.name ?? "?") \(peer.iface)"
+}
+
 /// Where a cable sits among those joining the same two devices (in cable order): 0 alone, else -(k-1)/2 … (k-1)/2, so the
 /// canvas can spread parallel cables apart.
 public func cableSlot(_ link: LinkView, in links: [LinkView]) -> Double {
