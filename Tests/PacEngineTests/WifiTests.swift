@@ -60,7 +60,7 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
             "20000 tx TAB1 Probe Request, SSID=pac-track",
             "20189 rx AP1 Probe Request, SSID=pac-track",
             "20189 tx AP1 Probe Response, SSID=pac-track, canale 6",
-            "20398 rx TAB1 Probe Response, SSID=pac-track, canale 6",
+            "20402 rx TAB1 Probe Response, SSID=pac-track, canale 6",
             "40000 tx TAB1 Probe Request, SSID=pac-track",
             "60000 tx TAB1 Authentication, Open System, transazione 1",
             "60169 rx AP1 Authentication, Open System, transazione 1",

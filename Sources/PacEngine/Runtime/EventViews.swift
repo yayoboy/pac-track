@@ -550,7 +550,9 @@ private func mgmtLayer(_ m: Dot11Mgmt) -> PduLayer {
     case .probeRequest(let ssid): [field("SSID", ssid), field("Velocità supportate", rates)]
     case .probeResponse(let ssid, let channel, let timestamp):
         [field("Timestamp", "\(timestamp) µs"), field("Intervallo di beacon", "\(DOT11_BEACON_TU) TU (102.4 ms)"), capability,
-         field("SSID", ssid), field("Velocità supportate", rates), field("Canale (DS Parameter Set)", "\(channel)")]
+         field("SSID", ssid), field("Velocità supportate", rates), field("Canale (DS Parameter Set)", "\(channel)"),
+         // No non-ERP station, no protection, long preamble not required (§9.4.2.12).
+         field("ERP", "0x00")]
     case .authentication(let seq, let s): [field("Algoritmo", "0 (Open System)"), field("Numero di transazione", "\(seq)"), field("Stato", status(s))]
     case .associationRequest(let ssid):
         [capability, field("Intervallo di ascolto", "\(DOT11_LISTEN_INTERVAL)"), field("SSID", ssid), field("Velocità supportate", rates)]

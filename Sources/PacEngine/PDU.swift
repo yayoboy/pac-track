@@ -372,11 +372,12 @@ enum Dot11Mgmt: Equatable, Sendable {
         }
     }
 
-    /// Body: fixed fields, then the SSID (2 + length), Supported Rates (2 + 8) and DS Parameter Set (2 + 1) elements (§9.3.3.6–13).
+    /// Body: fixed fields, then the SSID (2 + length), Supported Rates (2 + 8) and DS Parameter Set (2 + 1) elements (§9.3.3.6–13);
+    /// a Probe Response also the ERP element (2 + 1, §9.4.2.12).
     var size: Int {
         switch self {
         case .probeRequest(let ssid): 2 + ssid.utf8.count + 10
-        case .probeResponse(let ssid, _, _): 8 + 2 + 2 + 2 + ssid.utf8.count + 10 + 3
+        case .probeResponse(let ssid, _, _): 8 + 2 + 2 + 2 + ssid.utf8.count + 10 + 3 + 3
         case .authentication: 6
         case .associationRequest(let ssid): 2 + 2 + 2 + ssid.utf8.count + 10
         case .associationResponse: 2 + 2 + 2 + 10

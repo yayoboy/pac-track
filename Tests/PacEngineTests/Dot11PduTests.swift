@@ -26,13 +26,14 @@ private func air(_ f: EthernetFrame) -> [Int] {
 private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0.value)" } }
 
 @Suite struct Dot11PduTests {
-    /// IEEE 802.11-2016 §9.3.3: header 24 B + body (fixed fields, SSID 2 + n, Supported Rates 2 + 8, DS Parameter Set 2 + 1).
+    /// IEEE 802.11-2016 §9.3.3: header 24 B + body (fixed fields, SSID 2 + n, Supported Rates 2 + 8, DS Parameter Set 2 + 1; the Probe
+    /// Response also ERP 2 + 1, §9.4.2.12).
     @Test func managementFramesHaveTheirIeee80211Sizes() {
         let frames: [Dot11Mgmt] = [.probeRequest(ssid: "pac-track"), .probeResponse(ssid: "pac-track", channel: 6, timestamp: 20_189),
                                    .authentication(seq: 1, status: 0), .associationRequest(ssid: "pac-track"),
                                    .associationResponse(status: 0, aid: 1), .deauthentication(reason: 3)]
-        #expect(frames.map(\.size) == [21, 36, 6, 25, 16, 2])
-        #expect(frames.map { mgmt($0).size } == [45, 60, 30, 49, 40, 26])
+        #expect(frames.map(\.size) == [21, 39, 6, 25, 16, 2])
+        #expect(frames.map { mgmt($0).size } == [45, 63, 30, 49, 40, 26])
         #expect(frames.map(\.subtype) == [4, 5, 11, 0, 1, 12])
     }
 
@@ -48,7 +49,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
         #expect([mgmt(.probeResponse(ssid: "pac-track", channel: 6, timestamp: 0), from: AP, to: STA), mgmt(.authentication(seq: 1, status: 0)),
                  mgmt(.associationRequest(ssid: "pac-track")), mgmt(.associationResponse(status: 0, aid: 1), from: AP, to: STA),
                  mgmt(.deauthentication(reason: 3)), mgmt(.deauthentication(reason: 3), from: AP, to: BROADCAST_MAC)].map(air)
-            == [[209, 60], [169, 60], [193, 60], [181, 60], [161, 60], [161, 0]])
+            == [[213, 60], [169, 60], [193, 60], [181, 60], [161, 60], [161, 0]])
         // A 56-byte ping: 24 + LLC/SNAP 8 + 84 = 116 B, 46 µs at 54 Mb/s; to the AP its receiver (address 1) is the BSSID.
         #expect(echo(toDS: true).size == 116 && echo(toDS: true).receiver == AP && air(echo(toDS: true)) == [137, 44])
         #expect(echo(toDS: false).receiver == DST)
@@ -115,7 +116,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
                                        frame: mgmt(.probeResponse(ssid: "pac-track", channel: 6, timestamp: 20_189), from: AP, to: STA)))
         #expect(lines(probe[1]) == [
             "Timestamp: 20189 µs", "Intervallo di beacon: 100 TU (102.4 ms)", "Capability: 0x0401 (ESS, short slot)", "SSID: pac-track",
-            "Velocità supportate: 6(B), 9, 12(B), 18, 24(B), 36, 48, 54 Mb/s", "Canale (DS Parameter Set): 6",
+            "Velocità supportate: 6(B), 9, 12(B), 18, 24(B), 36, 48, 54 Mb/s", "Canale (DS Parameter Set): 6", "ERP: 0x00",
         ])
         let others = [Dot11Mgmt.probeRequest(ssid: "pac-track"), .authentication(seq: 2, status: 0), .associationRequest(ssid: "pac-track"),
                       .deauthentication(reason: 3)]
