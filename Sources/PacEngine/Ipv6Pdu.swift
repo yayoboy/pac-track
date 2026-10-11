@@ -25,6 +25,8 @@ let RA_LIFETIME_S: UInt16 = 1800
 let ND_VALID_LIFETIME: UInt32 = 2_592_000
 let ND_PREFERRED_LIFETIME: UInt32 = 604_800
 let RA_MTU: UInt32 = 1500
+/// RDNSS (RFC 8106 §5.1): how long hosts may use the advertised DNS server, the minimum of 3 × MaxRtrAdvInterval (200 s, spec M9 §10).
+let RDNSS_LIFETIME: UInt32 = 600
 
 let LINK_LOCAL_PREFIX = UInt128(0xFE80) << 112
 /// ff02::1 (all nodes) and ff02::2 (all routers).
@@ -140,13 +142,17 @@ struct PrefixInfo: Equatable, Sendable {
     var preferred = ND_PREFERRED_LIFETIME
 }
 
-/// A Router Advertisement with IOS defaults (spec M9 §5): flags M and O, reachable time and retrans timer are 0.
+/// A Router Advertisement with IOS defaults (spec M9 §5): flags M and O, reachable time and retrans timer are 0; RDNSS when the router
+/// has a DNS server to advertise (spec M9 §10).
 struct RouterAdvert: Equatable, Sendable {
     var hopLimit: UInt8 = 64
     var lifetime = RA_LIFETIME_S
     var slla: Mac
     var mtu = RA_MTU
     var prefixes: [PrefixInfo]
+    /// RDNSS (RFC 8106): one DNS server, and how long it may be used.
+    var dns: UInt128? = nil
+    var dnsLifetime = RDNSS_LIFETIME
 }
 
 /// NDP bodies (RFC 4861 §4) with the link-layer address options Pac-Track uses; an NA always carries the target's.
@@ -171,11 +177,11 @@ struct NdpMessage: Equatable, Sendable {
         }
     }
 
-    /// Header and fields, plus 8 B per link-layer address option, 8 B of MTU and 32 B per prefix.
+    /// Header and fields, plus 8 B per link-layer address option, 8 B of MTU, 32 B per prefix and 24 B of RDNSS.
     var size: Int {
         switch body {
         case .rs(let slla): 8 + (slla == nil ? 0 : 8)
-        case .ra(let ra): 32 + 32 * ra.prefixes.count
+        case .ra(let ra): 32 + 32 * ra.prefixes.count + (ra.dns == nil ? 0 : 24)
         case .ns(_, let slla): 24 + (slla == nil ? 0 : 8)
         case .na: 32
         }
@@ -244,6 +250,9 @@ func serialize(_ m: NdpMessage) -> [UInt8] {
         for p in ra.prefixes {
             b += [3, 4, UInt8(truncatingIfNeeded: p.length), 0xC0] // L and A
             b += u32(p.valid) + u32(p.preferred) + u32(0) + bytes16(p.prefix)
+        }
+        if let dns = ra.dns {
+            b += [25, 3, 0, 0] + u32(ra.dnsLifetime) + bytes16(dns) // RDNSS, 3 × 8 B (RFC 8106 §5.1)
         }
     case .ns(let target, let slla):
         b += u32(0) + bytes16(target)

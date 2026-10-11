@@ -2,12 +2,14 @@ import Testing
 @testable import PacEngine
 
 /// PC (H1, SLAAC) — R1 (Gi0/0 2001:db8:1::1/64 | Gi0/1 2001:db8:2::1/64, `ipv6 unicast-routing`) — SRV (H2, 2001:db8:2::53/64), dual
-/// stack from `routedPair` (10.0.1.10 and 10.0.2.10), run to t = 3 s. MACs: H1 …:01, H2 …:02, R1 Gi0/0 …:03, Gi0/1 …:04.
-private func lab() throws -> (sim: Sim, pc: Host, srv: Host, r1: Router) {
+/// stack from `routedPair` (10.0.1.10 and 10.0.2.10), run to t = 3 s; R1 advertises `rdnss` if given. MACs: H1 …:01, H2 …:02, R1 Gi0/0
+/// …:03, Gi0/1 …:04.
+private func lab(rdnss: String? = nil) throws -> (sim: Sim, pc: Host, srv: Host, r1: Router) {
     let (sim, pc, srv, r1) = try routedPair()
     try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:1::1/64"))
     try r1.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:2::1/64"))
     r1.v6.setRouting(true)
+    if let rdnss { r1.v6.rdnss = try parseIp6(rdnss) }
     try pc.v6.configure("eth0", Ipv6Config(autoconfig: true))
     try srv.v6.configure("eth0", Ipv6Config(address: "2001:db8:2::53/64"))
     sim.run(3 * S)
@@ -194,5 +196,44 @@ private func queries(_ sim: Sim, from node: String) -> [UInt16] {
         sim.run(1 * S)
         #expect(trace.result.lines.first == "v6only.lab: Name or service not known")
         #expect(queries(sim, from: "H1").suffix(1) == [DNS_TYPE_A] && queries(sim, from: "H1").count == 5)
+    }
+
+    @Test func routersAdvertiseTheirDnsServerAndHostsUseItLast() throws {
+        let (sim, pc, srv, r1) = try lab(rdnss: "2001:db8:2::53")
+        try srv.configureDnsServer(records)
+        #expect(pc.v6.dnsServer == SRV && pc.effectiveNameServer == .v6(SRV))
+        // The RA's RDNSS option: after the prefix, 24 B, lifetime 600 s.
+        let ras = sim.log.all.compactMap { e -> Ipv6Packet? in
+            guard e.kind == .tx, e.node == "R1", e.iface == "Gi0/0", case .ipv6(let p)? = e.frame?.payload, case .ndp(let n) = p.payload,
+                  n.type == ND_RA else { return nil }
+            return p
+        }
+        #expect(ras.map(\.size) == [128]) // the RA of 1 s: 40 + 16 + SLLA 8 + MTU 8 + one prefix 32 + RDNSS 24
+        #expect(Array(serializePayload(ras[0]).suffix(24)) == [25, 3, 0, 0, 0, 0, 0x02, 0x58] + bytes16(SRV))
+        let ping = try Ping(node: pc, target: "srv1.lab", options: PingOptions(count: 1))
+        sim.run(2 * S)
+        #expect(ping.result.lines.first == "PING srv1.lab(2001:db8:2::53) 56 data bytes" && ping.result.received == 1)
+        #expect(sim.log.all.contains { e in
+            guard e.kind == .tx, e.node == "H1", case .ipv6(let p)? = e.frame?.payload, case .udp(let u) = p.payload, case .dns = u.payload else { return false }
+            return p.dst == SRV
+        })
+        // A server typed by hand comes first.
+        pc.nameServer = try parseIp("10.0.2.10")
+        #expect(try pc.effectiveNameServer == .v4(parseIp("10.0.2.10")))
+        pc.nameServer = nil
+        // The router stops advertising it: it lasts 600 s from the last RA that carried it (the answer to the RSs, at 4 s).
+        r1.v6.rdnss = nil
+        sim.run(604 * S - 1 - sim.now)
+        #expect(pc.v6.dnsServer == SRV)
+        sim.run(1 * S)
+        #expect(pc.v6.dnsServer == nil && pc.effectiveNameServer == nil)
+        // Lifetime 0 withdraws it at once.
+        let ll = linkLocal("02:00:00:00:00:03")
+        let ra = { (lifetime: UInt32) in makeIpv6(src: ll, dst: ALL_NODES, hopLimit: 255, payload: .ndp(NdpMessage(body: .ra(RouterAdvert(
+            slla: "02:00:00:00:00:03", prefixes: [], dns: SRV, dnsLifetime: lifetime))))) }
+        pc.v6.input(ra(600), on: try pc.iface("eth0"))
+        #expect(pc.v6.dnsServer == SRV)
+        pc.v6.input(ra(0), on: try pc.iface("eth0"))
+        #expect(pc.v6.dnsServer == nil)
     }
 }

@@ -36,4 +36,25 @@ private func lab() throws -> Runtime {
         #expect(s.nodes[2].tcp.first == TcpRow(local: "0.0.0.0:9", remote: "0.0.0.0:*", state: "LISTEN"))
         #expect(s.apps[0].title == "iperf3 -c 2001:db8:2::53 -p 9 -n 1000000000")
     }
+
+    @Test func theAdvertisedServerIsShownSavedAndLoaded() throws {
+        let rt = try lab()
+        try rt.handle(.setRdnss(node: "r", server: " 2001:db8:2::53 "))
+        runFor(rt, ms: 3000)
+        let s = rt.snapshot()
+        #expect(s.nodes[1].rdnss == "2001:db8:2::53" && s.nodes[0].learnedNameServer == "2001:db8:2::53" && s.nodes[0].nameServer == nil)
+        expectError("PC1 cannot advertise a DNS server") { try rt.handle(.setRdnss(node: "a", server: "2001:db8:2::53")) }
+        expectError("Invalid IPv6 address") { try rt.handle(.setRdnss(node: "r", server: "2001:db8::zz")) }
+        let t = Topology(nodes: [TopologyNode(id: "r", kind: .router, name: "R1", pos: Pos(x: 0, y: 0),
+                                              ifaces: (0...3).map { TopologyIface(name: "Gi0/\($0)", cidr: nil) }, routes: [],
+                                              ipv6Routing: true, rdnss: "2001:db8:2::53")])
+        let copy = try JSONDecoder().decode(Topology.self, from: try JSONEncoder().encode(t))
+        #expect(copy == t)
+        try rt.handle(.load(copy))
+        #expect(rt.snapshot().nodes[0].rdnss == "2001:db8:2::53")
+        try rt.handle(.setRdnss(node: "r", server: nil))
+        #expect(rt.snapshot().nodes[0].rdnss == nil)
+        let old = #"{"id":"r","kind":"router","name":"R1","pos":{"x":0,"y":0},"ifaces":[],"routes":[],"ipv6Routing":true}"#
+        #expect(try JSONDecoder().decode(TopologyNode.self, from: Data(old.utf8)).rdnss == nil) // an M9a file
+    }
 }

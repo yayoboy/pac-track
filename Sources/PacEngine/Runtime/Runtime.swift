@@ -260,6 +260,11 @@ public final class Runtime {
             let n = try ipNode(node)
             guard !on || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot route IPv6") }
             n.v6.setRouting(on)
+        case let .setRdnss(node, server):
+            let n = try ipNode(node)
+            guard server == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot advertise a DNS server") }
+            let text = server?.trimmingCharacters(in: .whitespaces) ?? ""
+            n.v6.rdnss = try text.isEmpty ? nil : parseIp6(text)
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -439,7 +444,7 @@ public final class Runtime {
                 } ?? [],
                 mac: (node as? Switch)?.macTable().map { MacRow(vlan: $0.vlan, mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
                 nameServer: ip?.nameServer.map(formatIp),
-                learnedNameServer: ip?.learnedNameServer.map(formatIp),
+                learnedNameServer: ip?.learnedNameServer.map(formatIp) ?? ip?.v6.dnsServer.map(formatIp6),
                 dhcpClient: host?.dhcp.map { c in
                     DhcpClientView(state: c.state.rawValue, server: c.server.map(formatIp),
                                    leaseS: c.hasLease ? secondsLeft(c.expiry - now) : nil,
@@ -482,7 +487,8 @@ public final class Runtime {
                 ipv6Routing: ip?.v6.routing ?? false,
                 neighbors6: ip?.v6.neighbors.view().map {
                     NeighborRow(addr: formatIp6($0.addr), mac: $0.mac ?? "-", state: $0.state.rawValue, iface: $0.iface)
-                } ?? []
+                } ?? [],
+                rdnss: ip?.v6.rdnss.map(formatIp6)
             )
         }
         let linkViews = linkOrder.map { id in
@@ -597,6 +603,7 @@ public final class Runtime {
             if let ospf = n.ospf { try next.handle(.setOspf(node: n.id, config: ospf)) }
             for i in n.ifaces { if let c = i.ipv6 { try next.handle(.setIpv6(node: n.id, iface: i.name, config: c)) } }
             if n.ipv6Routing { try next.handle(.setIpv6Routing(node: n.id, on: true)) }
+            if let server = n.rdnss { try next.handle(.setRdnss(node: n.id, server: server)) }
         }
         for n in t.nodes where !n.powered { try next.handle(.setPower(id: n.id, on: false)) }
         for app in apps { app.program.stop() }

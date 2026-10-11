@@ -32,7 +32,8 @@ class IpNode: Node {
     /// Discard service on TCP and UDP port 9: accepts connections and datagrams and drops the data.
     var sink: Bool { sinkStop != nil }
 
-    var effectiveNameServer: IpAddr? { (nameServer ?? learnedNameServer).map(IpAddr.v4) }
+    /// Typed by hand, else from DHCP, else from RDNSS (spec M9 §10).
+    var effectiveNameServer: IpAddr? { (nameServer ?? learnedNameServer).map(IpAddr.v4) ?? v6.dnsServer.map(IpAddr.v6) }
     private var ipId: UInt16 = 0
     private var udp: [UInt16: UdpHandler] = [:]
     /// The ports bound on both stacks also take IPv6 datagrams (spec M9 §10).

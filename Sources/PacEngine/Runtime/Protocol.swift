@@ -169,6 +169,8 @@ public enum Command: Sendable {
     case setIpv6(node: String, iface: String, config: Ipv6Config?)
     /// IOS `ipv6 unicast-routing` (routers only): forwarding and Router Advertisements (spec M9 §5).
     case setIpv6Routing(node: String, on: Bool)
+    /// Routers: IOS `ipv6 nd ra dns server`, the DNS server their RAs advertise (RDNSS, spec M9 §10); nil clears it.
+    case setRdnss(node: String, server: String?)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -216,6 +218,7 @@ public enum Command: Sendable {
         case .setOspf: "setOspf"
         case .setIpv6: "setIpv6"
         case .setIpv6Routing: "setIpv6Routing"
+        case .setRdnss: "setRdnss"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -392,7 +395,7 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let mac: [MacRow]
     /// Name server typed by hand.
     public let nameServer: String?
-    /// Name server learned from DHCP.
+    /// Name server learned from DHCP, else from an RA (RDNSS).
     public let learnedNameServer: String?
     /// Set while the host's interface is in DHCP mode.
     public let dhcpClient: DhcpClientView?
@@ -428,6 +431,8 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let ipv6Routing: Bool
     /// The IPv6 neighbour cache.
     public let neighbors6: [NeighborRow]
+    /// Routers: the DNS server their RAs advertise (RDNSS).
+    public let rdnss: String?
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -739,10 +744,12 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var ospf: OspfConfig?
     /// Routers: IOS `ipv6 unicast-routing` (spec M9 §9).
     public var ipv6Routing: Bool
+    /// Routers: the DNS server their RAs advertise (spec M9 §10).
+    public var rdnss: String?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
                 nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil,
-                ospf: OspfConfig? = nil, ipv6Routing: Bool = false) {
+                ospf: OspfConfig? = nil, ipv6Routing: Bool = false, rdnss: String? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -760,9 +767,10 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.rip = rip
         self.ospf = ospf
         self.ipv6Routing = ipv6Routing
+        self.rdnss = rdnss
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`, before M9a no `ipv6Routing`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`, before M9a no `ipv6Routing`, before M9b no `rdnss`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -782,6 +790,7 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         rip = try c.decodeIfPresent(RipConfig.self, forKey: .rip)
         ospf = try c.decodeIfPresent(OspfConfig.self, forKey: .ospf)
         ipv6Routing = try c.decodeIfPresent(Bool.self, forKey: .ipv6Routing) ?? false
+        rdnss = try c.decodeIfPresent(String.self, forKey: .rdnss)
     }
 }
 

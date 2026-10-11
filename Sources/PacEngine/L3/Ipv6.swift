@@ -77,6 +77,10 @@ final class Ipv6 {
     /// Hosts: the routers RAs announced, in order of arrival; the first one still valid is used.
     private(set) var defaults: [DefaultRouter] = []
     private(set) var statics: [Route6] = []
+    /// Routers: IOS `ipv6 nd ra dns server`, the DNS server every RA advertises (RDNSS, spec M9 §10).
+    var rdnss: UInt128?
+    /// Hosts: the DNS server the last RA advertised, until its lifetime ends (RFC 8106 §5.3.1).
+    private var learnedDns: (addr: UInt128, iface: Interface, expiresAt: Int)?
     private(set) lazy var neighbors = NeighborCache(stack: self)
     /// Ordered (not a dictionary): listener order must be deterministic.
     private var listeners: [(token: Int, listener: Icmp6Listener)] = []
@@ -96,6 +100,7 @@ final class Ipv6 {
             iface.v6 = nil
             neighbors.forget(iface)
             defaults.removeAll { $0.iface === iface }
+            if learnedDns?.iface === iface { learnedDns = nil }
             return
         }
         let manual = try config.address.map { try manualAddress($0, on: iface) }
@@ -142,6 +147,11 @@ final class Ipv6 {
     /// A usable global address on any interface: the resolver then asks for AAAA records too (spec M9 §10).
     var hasGlobal: Bool {
         node.interfaces.contains { $0.v6?.addrs.contains { $0.origin != .linkLocal && $0.state == .preferred } == true }
+    }
+
+    /// The DNS server learned from RAs while its lifetime lasts: the name server after the typed and the DHCP one (spec M9 §10).
+    var dnsServer: UInt128? {
+        learnedDns.flatMap { $0.expiresAt > now ? $0.addr : nil }
     }
 
     /// The NIC filter for `33:33` MACs: a group that `phys` or one of its subinterfaces has joined (spec M9 §2).
@@ -248,6 +258,10 @@ final class Ipv6 {
                 if ra.lifetime > 0 { defaults[k].expiresAt = expiresAt } else { defaults.remove(at: k) }
             } else if ra.lifetime > 0 {
                 defaults.append(DefaultRouter(addr: p.src, iface: iface, expiresAt: expiresAt))
+            }
+            if let dns = ra.dns {
+                // RDNSS (RFC 8106 §5.3.1): the server for its lifetime; lifetime 0 withdraws it.
+                learnedDns = ra.dnsLifetime > 0 ? (dns, iface, now + Int(ra.dnsLifetime) * S) : learnedDns?.addr == dns ? nil : learnedDns
             }
             // SLAAC (RFC 4862 §5.5.3): an autonomous /64 prefix + EUI-64; the lifetimes are not modelled (spec M9 §5).
             guard iface.v6!.config.autoconfig else { return }
@@ -431,7 +445,7 @@ final class Ipv6 {
         }
         let prefixes = iface.v6!.addrs.filter { $0.origin == .manual && $0.state != .duplicate }
             .map { PrefixInfo(prefix: networkOf6($0.addr, $0.prefix), length: $0.prefix) }
-        sendNdp(.ra(RouterAdvert(lifetime: lifetime, slla: iface.mac, prefixes: prefixes)), src: ll, dst: ALL_NODES, on: iface)
+        sendNdp(.ra(RouterAdvert(lifetime: lifetime, slla: iface.mac, prefixes: prefixes, dns: rdnss)), src: ll, dst: ALL_NODES, on: iface)
         iface.v6!.lastRa = now
         iface.v6!.raDue = lifetime == 0 ? nil : arm(now + RA_INTERVAL_NS)
     }
@@ -500,6 +514,7 @@ final class Ipv6 {
         }
         neighbors.reset()
         defaults = []
+        learnedDns = nil
         hopLimit = HOP_LIMIT6
     }
 

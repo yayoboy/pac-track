@@ -456,6 +456,7 @@ private func ndpLayer(_ n: NdpMessage) -> PduLayer {
         for p in ra.prefixes {
             fields.append(field("Opzione 3", "Prefisso \(formatIp6(p.prefix))/\(p.length), L=1 A=1, valid \(p.valid) s, preferred \(p.preferred) s"))
         }
+        if let dns = ra.dns { fields.append(field("Opzione 25", "RDNSS \(formatIp6(dns)), lifetime \(ra.dnsLifetime) s")) }
     case .ns(let target, let slla):
         fields += [field("Riservato", "0"), field("Target", formatIp6(target))]
         if let slla { fields.append(field("Opzione 1", "Source link-layer address \(slla)")) }
