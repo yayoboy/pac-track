@@ -120,7 +120,7 @@ private struct NodeInspector: View {
             if node.kind.isHost {
                 let key = "dns:\(node.id)"
                 CommitField(label: "Server DNS", value: node.nameServer ?? "",
-                            placeholder: node.learnedNameServer.map { "\($0) (da DHCP)" } ?? "10.0.0.53", errorKey: key, editor: editor) { text in
+                            placeholder: node.learnedNameServer.map { "\($0) (da \($0.contains(":") ? "RA" : "DHCP"))" } ?? "10.0.0.53", errorKey: key, editor: editor) { text in
                     let trimmed = text.trimmingCharacters(in: .whitespaces)
                     await editor.edit(.setNameServer(node: node.id, ip: trimmed.isEmpty ? nil : trimmed), key: key)
                 }
@@ -188,7 +188,7 @@ private struct NodeInspector: View {
                                  rows: node.ospfDatabase.map { ["\($0.type)", $0.linkId, $0.advRouter, "\($0.ageS)s", $0.seq] })
                 }
                 TableSection(title: "Cache ARP", head: ["IP", "MAC", "Int.", "TTL"], rows: node.arp.map { [$0.ip, $0.mac, $0.iface, "\($0.ttlS)s"] })
-                TableSection(title: "Connessioni TCP", head: ["Locale", "Remoto", "Stato"], rows: node.tcp.map { [$0.local, $0.remote, $0.state] })
+                TableSection(title: "Connessioni TCP", head: ["Locale\nRemoto", "Stato"], rows: node.tcp.map { ["\($0.local)\n\($0.remote)", $0.state] })
                 if node.nat != nil {
                     // Two lines per entry, so all five fields fit the 300 pt column; the scroll only catches the longest addresses.
                     ScrollView(.horizontal) {
@@ -358,6 +358,14 @@ private struct RoutingTab: View {
                     .help("Inoltra IPv6 e manda le Router Advertisement sulle interfacce IPv6")
                     .accessibilityIdentifier("ipv6-routing")
                     ErrorLine(editor: editor, key: key)
+                }
+                if node.ipv6Routing {
+                    let dnsKey = "rdnss:\(node.id)"
+                    CommitField(label: "Server DNS annunciato (RDNSS)", value: node.rdnss ?? "", placeholder: "2001:db8:2::53",
+                                errorKey: dnsKey, editor: editor) { text in
+                        let trimmed = text.trimmingCharacters(in: .whitespaces)
+                        await editor.edit(.setRdnss(node: node.id, server: trimmed.isEmpty ? nil : trimmed), key: dnsKey)
+                    }
                 }
             }
             CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1", errorKey: gwKey, editor: editor) { text in

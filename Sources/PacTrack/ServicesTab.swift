@@ -229,7 +229,7 @@ struct ServicesTab: View {
                 if config.rules.isEmpty { Text("nessuna").font(Theme.small).foregroundStyle(Theme.muted) }
                 ForEach(config.rules.indices, id: \.self) { i in
                     HStack {
-                        Text("\(i + 1). \(ruleSummary(config.rules[i]))").font(Theme.mono).lineLimit(1)
+                        Text("\(i + 1). \(ruleSummary(config.rules[i]))").font(Theme.mono).fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button { Task { await editor.removeFirewallRule(node.id, at: i) } } label: { Image(systemName: "xmark") }
                             .buttonStyle(.borderless)
@@ -268,8 +268,8 @@ struct ServicesTab: View {
                 }
                 ErrorLine(editor: editor, key: key)
                 Text(config.defaultAction == .deny
-                     ? "Passano solo le regole «consenti» e le risposte ai flussi consentiti, anche verso il router (DHCP, ping)."
-                     : "Indirizzi: any, un IP o un prefisso. Le risposte ai flussi consentiti passano sempre.")
+                     ? "Passano solo le regole «consenti» e le risposte ai flussi consentiti, anche verso il router (DHCP, ping). NS e NA IPv6 passano sempre."
+                     : "Indirizzi: any, un IP o un prefisso, IPv4 o IPv6. Le risposte ai flussi consentiti passano sempre.")
                     .font(Theme.small)
                     .foregroundStyle(Theme.muted)
             } else {
@@ -321,11 +321,11 @@ struct ServicesTab: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("dns-enabled")
             if let records = node.dnsRecords {
-                Text("RECORD A").font(.system(size: 9)).foregroundStyle(Theme.muted)
+                Text("RECORD A E AAAA").font(.system(size: 9)).foregroundStyle(Theme.muted)
                 if records.isEmpty { Text("nessuno").font(Theme.small).foregroundStyle(Theme.muted) }
                 ForEach(records.indices, id: \.self) { i in
                     HStack {
-                        Text("\(records[i].name)  \(records[i].ip)  TTL \(records[i].ttl)s").font(Theme.mono).lineLimit(1).minimumScaleFactor(0.75)
+                        Text("\(records[i].name)  \(records[i].ip.contains(":") ? "AAAA" : "A")  \(records[i].ip)  TTL \(records[i].ttl)s").font(Theme.mono).lineLimit(1).minimumScaleFactor(0.75)
                         Spacer()
                         Button { Task { await editor.removeDnsRecord(node.id, at: i) } } label: { Image(systemName: "xmark") }
                             .buttonStyle(.borderless)
@@ -334,7 +334,7 @@ struct ServicesTab: View {
                 }
                 HStack {
                     TextField("nome.lab", text: $name).textFieldStyle(.roundedBorder).font(Theme.mono)
-                    TextField("IP", text: $ip).textFieldStyle(.roundedBorder).font(Theme.mono)
+                    TextField("IPv4 o IPv6", text: $ip).textFieldStyle(.roundedBorder).font(Theme.mono)
                     TextField("TTL", text: $ttl).textFieldStyle(.roundedBorder).font(Theme.mono).frame(width: 50)
                     Button("+") {
                         Task {

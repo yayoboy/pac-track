@@ -88,6 +88,7 @@ enum SelfTest {
         failures += await ripScenario(output: output)
         failures += await ospfScenario(output: output)
         failures += await ipv6Scenario(output: output)
+        failures += await ipv6ServicesScenario(output: output)
         return failures
     }
 
@@ -609,6 +610,75 @@ enum SelfTest {
         editor.select(.node(id("R1")))
         editor.inspectorTab = .routing
         if !render(editor, to: sibling(output, "m9a-routing")) { failures.append("could not write the M9a routing image") }
+        return failures
+    }
+
+    /// M9b (spec M9 §1): SRV1 serves srv1.lab (AAAA and A) and the sink; R1 advertises it with RDNSS; PC1 learns it, pings the
+    /// name over IPv6 and sends TCP and UDP to it; then a rule on R1 denying 2001:db8:1::/64 stops the IPv6 ping, not the IPv4 one.
+    private static func ipv6ServicesScenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        await editor.addDevice(.router, at: Pos(x: 560, y: 160))
+        await editor.addDevice(.pc, at: Pos(x: 400, y: 380))
+        await editor.addDevice(.server, at: Pos(x: 720, y: 380))
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        await editor.connect(id("R1"), id("PC1")) // R1 Gi0/0
+        await editor.connect(id("R1"), id("SRV1")) // R1 Gi0/1
+        for (name, iface, v4, v6) in [("R1", "Gi0/0", "10.0.1.1/24", "2001:db8:1::1/64"), ("R1", "Gi0/1", "10.0.2.1/24", "2001:db8:2::1/64"),
+                                      ("SRV1", "eth0", "10.0.2.53/24", "2001:db8:2::53/64")] {
+            await editor.edit(.setIp(node: id(name), iface: iface, cidr: v4))
+            await editor.edit(.setIpv6(node: id(name), iface: iface, config: Ipv6Config(address: v6)))
+        }
+        await editor.edit(.setIp(node: id("PC1"), iface: "eth0", cidr: "10.0.1.10/24"))
+        await editor.edit(.addRoute(node: id("PC1"), cidr: "0.0.0.0/0", nextHop: "10.0.1.1"))
+        await editor.edit(.addRoute(node: id("SRV1"), cidr: "0.0.0.0/0", nextHop: "10.0.2.1"))
+        await editor.edit(.setIpv6(node: id("PC1"), iface: "eth0", config: Ipv6Config(autoconfig: true)))
+        await editor.edit(.setIpv6Routing(node: id("R1"), on: true))
+        await editor.edit(.setRdnss(node: id("R1"), server: "2001:db8:2::53"))
+        await editor.enableDns(id("SRV1"), true)
+        await editor.addDnsRecord(id("SRV1"), name: "srv1.lab", ip: "2001:db8:2::53", ttl: "")
+        await editor.addDnsRecord(id("SRV1"), name: "srv1.lab", ip: "10.0.2.53", ttl: "")
+        await editor.edit(.setSink(node: id("SRV1"), on: true))
+        for _ in 0..<30 { await editor.tick(wallMs: 100) }
+        let pc1 = { editor.snapshot.nodes.first { $0.name == "PC1" } }
+        if pc1()?.learnedNameServer != "2001:db8:2::53" { failures.append("PC1 learned \(String(describing: pc1()?.learnedNameServer))") }
+        await editor.run(.ping(node: id("PC1"), target: "srv1.lab"))
+        // One second apart: R1 queues at most 3 packets while it resolves SRV1's address (spec M9 §4).
+        for _ in 0..<10 { await editor.tick(wallMs: 100) }
+        if let reply = editor.events.first(where: { $0.proto == .dns && $0.info.hasPrefix("DNS Risposta") && $0.info.contains("AAAA") }) {
+            await editor.selectEvent(reply.id)
+            if editor.pdu?.map(\.title) != ["Ethernet II", "IPv6", "UDP", "DNS"] { failures.append("AAAA PDU \(String(describing: editor.pdu?.map(\.title)))") }
+        } else {
+            failures.append("no AAAA answer in the event list")
+        }
+        await editor.startTraffic(id("PC1"), target: "srv1.lab", kind: .tcp, amount: "1000000", seconds: "")
+        await editor.startTraffic(id("PC1"), target: "srv1.lab", kind: .udp, amount: "1", seconds: "1")
+        for _ in 0..<50 { await editor.tick(wallMs: 100) }
+        let apps = editor.snapshot.apps
+        if !(apps.first?.lines.contains("4 packets transmitted, 4 received, 0% packet loss") ?? false)
+            || apps.first?.lines.first != "PING srv1.lab(2001:db8:2::53) 56 data bytes" { failures.append("ping by name over IPv6 \(apps.first?.lines ?? [])") }
+        if apps.count != 3 || apps[1].lines.last != "iperf Done." || apps[2].lines.last != "iperf Done." { failures.append("IPv6 traffic \(apps.map(\.lines))") }
+        if !(pc1()?.tcp.contains { $0.remote == "[2001:db8:2::53]:9" } ?? false) { failures.append("PC1 TCP rows \(pc1()?.tcp ?? [])") }
+        await editor.edit(.setFirewall(node: id("R1"), config: FirewallConfig()))
+        await editor.addFirewallRule(id("R1"), FirewallRule(iface: "Gi0/0", direction: .inbound, action: .deny, proto: .any, src: "2001:db8:1::/64", dst: ""), port: "")
+        await editor.run(.ping(node: id("PC1"), target: "2001:db8:2::53"))
+        await editor.run(.ping(node: id("PC1"), target: "10.0.2.53"))
+        for _ in 0..<150 { await editor.tick(wallMs: 100) }
+        let pings = editor.snapshot.apps.suffix(2).map(\.lines)
+        if pings.count != 2 || !pings[0].contains("4 packets transmitted, 0 received, 100% packet loss")
+            || !pings[1].contains("4 packets transmitted, 4 received, 0% packet loss") { failures.append("firewall IPv6 \(pings)") }
+        editor.select(.node(id("SRV1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m9b-dns")) { failures.append("could not write the M9b DNS image") }
+        editor.select(.node(id("R1")))
+        if !render(editor, to: sibling(output, "m9b-firewall")) { failures.append("could not write the M9b firewall image") }
+        editor.inspectorTab = .routing
+        if !render(editor, to: sibling(output, "m9b-routing")) { failures.append("could not write the M9b routing image") }
+        editor.select(.node(id("PC1")))
+        editor.inspectorTab = .tables
+        if !render(editor, to: sibling(output, "m9b-tables")) { failures.append("could not write the M9b tables image") }
+        editor.inspectorTab = .interfaces
+        if !render(editor, to: sibling(output, "m9b-pc")) { failures.append("could not write the M9b host image") }
         return failures
     }
 
