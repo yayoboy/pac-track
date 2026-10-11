@@ -280,4 +280,17 @@ private func queries(_ sim: Sim, from node: String) -> [UInt16] {
         }
         #expect(dropped.contains(ND_RS) && !dropped.contains(ND_NS) && !dropped.contains(ND_NA))
     }
+
+    /// Final review: a global IPv6 address but no IPv6 route made names resolve to their AAAA and fail, while IPv4 worked.
+    @Test func anAaaaWithoutARouteGoesAfterTheA() throws {
+        let (sim, pc, srv, _) = try routedPair()
+        try pc.v6.configure("eth0", Ipv6Config(address: "2001:db8:1::10/64")) // R1 has no IPv6: no route to 2001:db8:2::/64
+        try srv.configureDnsServer(records)
+        pc.nameServer = try parseIp("10.0.2.10")
+        sim.run(2 * S)
+        let ping = try Ping(node: pc, target: "srv1.lab", options: PingOptions(count: 1))
+        sim.run(2 * S)
+        #expect(ping.result.lines.first == "PING srv1.lab (10.0.2.10) 56(84) bytes of data." && ping.result.received == 1)
+        #expect(queries(sim, from: "H1") == [DNS_TYPE_A, DNS_TYPE_AAAA]) // both still asked: the device has a global address
+    }
 }

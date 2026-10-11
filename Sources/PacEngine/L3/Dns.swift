@@ -178,7 +178,11 @@ final class Resolver {
         for type in types {
             let collect = { (r: Resolution) in
                 answers[type] = r
-                if answers.count == types.count { done(merged(types.reversed().compactMap { answers[$0] })) }
+                guard answers.count == types.count else { return }
+                // RFC 6724 rule 1: an address this device has no route to goes last, so without IPv6 routes the A is used.
+                let r = merged(types.reversed().compactMap { answers[$0] })
+                guard case .found(let addrs) = r else { return done(r) }
+                done(.found(addrs.filter { self.node.source(for: $0) != nil } + addrs.filter { self.node.source(for: $0) == nil }))
             }
             if let hit = cache.first(where: { $0.name == name && $0.type == type }) {
                 collect(.found(hit.addrs))
