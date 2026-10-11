@@ -2,9 +2,9 @@ import Testing
 @testable import PacEngine
 
 /// PC (H1, SLAAC) — R1 (Gi0/0 2001:db8:1::1/64 | Gi0/1 2001:db8:2::1/64, `ipv6 unicast-routing`) — SRV (H2, 2001:db8:2::53/64), dual
-/// stack from `routedPair` (10.0.1.10 and 10.0.2.10), run to t = 3 s; R1 advertises `rdnss` if given. MACs: H1 …:01, H2 …:02, R1 Gi0/0
-/// …:03, Gi0/1 …:04.
-private func lab(rdnss: String? = nil) throws -> (sim: Sim, pc: Host, srv: Host, r1: Router) {
+/// stack from `routedPair` (10.0.1.10 and 10.0.2.10), run to t = 3 s; R1 advertises `rdnss` and runs `firewall` from t = 0 if given.
+/// MACs: H1 …:01, H2 …:02, R1 Gi0/0 …:03, Gi0/1 …:04.
+private func lab(rdnss: String? = nil, firewall: FirewallConfig? = nil) throws -> (sim: Sim, pc: Host, srv: Host, r1: Router) {
     let (sim, pc, srv, r1) = try routedPair()
     try r1.v6.configure("Gi0/0", Ipv6Config(address: "2001:db8:1::1/64"))
     try r1.v6.configure("Gi0/1", Ipv6Config(address: "2001:db8:2::1/64"))
@@ -12,6 +12,7 @@ private func lab(rdnss: String? = nil) throws -> (sim: Sim, pc: Host, srv: Host,
     if let rdnss { r1.v6.rdnss = try parseIp6(rdnss) }
     try pc.v6.configure("eth0", Ipv6Config(autoconfig: true))
     try srv.v6.configure("eth0", Ipv6Config(address: "2001:db8:2::53/64"))
+    if let firewall { r1.firewall = try Firewall(node: r1, config: firewall) }
     sim.run(3 * S)
     return (sim, pc, srv, r1)
 }
@@ -235,5 +236,48 @@ private func queries(_ sim: Sim, from node: String) -> [UInt16] {
         #expect(pc.v6.dnsServer == SRV)
         pc.v6.input(ra(0), on: try pc.iface("eth0"))
         #expect(pc.v6.dnsServer == nil)
+    }
+
+    @Test func anIpv6RuleStopsOnlyIpv6AndAnIcmpRuleCoversIcmpv6() throws {
+        let deny6 = FirewallRule(iface: "Gi0/0", direction: .inbound, action: .deny, proto: .any, src: "2001:db8:1::/64", dst: "any")
+        let (sim, pc, srv, r1) = try lab(firewall: FirewallConfig(rules: [deny6]))
+        try srv.configureSink(true)
+        let ping6 = try Ping(node: pc, target: "2001:db8:2::53", options: PingOptions(count: 1, timeoutNs: 2 * S))
+        let ping4 = try Ping(node: pc, target: "10.0.2.10", options: PingOptions(count: 1))
+        sim.run(3 * S)
+        #expect(ping6.result.received == 0 && ping4.result.received == 1 && drops(sim, .firewallRule) == 1) // the spec's M9b success
+        let denyIcmp = FirewallRule(iface: "Gi0/0", direction: .inbound, action: .deny, proto: .icmp, src: "any", dst: "any")
+        r1.firewall = try Firewall(node: r1, config: FirewallConfig(rules: [denyIcmp]))
+        let echo = try Ping(node: pc, target: "2001:db8:2::53", options: PingOptions(count: 1, timeoutNs: 2 * S))
+        let flow = try TcpFlow(node: pc, target: "2001:db8:2::53", bytes: 1000)
+        sim.run(3 * S)
+        #expect(echo.result.received == 0 && flow.result.lines.last == "iperf Done.")
+        let mixed = FirewallRule(iface: "Gi0/0", direction: .inbound, action: .deny, proto: .any, src: "10.0.1.0/24", dst: "2001:db8:2::/64")
+        expectError("A rule cannot mix IPv4 and IPv6 addresses") { _ = try Firewall(node: r1, config: FirewallConfig(rules: [mixed])) }
+        let bad = FirewallRule(iface: "Gi0/0", direction: .inbound, action: .deny, proto: .any, src: "2001:db8::zz", dst: "any")
+        expectError("Invalid IPv6 address") { _ = try Firewall(node: r1, config: FirewallConfig(rules: [bad])) }
+    }
+
+    @Test func ipv6FlowsAreTrackedAndNeighbourDiscoveryIsNeverFiltered() throws {
+        let allow = { (proto: FirewallProto) in FirewallRule(iface: "Gi0/0", direction: .inbound, action: .allow, proto: proto, src: "any", dst: "any") }
+        // Deny by default from t = 0: R1 learns no neighbour from the hosts' RSs, which it drops.
+        let (sim, pc, srv, r1) = try lab(firewall: FirewallConfig(rules: [allow(.icmp), allow(.tcp), allow(.udp)], defaultAction: .deny))
+        try srv.configureSink(true)
+        var unreachable: [UInt8] = []
+        pc.v6.onIcmp { _, m in if m.type == ICMP6_DEST_UNREACH { unreachable.append(m.code) } }
+        let out = try Ping(node: pc, target: "2001:db8:2::53", options: PingOptions(count: 1))
+        let flow = try TcpFlow(node: pc, target: "2001:db8:2::53", bytes: 10_000)
+        let back = try Ping(node: srv, target: PC, options: PingOptions(count: 1, timeoutNs: 2 * S))
+        let own = try Ping(node: r1, target: PC, options: PingOptions(count: 1)) // NS out, NA back in through the deny policy
+        pc.v6.send(SRV, .udp(makeUdp(srcPort: 40000, dstPort: 5001, data: [1]))) // its Port Unreachable is related
+        sim.run(3 * S)
+        #expect(out.result.received == 1 && flow.result.lines.last == "iperf Done." && own.result.received == 1)
+        #expect(back.result.received == 0)
+        #expect(unreachable == [UNREACH6_PORT])
+        let dropped = sim.log.all.filter { $0.reason == .firewallDefault }.compactMap { e -> UInt8? in
+            guard case .ndp(let n)? = e.packet6?.payload else { return nil }
+            return n.type
+        }
+        #expect(dropped.contains(ND_RS) && !dropped.contains(ND_NS) && !dropped.contains(ND_NA))
     }
 }

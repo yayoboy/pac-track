@@ -457,19 +457,20 @@ private func word16(_ b: [UInt8], _ i: Int) -> UInt16 { UInt16(b[i]) << 8 | UInt
 private func word32(_ b: [UInt8], _ i: Int) -> UInt32 { UInt32(word16(b, i)) << 16 | UInt32(word16(b, i + 2)) }
 
 /// A packet's flow as NAT and the firewall see it. ICMP echo uses its identifier as the requester's port (a request is
-/// `id → 0`, its reply `0 → id`), so a reply is always the mirror image of its request.
-struct Endpoints: Equatable {
+/// `id → 0`, its reply `0 → id`), so a reply is always the mirror image of its request. IPv4 for NAT and the firewall, IPv6 for the
+/// firewall (spec M9 §10).
+struct Endpoints<Addr: Equatable>: Equatable {
     var proto: UInt8
-    var src: UInt32
+    var src: Addr
     var srcPort: UInt16
-    var dst: UInt32
+    var dst: Addr
     var dstPort: UInt16
 
     var reversed: Endpoints { Endpoints(proto: proto, src: dst, srcPort: dstPort, dst: src, dstPort: srcPort) }
 }
 
 /// nil for ICMP other than echo: an error belongs to the flow it quotes (`quotedEndpoints`).
-func endpoints(_ p: Ipv4Packet) -> Endpoints? {
+func endpoints(_ p: Ipv4Packet) -> Endpoints<UInt32>? {
     switch p.payload {
     case .tcp(let t): return Endpoints(proto: IPPROTO_TCP, src: p.src, srcPort: t.srcPort, dst: p.dst, dstPort: t.dstPort)
     case .udp(let u): return Endpoints(proto: IPPROTO_UDP, src: p.src, srcPort: u.srcPort, dst: p.dst, dstPort: u.dstPort)
@@ -483,7 +484,7 @@ func endpoints(_ p: Ipv4Packet) -> Endpoints? {
 }
 
 /// The flow an ICMP error is about, read from the IPv4 header and first 8 bytes it quotes (RFC 792), as its sender sent it.
-func quotedEndpoints(_ m: IcmpMessage) -> Endpoints? {
+func quotedEndpoints(_ m: IcmpMessage) -> Endpoints<UInt32>? {
     let q = m.data
     guard m.type == ICMP_DEST_UNREACH || m.type == ICMP_TIME_EXCEEDED, q.count >= 28 else { return nil }
     let (src, dst) = (word32(q, 12), word32(q, 16))

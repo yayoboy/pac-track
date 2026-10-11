@@ -303,3 +303,30 @@ func makeIpv6(src: UInt128, dst: UInt128, hopLimit: UInt8, payload: Ipv6Payload)
     }
     return Ipv6Packet(hopLimit: hopLimit, src: src, dst: dst, payload: sealed)
 }
+
+/// A packet's flow as the firewall sees it (spec M9 §10), like `endpoints` for IPv4: ICMPv6 echo uses its identifier as the
+/// requester's port; errors and NDP have none.
+func endpoints(_ p: Ipv6Packet) -> Endpoints<UInt128>? {
+    switch p.payload {
+    case .tcp(let t): Endpoints(proto: IPPROTO_TCP, src: p.src, srcPort: t.srcPort, dst: p.dst, dstPort: t.dstPort)
+    case .udp(let u): Endpoints(proto: IPPROTO_UDP, src: p.src, srcPort: u.srcPort, dst: p.dst, dstPort: u.dstPort)
+    case .icmp(let m) where m.type == ICMP6_ECHO_REQUEST: Endpoints(proto: IPPROTO_ICMPV6, src: p.src, srcPort: m.id, dst: p.dst, dstPort: 0)
+    case .icmp(let m) where m.type == ICMP6_ECHO_REPLY: Endpoints(proto: IPPROTO_ICMPV6, src: p.src, srcPort: 0, dst: p.dst, dstPort: m.id)
+    case .icmp, .ndp: nil
+    }
+}
+
+/// The flow an ICMPv6 error is about, read from the IPv6 header and the first 8 bytes it quotes (RFC 4443 §2.4 c), as its sender
+/// sent it.
+func quotedEndpoints6(_ m: IcmpMessage) -> Endpoints<UInt128>? {
+    let q = m.data
+    guard m.type < 128, q.count >= 48 else { return nil }
+    let addr = { (at: Int) in q[at..<at + 16].reduce(UInt128(0)) { $0 << 8 | UInt128($1) } }
+    let port = { (at: Int) in UInt16(q[at]) << 8 | UInt16(q[at + 1]) }
+    switch q[6] {
+    case IPPROTO_TCP, IPPROTO_UDP: return Endpoints(proto: q[6], src: addr(8), srcPort: port(40), dst: addr(24), dstPort: port(42))
+    case IPPROTO_ICMPV6 where q[40] == ICMP6_ECHO_REQUEST:
+        return Endpoints(proto: IPPROTO_ICMPV6, src: addr(8), srcPort: port(44), dst: addr(24), dstPort: 0)
+    default: return nil
+    }
+}

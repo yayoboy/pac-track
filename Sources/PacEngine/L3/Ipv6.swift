@@ -170,10 +170,13 @@ final class Ipv6 {
     func input(_ p: Ipv6Packet, on iface: Interface) {
         guard iface.v6 != nil else { return } // IPv6 off: like an unknown EtherType
         if isMulticast6(p.dst) {
-            if groups(iface).contains(p.dst) { deliver(p, on: iface) }
+            if groups(iface).contains(p.dst) && admits(p, from: iface, to: nil) { deliver(p, on: iface) }
             return
         }
-        if owns(p.dst) { return deliver(p, on: iface) }
+        if owns(p.dst) {
+            if admits(p, from: iface, to: nil) { deliver(p, on: iface) }
+            return
+        }
         guard routing, !isLinkLocal6(p.src), !isLinkLocal6(p.dst),
               !node.interfaces.contains(where: { $0.v6?.addrs.contains { $0.addr == p.dst } == true }) else { return }
         if p.hopLimit <= 1 {
@@ -186,7 +189,13 @@ final class Ipv6 {
         }
         var next = p
         next.hopLimit -= 1
+        guard admits(next, from: iface, to: hop.iface) else { return }
         output(next, via: hop)
+    }
+
+    /// The router's firewall (spec M9 §10), as `IpNode` asks it for IPv4.
+    private func admits(_ p: Ipv6Packet, from inIface: Interface, to outIface: Interface?) -> Bool {
+        node.firewall?.admits(p, from: inIface, to: outIface) ?? true
     }
 
     /// A packet for this device; `iface` is nil when it sent the packet to itself.
@@ -309,7 +318,9 @@ final class Ipv6 {
         }
         guard let hop = isLinkLocal6(dst) ? via.map({ NextHop6(iface: $0, nextHop: dst) }) : lookup(dst),
               let from = src ?? source(for: dst, out: hop.iface) else { return false }
-        output(makeIpv6(src: from, dst: dst, hopLimit: hopLimit ?? self.hopLimit, payload: payload), via: hop)
+        let p = makeIpv6(src: from, dst: dst, hopLimit: hopLimit ?? self.hopLimit, payload: payload)
+        node.firewall?.track(p) // never filtered, but its flow recorded so the replies get back
+        output(p, via: hop)
         return true
     }
 

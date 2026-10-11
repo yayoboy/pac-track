@@ -123,7 +123,7 @@ final class Nat {
 
     /// RFC 4787 REQ-1: a mapped inside endpoint keeps its global port for every remote; a new one keeps its own port if free
     /// (IOS, Linux), else takes the next free one above it, wrapping to 1024.
-    private func add(_ e: Endpoints, global: UInt32) -> Int {
+    private func add(_ e: Endpoints<UInt32>, global: UInt32) -> Int {
         let same = { (n: NatEntry) in n.proto == e.proto && n.global == global }
         let mapped = entries.first { same($0) && $0.local == e.src && $0.localPort == e.srcPort }?.globalPort
         var port = mapped ?? e.srcPort

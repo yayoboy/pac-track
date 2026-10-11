@@ -375,7 +375,9 @@ private func sent(_ sim: Sim, by node: String) -> [(time: Int, p: Ipv6Packet, ds
 
     @Test func natAndTheFirewallLeaveIpv6Alone() throws {
         let (sim, h1, _, r1) = try routed()
-        r1.firewall = try Firewall(node: r1, config: FirewallConfig(defaultAction: .deny))
+        // M9b: the policy covers IPv6 too (spec M9 §10), so IPv6 needs its own rule; NAT still leaves it alone.
+        let allow6 = FirewallRule(iface: "Gi0/0", direction: .inbound, action: .allow, proto: .any, src: "2001:db8:1::/64", dst: "any")
+        r1.firewall = try Firewall(node: r1, config: FirewallConfig(rules: [allow6], defaultAction: .deny))
         r1.nat = try Nat(node: r1, config: NatConfig(inside: ["Gi0/0"], outside: "Gi0/1"))
         let ping6 = try Ping(node: h1, target: H2, options: PingOptions(count: 1))
         let ping4 = try Ping(node: h1, target: "10.0.2.10", options: PingOptions(count: 1, timeoutNs: 2 * S))
