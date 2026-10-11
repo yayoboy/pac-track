@@ -16,7 +16,7 @@ final class Host: IpNode {
         if wifi { nic.radio = StationRadio(iface: nic) }
     }
 
-    /// Switches eth0 between a static address and DHCP. Entering DHCP drops the static address; leaving releases the lease.
+    /// Switches the card between a static address and DHCP. Entering DHCP drops the static address; leaving releases the lease.
     func setDhcp(_ on: Bool) throws {
         guard on != (dhcp != nil) else { return }
         guard on else {
@@ -24,11 +24,11 @@ final class Host: IpNode {
             dhcp = nil
             return
         }
-        let eth0 = try iface("eth0")
-        eth0.ipv4 = nil
-        let client = try DhcpClient(node: self, iface: eth0)
+        nic.ipv4 = nil
+        let client = try DhcpClient(node: self, iface: nic)
         dhcp = client
-        if powered { client.start() }
+        // A Wi-Fi card asks once associated (spec M11 §5).
+        if nic.radio == nil ? powered : nic.lineUp { client.start() }
     }
 
     override func reset() {
@@ -39,7 +39,15 @@ final class Host: IpNode {
 
     override func powerOn() {
         super.powerOn()
-        dhcp?.start()
+        if nic.radio == nil { dhcp?.start() } // on Wi-Fi at association (spec M11 §5)
         station?.restart()
+    }
+
+    /// A Wi-Fi card's DHCP client runs while it is associated (spec M11 §5), like NetworkManager's: it starts at association and stops,
+    /// address and all, when the association ends. On a cable it keeps M3's behaviour.
+    override func linkChanged(_ iface: Interface) {
+        super.linkChanged(iface)
+        guard iface.radio != nil, let dhcp else { return }
+        if iface.lineUp { dhcp.start() } else { dhcp.stop(release: false) }
     }
 }

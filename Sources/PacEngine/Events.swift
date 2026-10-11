@@ -28,6 +28,8 @@ enum DropReason: String, Sendable {
     case ndTimeout = "nd-timeout"
     /// Packets already waiting for an IPv6 neighbour's address (at most 3, like ARP).
     case ndPendingFull = "nd-pending-full"
+    /// A Wi-Fi client sent data before it was associated, or an access point got data from a station it does not know (spec M11 §5).
+    case notAssociated = "not-associated"
 }
 
 struct SimEvent: Sendable {

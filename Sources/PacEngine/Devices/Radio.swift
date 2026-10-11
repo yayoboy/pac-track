@@ -83,6 +83,14 @@ class Radio {
     /// What `Interface.lineUp` reports: a station associated, an access point with stations.
     var lineUp: Bool { false }
 
+    /// The interfaces its frames reach over the air (what `Interface.segmentPeers` crosses).
+    var peers: [Interface] { [] }
+
+    /// A data frame of its node.
+    func send(_ frame: EthernetFrame) {
+        fatalError("\(type(of: self)) must override send(_:)")
+    }
+
     func receive(_ f: EthernetFrame, from sender: Radio) {
         fatalError("\(type(of: self)) must override receive(_:from:)")
     }
@@ -128,6 +136,15 @@ final class StationRadio: Radio {
 
     override var bssid: Mac? { ap?.iface.mac }
     override var lineUp: Bool { state == .associated }
+    override var peers: [Interface] { state == .associated ? ap.map { [$0.iface] } ?? [] : [] }
+
+    /// To its access point (To DS), once associated (spec M11 §3, §5).
+    override func send(_ frame: EthernetFrame) {
+        guard state == .associated, let bssid else {
+            return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: frame, reason: .notAssociated)
+        }
+        transmit(frame, Dot11Header(toDS: true, bssid: bssid))
+    }
 
     /// A new network (spec M11 §5): leaving an access point says so with a Deauthentication (reason 3), then the scan starts over.
     func configure(_ c: StationConfig) throws {
@@ -242,6 +259,16 @@ final class ApRadio: Radio {
 
     override var bssid: Mac? { iface.mac }
     override var lineUp: Bool { !clients.isEmpty }
+    override var peers: [Interface] { clients.map(\.station.iface) }
+
+    /// A frame of the bridge for the stations (From DS).
+    override func send(_ frame: EthernetFrame) {
+        transmit(frame, Dot11Header(fromDS: true, bssid: iface.mac))
+    }
+
+    func associated(_ mac: Mac) -> Bool {
+        clients.contains { $0.station.iface.mac == mac }
+    }
 
     /// A new SSID or channel (spec M11 §5): a group Deauthentication (reason 3) on the old channel; the stations scan again when they
     /// hear it.
@@ -267,7 +294,13 @@ final class ApRadio: Radio {
     }
 
     override func receive(_ f: EthernetFrame, from sender: Radio) {
-        guard case .mgmt(let m) = f.payload else { return iface.node.receive(f, on: iface) }
+        guard case .mgmt(let m) = f.payload else {
+            // Data only from the stations it associated (spec M11 §5).
+            guard clients.contains(where: { $0.station === sender }) else {
+                return sim.emit(.drop, node: iface.node.id, iface: iface.name, frame: f, reason: .notAssociated)
+            }
+            return iface.node.receive(f, on: iface)
+        }
         guard let station = sender as? StationRadio else { return }
         switch m {
         case .probeRequest(let ssid) where ssid == config.ssid:

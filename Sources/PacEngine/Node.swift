@@ -33,18 +33,27 @@ final class Interface {
             tagged.vlan = dot1q.vlan
             return dot1q.parent.send(tagged)
         }
-        let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil ? .noLink : nil
+        let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil && radio == nil ? .noLink : nil
         if let reason {
             node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: reason)
             return
         }
+        // Over the air through the radio (spec M11 §4).
+        if let radio { return radio.send(frame) }
         link!.transmit(from: self, frame)
     }
 }
 
 extension Interface {
-    /// IP interfaces in this interface's broadcast domain: across cables, hubs and switches within one VLAN (access ports, a trunk's
-    /// allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
+    /// Where a frame sent here arrives first: the other end of its cable, or over the air (spec M11 §6) a station's access point and
+    /// an access point's associated stations.
+    func reach() -> [Interface] {
+        if let radio { return radio.peers }
+        return link.map { [$0.peer(self)] } ?? []
+    }
+
+    /// IP interfaces in this interface's broadcast domain: across cables, hubs, switches and the air within one VLAN (access ports, a
+    /// trunk's allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
     func segmentPeers() -> [Interface] {
         /// An interface reached by a frame carrying `tag` on the wire.
         struct Hop: Hashable {
@@ -57,18 +66,21 @@ extension Interface {
         var todo = [start]
         var peers: [Interface] = []
         while let hop = todo.popLast() {
-            guard let peer = hop.iface.link?.peer(hop.iface), seen.insert(Hop(iface: ObjectIdentifier(peer), tag: hop.tag)).inserted else { continue }
-            if peer.node is IpNode {
-                // Untagged: the physical interface; tagged: its subinterface for that VLAN, if any.
-                let ip = peer.node.interfaces.first { hop.tag == nil ? $0 === peer : $0.dot1q?.parent === peer && $0.dot1q?.vlan == hop.tag }
-                if let ip { peers.append(ip) }
-            } else if peer.node is Switch {
-                guard let vlan = peer.switchport.ingress(hop.tag) else { continue }
-                for next in peer.node.interfaces where next !== peer && next.switchport.carries(vlan) {
-                    todo.append((next, next.switchport.tag(vlan)))
+            for peer in hop.iface.reach() where seen.insert(Hop(iface: ObjectIdentifier(peer), tag: hop.tag)).inserted {
+                if peer.node is IpNode {
+                    // Untagged: the physical interface; tagged: its subinterface for that VLAN, if any.
+                    let ip = peer.node.interfaces.first { hop.tag == nil ? $0 === peer : $0.dot1q?.parent === peer && $0.dot1q?.vlan == hop.tag }
+                    if let ip { peers.append(ip) }
+                } else if peer.node is Switch {
+                    guard let vlan = peer.switchport.ingress(hop.tag) else { continue }
+                    for next in peer.node.interfaces where next !== peer && next.switchport.carries(vlan) {
+                        todo.append((next, next.switchport.tag(vlan)))
+                    }
+                } else {
+                    // An access point bridges untagged frames only, and its radio reaches every associated station (spec M11 §6).
+                    if peer.node is AccessPoint && hop.tag != nil { continue }
+                    for next in peer.node.interfaces where next !== peer || next.radio != nil { todo.append((next, hop.tag)) }
                 }
-            } else {
-                for next in peer.node.interfaces where next !== peer { todo.append((next, hop.tag)) }
             }
         }
         return peers
