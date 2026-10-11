@@ -81,6 +81,38 @@ final class DnsServer {
     }
 }
 
+/// A home router's name server on its LAN address (spec M11 §8), dnsmasq-like: it answers each query by asking the name server it
+/// learned on its Internet port, through its own resolver; not authoritative. SERVFAIL while it has none or the provider is silent.
+// ponytail: no cache of its own and no TTL passed on (answers say 0 s); the client's resolver caches
+final class DnsForwarder {
+    unowned let node: IpNode
+    private var unbind: () -> Void = {}
+
+    init(node: IpNode) throws {
+        self.node = node
+        unbind = try node.bindDualUdp(PORT_DNS) { [weak self] client, server, u in
+            if case .dns(let m) = u.payload { self?.forward(m, to: client, from: server, port: u.srcPort) }
+        }
+    }
+
+    private func forward(_ q: DnsMessage, to client: IpAddr, from server: IpAddr, port: UInt16) {
+        guard !q.response else { return }
+        let reply = { [weak self] (rcode: UInt8, addrs: [IpAddr]) in
+            let m = DnsMessage(id: q.id, response: true, recursionDesired: q.recursionDesired, rcode: rcode, name: q.name,
+                               answers: addrs.map { DnsAnswer(ttl: 0, addr: rdata($0)) }, type: q.type)
+            self?.node.sendUdp(client, srcPort: PORT_DNS, dstPort: port, payload: .dns(m), src: server)
+        }
+        guard let upstream = node.effectiveNameServer else { return reply(DNS_SERVFAIL, []) }
+        node.resolver.lookup(q.name, server: upstream, type: q.type, useCache: false) { r in
+            switch r {
+            case .found(let addrs): reply(0, addrs)
+            case .nxdomain: reply(DNS_NXDOMAIN, [])
+            case .failed: reply(DNS_SERVFAIL, [])
+            }
+        }
+    }
+}
+
 extension IpNode {
     /// Turns the DNS server on with these A and AAAA records (replacing the previous ones) or off with nil.
     func configureDnsServer(_ records: [DnsRecord]?) throws {
@@ -225,7 +257,7 @@ final class Resolver {
 
     private func answer(_ q: DnsQuery, _ m: DnsMessage) {
         guard !q.finished, m.response, m.id == q.id, m.name == q.name, m.type == q.type else { return }
-        guard m.rcode == 0 else { return finish(q, .nxdomain) }
+        guard m.rcode == 0 else { return finish(q, m.rcode == DNS_NXDOMAIN ? .nxdomain : .failed) }
         let addrs = m.answers.map(m.address)
         if q.useCache, !addrs.isEmpty, let ttl = m.answers.map(\.ttl).min(), ttl > 0 {
             cache.removeAll { $0.name == q.name && $0.type == q.type }

@@ -109,16 +109,17 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(drops(sim, .noLink) == 0)
     }
 
-    /// Spec M11 §8: the Internet port takes its address and default route from the provider's DHCP; the LAN gets its addresses from
-    /// HR1 with the provider's DNS passed on, and reaches the Internet through NAT.
+    /// Spec M11 §8: the Internet port takes its address, default route and name server from the provider's DHCP; the LAN gets its
+    /// addresses from HR1, with HR1 as name server forwarding to the provider's, and reaches the Internet through NAT.
     @Test func theInternetPortTakesItsAddressFromTheIspAndNatsTheLan() throws {
         let sim = Sim()
         let isp = Cloud(sim: sim, id: "ISP1")
         try isp.setIp("Gi0/0", "203.0.113.1/24")
         try isp.configureDhcpServer(DhcpConfig(start: "203.0.113.100", end: "203.0.113.199", gateway: "203.0.113.1", dns: "203.0.113.1"))
+        try isp.configureDnsServer([DnsRecord(name: "www.example.com", ip: "198.51.100.10")])
         let hr = HomeRouter(sim: sim, id: "HR1")
         try hr.setIp("LAN", "192.168.0.1/24")
-        try hr.configureDhcpServer(DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1"))
+        try hr.configureDhcpServer(DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1", dns: "192.168.0.1"))
         hr.nat = try Nat(node: hr, config: NatConfig(inside: ["LAN"], outside: "Internet"))
         try hr.setDhcp(true, on: hr.wan)
         _ = try Link(sim: sim, try isp.iface("Gi0/0"), try hr.iface("Internet"))
@@ -128,8 +129,14 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         _ = try Link(sim: sim, try pc.iface("eth0"), try hr.iface("LAN1"))
         try pc.setDhcp(true)
         sim.run(2 * S)
-        #expect(pc.nic.ipv4.map { formatIp($0.addr) } == "192.168.0.100" && pc.learnedNameServer.map(formatIp) == "203.0.113.1")
+        #expect(pc.nic.ipv4.map { formatIp($0.addr) } == "192.168.0.100" && pc.learnedNameServer.map(formatIp) == "192.168.0.1")
         #expect(try pings(sim, pc, "198.51.100.10") && hr.nat!.view().map { formatIp($0.global) } == ["203.0.113.100"])
+        // Names: asked of HR1, which asks ISP1 (dnsmasq-like); an unknown name stays unknown.
+        var answers: [Resolution] = []
+        for name in ["www.example.com", "nessuno.example"] { pc.resolver.lookup(name, server: .v4(try parseIp("192.168.0.1")), useCache: false) { answers.append($0) } }
+        sim.run(1 * S)
+        #expect(answers == [.found([.v4(try parseIp("198.51.100.10"))]), .nxdomain])
+        #expect(sim.log.all.contains { $0.kind == .tx && $0.node == "HR1" && $0.iface == "Internet" && eventView($0).info.contains("DNS") })
     }
 
     /// Spec M11 §8: no spanning tree: a switch's BPDUs stop at the bridge; tagged frames are dropped.

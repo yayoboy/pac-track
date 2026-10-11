@@ -3,6 +3,8 @@
 /// addresses like a switch's, without VLANs or spanning tree; the radio side is the association table, as on an access point.
 final class HomeRouter: Router {
     private var table: [Mac: (iface: Interface, seen: Int)] = [:]
+    /// Its name server for the LAN, always on (spec M11 §8).
+    private var dns: DnsForwarder?
 
     init(sim: Sim, id: String) {
         super.init(sim: sim, id: id, ports: 0)
@@ -12,6 +14,7 @@ final class HomeRouter: Router {
         let air = addInterface("WLAN")
         air.radio = ApRadio(iface: air)
         addInterface("LAN").bridge = true
+        dns = try? DnsForwarder(node: self) // UDP 53 is free on a new node
     }
 
     var wan: Interface { interfaces[0] }

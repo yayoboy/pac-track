@@ -21,6 +21,8 @@ let PORT_DNS: UInt16 = 53
 /// Discard service (RFC 863): the traffic generator's receiver, TCP and UDP.
 let PORT_DISCARD: UInt16 = 9
 let DNS_NXDOMAIN: UInt8 = 3
+/// The server could not answer (RFC 1035 §4.1.1): a forwarder without an upstream answer (spec M11 §8).
+let DNS_SERVFAIL: UInt8 = 2
 /// DNS record types (RFC 1035 §3.2.2, RFC 3596 §2.1).
 let DNS_TYPE_A: UInt16 = 1
 let DNS_TYPE_AAAA: UInt16 = 28
