@@ -81,7 +81,7 @@ Vedere una rete Wi-Fi lavorare frame per frame come una cablata: il client cerca
 ## 7. UI (M11a)
 - **Palette:** nuova sezione **Wireless** fra Server e Cavi: Access point, Tablet, Smartphone. La ricerca trova `wireless`, `wifi`, `ap`… come per le altre sezioni. Il menu *Aggiungi dispositivo* del canvas ha le stesse voci.
 - **Canvas:** una linea tratteggiata sottile unisce ogni client associato al suo access point; non si seleziona e non si cancella (non è un cavo). I frame in aria viaggiano lungo quella linea come sui cavi.
-  - Gli access point non hanno un cavo verso i client: trascinare un cavo da un tablet dà l'errore "nessuna porta libera".
+  - Gli access point non hanno un cavo verso i client: trascinare un cavo da un tablet dà l'errore già esistente dell'editor "TAB1 has no free port".
 - **Scheda Wi-Fi:**
   - access point: SSID e canale (1, 6, 11); l'errore di un SSID vuoto o più lungo di 32 byte compare sotto il campo;
   - client: per PC e Laptop *Scheda di rete* Ethernet / Wi-Fi; poi la rete (SSID) a cui collegarsi e lo stato: "Associato a pac-track · AP1 · canale 6", "Scansione…", "Nessuna rete trovata".
