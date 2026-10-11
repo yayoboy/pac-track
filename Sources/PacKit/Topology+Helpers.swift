@@ -362,6 +362,60 @@ public func peerLabel(_ end: IfaceRef, in s: Snapshot) -> String? {
     return "\(s.nodes.first { $0.id == peer.node }?.name ?? "?") \(peer.iface)"
 }
 
+/// "192.168.1.10/24" as address and prefix; nil for anything else.
+private func v4(_ cidr: String) -> (addr: UInt32, prefix: Int)? {
+    let parts = cidr.split(separator: "/")
+    guard parts.count == 2, let addr = try? parseIp(String(parts[0])), let prefix = Int(parts[1]) else { return nil }
+    return (addr, prefix)
+}
+
+/// The devices and interfaces in the broadcast domain of `end`, in the engine's order.
+private func segment(_ end: IfaceRef, in s: Snapshot) -> [(node: NodeView, iface: IfaceView)] {
+    let refs = s.nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.segment ?? []
+    return refs.compactMap { r in s.nodes.first { $0.id == r.node }.flatMap { n in n.ifaces.first { $0.name == r.iface }.map { (n, $0) } } }
+}
+
+/// Up to three free host addresses, with their prefix, in the IPv4 subnets already used on the broadcast domain of `end` (from v1):
+/// past the addresses assigned there (its own included) and the domain's DHCP pools. Empty while the domain has no address.
+public func addressSuggestions(_ end: IfaceRef, in s: Snapshot) -> [String] {
+    let peers = segment(end, in: s)
+    let used = peers.compactMap { $0.iface.cidr.flatMap(v4) }
+    let own = s.nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.cidr.flatMap(v4)
+    let taken = Set((used + [own].compactMap { $0 }).map(\.addr))
+    let pools = peers.compactMap { $0.node.dhcpServer.flatMap { c in try? (parseIp(c.start), parseIp(c.end)) } }
+    var nets: [(net: UInt32, prefix: Int)] = []
+    for u in used where u.prefix <= 30 {
+        let net = (net: u.addr & UInt32.max << (32 - u.prefix), prefix: u.prefix)
+        if !nets.contains(where: { $0 == net }) { nets.append(net) }
+    }
+    var out: [String] = []
+    for (net, prefix) in nets {
+        let broadcast = net | ~(UInt32.max << (32 - prefix))
+        var a = net + 1
+        while a < broadcast, out.count < 3 {
+            if let pool = pools.first(where: { $0.0 <= a && a <= $0.1 }) {
+                guard pool.1 < broadcast else { break }
+                a = pool.1 + 1
+                continue
+            }
+            if !taken.contains(a) { out.append("\(formatIp(a))/\(prefix)") }
+            a += 1
+        }
+    }
+    return out
+}
+
+/// The router and Cloud addresses on the broadcast domains of the node's interfaces (from v1), at most three.
+public func gatewaySuggestions(_ node: String, in s: Snapshot) -> [String] {
+    var out: [String] = []
+    for iface in s.nodes.first(where: { $0.id == node })?.ifaces ?? [] {
+        for peer in segment(IfaceRef(node: node, iface: iface.name), in: s) where [.router, .cloud].contains(peer.node.kind) {
+            if let ip = peer.iface.cidr?.split(separator: "/").first.map(String.init), !out.contains(ip) { out.append(ip) }
+        }
+    }
+    return Array(out.prefix(3))
+}
+
 /// Where a cable sits among those joining the same two devices (in cable order): 0 alone, else -(k-1)/2 … (k-1)/2, so the
 /// canvas can spread parallel cables apart.
 public func cableSlot(_ link: LinkView, in links: [LinkView]) -> Double {

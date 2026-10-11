@@ -249,6 +249,8 @@ public struct IfaceView: Equatable, Sendable {
     public let ipv6Config: Ipv6Config?
     /// Every IPv6 address with its origin and state: "2001:db8:1::10/64 · SLAAC · tentativo" (spec M9 §8).
     public let ipv6: [String]
+    /// IP interfaces only: the other IP interfaces in its broadcast domain, as the duplicate-address check sees them.
+    public let segment: [IfaceRef]
 }
 
 public struct RouteRow: Equatable, Sendable {

@@ -725,6 +725,9 @@ enum SelfTest {
         editor.select(.node(id("SW1")))
         editor.inspectorTab = .ports
         if !render(editor, to: sibling(output, "ux-ports")) { failures.append("could not write the ports peer image") }
+        // The address hints skip SRV1, the leases and the pool .100–.199 (the menu itself opens in its own window: not in the image).
+        let hints = addressSuggestions(IfaceRef(node: id("Stampante-ufficio-secondo-piano"), iface: "eth0"), in: editor.snapshot)
+        if hints != ["192.168.1.1/24", "192.168.1.3/24", "192.168.1.4/24"] { failures.append("address hints \(hints)") }
         return failures
     }
 

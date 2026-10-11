@@ -107,7 +107,8 @@ private struct NodeInspector: View {
                             Text(dhcpStatus(client)).font(Theme.small).foregroundStyle(Theme.muted)
                         }
                     } else {
-                        CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24", errorKey: key, editor: editor) { text in
+                        CommitField(label: "Indirizzo IPv4 / prefisso", value: iface.cidr ?? "", placeholder: "192.168.1.10/24",
+                                    suggestions: addressSuggestions(IfaceRef(node: node.id, iface: iface.name), in: editor.snapshot), errorKey: key, editor: editor) { text in
                             let trimmed = text.trimmingCharacters(in: .whitespaces)
                             await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
                         }
@@ -376,7 +377,8 @@ private struct RoutingTab: View {
                     }
                 }
             }
-            CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1", errorKey: gwKey, editor: editor) { text in
+            CommitField(label: "Gateway predefinito", value: gateway, placeholder: "192.168.1.1",
+                        suggestions: node.kind.isHost ? gatewaySuggestions(node.id, in: editor.snapshot) : [], errorKey: gwKey, editor: editor) { text in
                 let trimmed = text.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty {
                     await editor.edit(.addRoute(node: node.id, cidr: "0.0.0.0/0", nextHop: trimmed), key: gwKey)
