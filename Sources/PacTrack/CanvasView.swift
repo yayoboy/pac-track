@@ -34,6 +34,16 @@ struct CanvasView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 background
+                let air = airLinks(editor.snapshot.nodes)
+                // A dashed line from each associated client to its access point (spec M11 §7): not a cable, nothing to click.
+                ForEach(air) { link in
+                    Path { p in
+                        p.move(to: center(link.a.node))
+                        p.addLine(to: center(link.b.node))
+                    }
+                    .stroke(Theme.muted, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .allowsHitTesting(false)
+                }
                 ForEach(editor.snapshot.links) { link in cable(link) }
                 // Under the nodes: a PDU leaves from and disappears into its device.
                 if !editor.flights.isEmpty {
@@ -42,8 +52,8 @@ struct CanvasView: View {
                         // An explicit ZStack: several children directly inside a TimelineView are stacked like a VStack.
                         ZStack(alignment: .topLeading) {
                             ForEach(editor.flights) { flight in
-                                if let link = editor.snapshot.links.first(where: { $0.id == flight.link }) {
-                                    let e = ends(link)
+                                if let link = (editor.snapshot.links + air).first(where: { $0.id == flight.link }) {
+                                    let e = air.contains(link) ? (a: center(link.a.node), b: center(link.b.node), slot: 0.0) : ends(link)
                                     let (a, b) = link.a.node == flight.from ? (e.a, e.b) : (e.b, e.a)
                                     let t = flightProgress(flight, now: now)
                                     PduTag(proto: flight.proto).position(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)

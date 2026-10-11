@@ -30,14 +30,17 @@ struct PaletteView: View {
         ("Rete", [.router, .switch, .hub, .cloud].map { PaletteItem(kind: $0) }),
         ("Host", [.pc, .laptop, .printer, .tv].map { PaletteItem(kind: $0) }),
         ("Server", [PaletteItem(kind: .server), PaletteItem(kind: .server, preset: .dns), PaletteItem(kind: .server, preset: .dhcp)]),
+        ("Wireless", [.accessPoint, .tablet, .smartphone].map { PaletteItem(kind: $0) }),
     ]
+    /// Words that find a whole section besides its title (spec M11 §7).
+    private static let aliases = ["Wireless": "wifi wi-fi ap"]
     @State private var query = ""
 
     /// Categories with the devices whose name (or category) contains `query`.
     static func groups(matching query: String) -> [(String, [PaletteItem])] {
         let q = query.trimmingCharacters(in: .whitespaces)
         return all.compactMap { title, kinds in
-            let hits = q.isEmpty || title.localizedCaseInsensitiveContains(q) ? kinds : kinds.filter { $0.label.localizedCaseInsensitiveContains(q) }
+            let hits = q.isEmpty || "\(title) \(aliases[title] ?? "")".localizedCaseInsensitiveContains(q) ? kinds : kinds.filter { $0.label.localizedCaseInsensitiveContains(q) }
             return hits.isEmpty ? nil : (title, hits)
         }
     }

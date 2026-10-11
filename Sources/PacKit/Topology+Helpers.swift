@@ -52,7 +52,7 @@ public enum ServerPreset: String, Sendable {
 
 /// Node inspector tabs, in display order.
 public enum InspectorTab: String, CaseIterable, Sendable {
-    case interfaces = "Interfacce", ports = "Porte", routing = "Routing", services = "Servizi", tables = "Tabelle", app = "App"
+    case interfaces = "Interfacce", ports = "Porte", routing = "Routing", services = "Servizi", wifi = "Wi-Fi", tables = "Tabelle", app = "App"
 }
 
 public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
@@ -60,8 +60,9 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .switch: [.ports, .services, .tables]
     case .hub: [.ports]
     case .router, .server, .cloud, .printer: [.interfaces, .routing, .services, .tables, .app]
-    case .accessPoint: [.tables]
-    case .pc, .laptop, .tv, .tablet, .smartphone: [.interfaces, .routing, .tables, .app]
+    case .accessPoint: [.wifi, .tables]
+    case .pc, .laptop, .tablet, .smartphone: [.interfaces, .routing, .wifi, .tables, .app]
+    case .tv: [.interfaces, .routing, .tables, .app]
     }
 }
 
@@ -148,8 +149,9 @@ func defaultName(_ kind: DeviceKind, taken: Set<String>) -> String {
     return "\(kind.namePrefix)\(i)"
 }
 
+/// A cable never goes into a Wi-Fi interface (spec M11 §7).
 public func firstFreeIface(_ node: NodeView) -> String? {
-    node.ifaces.first { !$0.linked }?.name
+    node.ifaces.first { !$0.linked && !$0.wireless }?.name
 }
 
 public func firstIp(_ node: NodeView) -> String? {
@@ -317,6 +319,43 @@ public func dhcpStatus(_ c: DhcpClientView) -> String {
     case "INIT": "INIT · dispositivo spento"
     default: "\(c.state) · in attesa del server DHCP"
     }
+}
+
+extension StationState {
+    /// Tabelle's Wi-Fi state (spec M11 §1: "associato").
+    public var label: String {
+        switch self {
+        case .idle: "nessuna rete"
+        case .scanning: "scansione"
+        case .notFound: "nessuna rete trovata"
+        case .authenticating: "autenticazione"
+        case .associating: "associazione"
+        case .associated: "associato"
+        }
+    }
+}
+
+/// The line under a client's network (spec M11 §7): "Associato a pac-track · AP1 · canale 6", "Scansione…", "Nessuna rete trovata".
+public func wifiStatus(_ s: StationView, in nodes: [NodeView]) -> String {
+    switch s.state {
+    case .idle: "Nessuna rete"
+    case .scanning: "Scansione…"
+    case .notFound: "Nessuna rete trovata"
+    case .authenticating: "Autenticazione…"
+    case .associating: "Associazione…"
+    case .associated:
+        "Associato a \(s.config.ssid) · \(nodes.first { $0.id == s.ap }?.name ?? "?") · canale \(s.channel.map(String.init) ?? "?")"
+    }
+}
+
+/// Tabelle's Wi-Fi row of a client (spec M11 §7): state, SSID, BSSID, channel.
+public func wifiRow(_ s: StationView) -> [String] {
+    [s.state.label, s.config.ssid.isEmpty ? "-" : s.config.ssid, s.bssid ?? "-", s.channel.map(String.init) ?? "-"]
+}
+
+/// Tabelle of an access point (spec M11 §7): AID, MAC and the client's name.
+public func associationRows(_ ap: AccessPointView, in nodes: [NodeView]) -> [[String]] {
+    ap.clients.map { c in ["\(c.aid)", c.mac, nodes.first { $0.id == c.node }?.name ?? "?"] }
 }
 
 /// One switch-port VLAN setting typed in the Porte tab.

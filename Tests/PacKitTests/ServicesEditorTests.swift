@@ -102,7 +102,7 @@ import Testing
             == "BOUND · server 10.0.0.2 · lease 3500 s · rinnovo tra 1700 s")
         #expect(dhcpStatus(DhcpClientView(state: "SELECTING", server: nil, leaseS: nil, renewS: nil)) == "SELECTING · in attesa del server DHCP")
         #expect(inspectorTabs(for: .server) == [.interfaces, .routing, .services, .tables, .app])
-        #expect(inspectorTabs(for: .laptop) == [.interfaces, .routing, .tables, .app])
+        #expect(inspectorTabs(for: .laptop) == [.interfaces, .routing, .wifi, .tables, .app])
         #expect(inspectorTabs(for: .switch) == [.ports, .services, .tables]) // Servizi: the Spanning Tree priorities (M7b)
         #expect(DeviceKind.allCases.filter(\.isHost) == [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone]) // M10 §2, M11 §2
     }

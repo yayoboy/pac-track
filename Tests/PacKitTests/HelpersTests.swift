@@ -21,7 +21,7 @@ import Testing
         #expect(DeviceKind.printer.isHost && DeviceKind.tv.isHost && DeviceKind.printer.hasIp)
         #expect(inspectorTabs(for: .printer) == [.interfaces, .routing, .services, .tables, .app])
         #expect(inspectorTabs(for: .tv) == [.interfaces, .routing, .tables, .app])
-        #expect(inspectorTabs(for: .pc) == [.interfaces, .routing, .tables, .app]) // unchanged
+        #expect(inspectorTabs(for: .pc) == [.interfaces, .routing, .wifi, .tables, .app]) // the Wi-Fi tab since M11
     }
 
     @Test func picksTheLowestFreeDefaultNamePerKind() throws {
@@ -171,5 +171,26 @@ import Testing
         #expect(defaultName(.accessPoint, taken: ["AP1"]) == "AP2" && defaultName(.tablet, taken: []) == "TAB1"
             && defaultName(.smartphone, taken: []) == "PHONE1")
         #expect(DeviceKind.tablet.isHost && DeviceKind.smartphone.isHost && !DeviceKind.accessPoint.isHost && !DeviceKind.accessPoint.hasIp)
+    }
+
+    /// Spec M11 §7: the Wi-Fi tab and its status line, Tabelle's Wi-Fi row and the access point's clients; no cable from a tablet.
+    @Test func theWifiTabTablesAndStatus() throws {
+        #expect(inspectorTabs(for: .accessPoint) == [.wifi, .tables])
+        #expect(inspectorTabs(for: .tablet) == [.interfaces, .routing, .wifi, .tables, .app] && inspectorTabs(for: .smartphone) == inspectorTabs(for: .tablet))
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "ap", kind: .accessPoint, name: "AP1"))
+        try rt.handle(.addNode(id: "t", kind: .tablet, name: "TAB1"))
+        try rt.handle(.addNode(id: "x", kind: .tablet, name: "TAB2"))
+        try rt.handle(.setStation(node: "t", config: StationConfig(ssid: "pac-track")))
+        try rt.handle(.setStation(node: "x", config: StationConfig(ssid: "altrove")))
+        #expect(wifiStatus(rt.snapshot().nodes[1].station!, in: rt.snapshot().nodes) == "Scansione…")
+        for _ in 0..<2 { rt.advance(wallMs: 100) }
+        let nodes = rt.snapshot().nodes
+        #expect(wifiStatus(nodes[1].station!, in: nodes) == "Associato a pac-track · AP1 · canale 6")
+        #expect(wifiStatus(nodes[2].station!, in: nodes) == "Nessuna rete trovata")
+        #expect(wifiRow(nodes[1].station!) == ["associato", "pac-track", nodes[0].ifaces[1].mac, "6"])
+        #expect(wifiRow(nodes[2].station!) == ["nessuna rete trovata", "altrove", "-", "-"])
+        #expect(associationRows(nodes[0].accessPoint!, in: nodes) == [["1", nodes[1].ifaces[0].mac, "TAB1"]])
+        #expect(firstFreeIface(nodes[1]) == nil && firstFreeIface(nodes[0]) == "Gi0")
     }
 }

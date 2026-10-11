@@ -74,6 +74,12 @@ enum SelfTest {
         if PaletteItem(payload: "server-dhcp") != PaletteItem(kind: .server, preset: .dhcp) || PaletteItem(payload: "tv")?.label != "Smart TV" {
             failures.append("palette payloads")
         }
+        let wireless = [PaletteItem(kind: .accessPoint), PaletteItem(kind: .tablet), PaletteItem(kind: .smartphone)]
+        if PaletteView.groups(matching: "wireless").map(\.1) != [wireless] || PaletteView.groups(matching: "wifi").map(\.1) != [wireless]
+            || PaletteView.groups(matching: "ap").last?.1 != wireless || PaletteView.groups(matching: "phone").map(\.1) != [[PaletteItem(kind: .smartphone)]] {
+            failures.append("palette search: wireless")
+        }
+        if PaletteView.groups(matching: "").map(\.0) != ["Rete", "Host", "Server", "Wireless"] { failures.append("palette sections") }
         if !PaletteView.groups(matching: "zzz").isEmpty { failures.append("palette search should find nothing") }
         editor.select(.link(cable))
         // Pinch anchored at the pointer: the world point under the fingers stays put.

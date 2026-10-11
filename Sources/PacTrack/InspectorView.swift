@@ -60,6 +60,7 @@ private struct NodeInspector: View {
             case .ports: ports
             case .routing: RoutingTab(node: node, editor: editor)
             case .services: ServicesTab(node: node, editor: editor)
+            case .wifi: WifiTab(node: node, editor: editor)
             case .tables: tables
             case .app: AppTab(node: node, editor: editor)
             }
@@ -76,7 +77,7 @@ private struct NodeInspector: View {
                     HStack {
                         Text(iface.name).foregroundStyle(Theme.fgStrong)
                         Spacer()
-                        Text(iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
+                        Text(iface.wireless ? (iface.linked ? "● associata" : "○ non associata") : iface.linked ? "● collegata" : "○ libera").foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
                         if iface.name.contains(".") {
                             Button("Elimina", role: .destructive) {
                                 Task { await editor.edit(.removeSubinterface(node: node.id, iface: iface.name), key: "sub:\(node.id)") }
@@ -171,7 +172,12 @@ private struct NodeInspector: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            } else if let ap = node.accessPoint {
+                TableSection(title: "Client associati", head: ["AID", "MAC", "Client"], rows: associationRows(ap, in: editor.snapshot.nodes))
             } else {
+                if let s = node.station {
+                    TableSection(title: "Wi-Fi", head: ["Stato", "SSID", "BSSID", "Canale"], rows: [wifiRow(s)])
+                }
                 TableSection(title: "Tabella di routing", head: ["Tipo", "Destinazione", "AD/m", "Next hop", "Int."],
                              rows: node.routes.filter { !$0.dest.contains(":") }.map(routeColumns))
                 if node.ifaces.contains(where: { $0.ipv6Config != nil }) {
