@@ -153,8 +153,13 @@ func defaultName(_ kind: DeviceKind, taken: Set<String>) -> String {
 }
 
 /// A cable never goes into a Wi-Fi interface (spec M11 §7).
-public func firstFreeIface(_ node: NodeView) -> String? {
-    node.ifaces.first { !$0.linked && !$0.wireless }?.name
+/// The port a new cable takes: the first free one. A home router's Internet port takes the cable toward a Cloud/ISP or a router, its
+/// LAN ports every other (spec M11 §8).
+public func firstFreeIface(_ node: NodeView, toward peer: NodeView? = nil) -> String? {
+    let free = node.ifaces.filter { !$0.linked && !$0.wireless }
+    guard node.kind == .homeRouter else { return free.first?.name }
+    let provider = [.cloud, .router].contains(peer?.kind)
+    return free.first { ($0.name == "Internet") == provider }?.name
 }
 
 public func firstIp(_ node: NodeView) -> String? {
@@ -360,9 +365,19 @@ public func wifiRow(_ s: StationView) -> [String] {
     [s.state.label, s.config.ssid.isEmpty ? "-" : s.config.ssid, s.bssid ?? "-", s.channel.map(String.init) ?? "-"]
 }
 
-/// Tabelle of an access point (spec M11 §7): AID, MAC and the client's name.
+/// Tabelle of an access point (spec M11 §7, §8): AID, MAC and the client's name over its signal and rate.
 public func associationRows(_ ap: AccessPointView, in nodes: [NodeView]) -> [[String]] {
-    ap.clients.map { c in ["\(c.aid)", c.mac, nodes.first { $0.id == c.node }?.name ?? "?"] }
+    ap.clients.map { c in ["\(c.aid)", c.mac, "\(nodes.first { $0.id == c.node }?.name ?? "?")\n\(signalText(c.signal, c.rate))"] }
+}
+
+/// The line under a client's status while associated (spec M11 §8): "Segnale -47 dBm · 54 Mb/s".
+public func wifiSignal(_ s: StationView) -> String? {
+    guard let signal = s.signal, let rate = s.rate else { return nil }
+    return "Segnale " + signalText(signal, rate)
+}
+
+private func signalText(_ signal: Int, _ rate: Int) -> String {
+    "\(signal) dBm · \(rate) Mb/s"
 }
 
 /// One switch-port VLAN setting typed in the Porte tab.

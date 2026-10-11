@@ -108,17 +108,17 @@ actor Recording: EngineClient {
         let id = node("PC1").id
         editor.moveStart()
         editor.setPosition(id, Pos(x: 100, y: 50))
-        editor.moveEnd()
+        await editor.moveEnd()
         await client.clear()
         await editor.undo()
         #expect(editor.positions[id] == origin)
-        #expect(await client.sent.isEmpty)
+        #expect(await client.sent == ["move"]) // the radios' positions, no reload (spec M11 §8)
     }
 
     @Test func aClickWithoutMovementAddsNoHistoryAndANewEditClearsRedo() async {
         await editor.addDevice(.pc, at: origin)
         editor.moveStart()
-        editor.moveEnd()
+        await editor.moveEnd()
         await editor.undo()
         #expect(names.isEmpty && !editor.canUndo && editor.canRedo)
         await editor.addDevice(.hub, at: origin)

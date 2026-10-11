@@ -236,11 +236,24 @@ public final class Editor {
     private func addDeviceNow(_ kind: DeviceKind, at pos: Pos, preset: ServerPreset?) async {
         let id = newId()
         positions[id] = pos
-        var cmds: [Command] = [.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))]
-        // A Cloud/ISP arrives ready (spec §5.5): the provider end of a customer link (RFC 5737) and a public name to resolve.
+        // Where it sits counts for the radios (spec M11 §8).
+        var cmds: [Command] = [.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes)), .move(node: id, to: pos)]
+        // A Cloud/ISP arrives ready (spec §5.5): the provider end of a customer link (RFC 5737) and a public name to resolve; it also
+        // hands the customer's router its address (spec M11 §8).
         if kind == .cloud {
             cmds += [.setIp(node: id, iface: "Gi0/0", cidr: "203.0.113.1/24"),
-                     .setDnsServer(node: id, records: [DnsRecord(name: "www.example.com", ip: "198.51.100.10")])]
+                     .setDnsServer(node: id, records: [DnsRecord(name: "www.example.com", ip: "198.51.100.10")]),
+                     .setDhcpServer(node: id, config: DhcpConfig(start: "203.0.113.100", end: "203.0.113.199", gateway: "203.0.113.1",
+                                                                 dns: "203.0.113.1"))]
+        }
+        // A home Wi-Fi router arrives as out of its box (spec M11 §8): its LAN with DHCP and NAT, the Internet port in DHCP; the radio
+        // has an access point's defaults.
+        if kind == .homeRouter {
+            cmds += [.setIp(node: id, iface: "LAN", cidr: "192.168.0.1/24"),
+                     .setDhcpServer(node: id, config: DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1",
+                                                                 dns: "192.168.0.1")),
+                     .setNat(node: id, config: NatConfig(inside: ["LAN"], outside: "Internet")),
+                     .setIfaceMode(node: id, iface: "Internet", mode: .dhcp)]
         }
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
@@ -267,8 +280,8 @@ public final class Editor {
 
     private func connectNow(_ aId: String, _ bId: String) async {
         guard aId != bId, let a = snapshot.nodes.first(where: { $0.id == aId }), let b = snapshot.nodes.first(where: { $0.id == bId }) else { return }
-        guard let ia = firstFreeIface(a), let ib = firstFreeIface(b) else {
-            error = EditorError(key: "connect", message: "\(firstFreeIface(a) == nil ? a.name : b.name) has no free port")
+        guard let ia = firstFreeIface(a, toward: b), let ib = firstFreeIface(b, toward: a) else {
+            error = EditorError(key: "connect", message: "\(firstFreeIface(a, toward: b) == nil ? a.name : b.name) has no free port")
             return
         }
         let id = newId()
@@ -306,14 +319,26 @@ public final class Editor {
         pendingMove = current
     }
 
-    public func moveEnd() {
-        if let before = pendingMove, before != current { remember(before) }
+    /// The end of a drag: one undo step, and the engine learns the new positions (spec M11 §8: range follows them).
+    public func moveEnd() async {
+        guard let before = pendingMove else { return }
         pendingMove = nil
+        guard before != current else { return }
+        remember(before)
+        await serialized { await self.place(from: PacKit.positions(of: before)) }
+    }
+
+    /// Tells the engine where the devices that moved since `old` are now.
+    private func place(from old: [String: Pos]) async {
+        for (id, pos) in positions.sorted(by: { $0.key < $1.key }) where old[id] != pos && snapshot.nodes.contains(where: { $0.id == id }) {
+            await runNow(.move(node: id, to: pos), key: "move")
+        }
     }
 
     /// Returns false (history untouched, error shown) if the engine refuses the state.
     private func restore(_ t: Topology) async -> Bool {
-        if !sameNetwork(t, current) {
+        let reload = !sameNetwork(t, current)
+        if reload {
             do {
                 accept(try await client.send(.load(t)))
             } catch {
@@ -322,7 +347,10 @@ public final class Editor {
             }
             await syncEvents()
         }
+        let old = positions
         positions = PacKit.positions(of: t)
+        // A move undone or redone: the engine follows (a reload already placed everything).
+        if !reload { await place(from: old) }
         selection = nil
         error = nil
         return true
@@ -427,7 +455,7 @@ public final class Editor {
             taken.insert(name)
             ids.append(id)
             positions[id] = src.pos
-            cmds.append(.addNode(id: id, kind: src.kind, name: name))
+            cmds += [.addNode(id: id, kind: src.kind, name: name), .move(node: id, to: src.pos)]
             // The network and the card are settings, not addresses (spec M11 §10); the card first, so wlan0 exists for its mode.
             if let c = src.station { cmds.append(.setStation(node: id, config: c)) }
             if let c = src.accessPoint { cmds.append(.setAccessPoint(node: id, config: c)) }

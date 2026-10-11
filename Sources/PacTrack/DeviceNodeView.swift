@@ -71,7 +71,7 @@ struct DeviceNodeView: View {
                     return
                 }
                 dragStart = nil
-                editor.moveEnd()
+                Task { await editor.moveEnd() }
             }
     }
 

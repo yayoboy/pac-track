@@ -44,8 +44,10 @@ private let AIR = "air:"
 /// the topology, never selectable.
 public func airLinks(_ nodes: [NodeView]) -> [LinkView] {
     nodes.compactMap { n in
-        guard let s = n.station, s.state == .associated, let ap = s.ap, let iface = n.ifaces.first else { return nil }
-        return LinkView(id: AIR + n.id, a: IfaceRef(node: n.id, iface: iface.name), b: IfaceRef(node: ap, iface: "Dot11Radio0"))
+        // From the association on, the WPA2 handshake included (spec M11 §8): its frames fly along the line too.
+        guard let s = n.station, s.state == .associated || s.state == .handshake, let ap = s.ap, let iface = n.ifaces.first,
+              let radio = nodes.first(where: { $0.id == ap })?.ifaces.first(where: \.wireless) else { return nil }
+        return LinkView(id: AIR + n.id, a: IfaceRef(node: n.id, iface: iface.name), b: IfaceRef(node: ap, iface: radio.name))
     }
 }
 

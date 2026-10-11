@@ -229,7 +229,8 @@ import Testing
         #expect(wifiStatus(nodes[2].station!, in: nodes) == "Nessuna rete trovata")
         #expect(wifiRow(nodes[1].station!) == ["associato", "pac-track", nodes[0].ifaces[1].mac, "6"])
         #expect(wifiRow(nodes[2].station!) == ["nessuna rete trovata", "altrove", "-", "-"])
-        #expect(associationRows(nodes[0].accessPoint!, in: nodes) == [["1", nodes[1].ifaces[0].mac, "TAB1"]])
+        #expect(associationRows(nodes[0].accessPoint!, in: nodes) == [["1", nodes[1].ifaces[0].mac, "TAB1\n-30 dBm · 54 Mb/s"]])
+        #expect(wifiSignal(nodes[1].station!) == "Segnale -30 dBm · 54 Mb/s" && wifiSignal(nodes[2].station!) == nil)
         #expect(firstFreeIface(nodes[1]) == nil && firstFreeIface(nodes[0]) == "Gi0")
     }
 
