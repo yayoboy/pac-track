@@ -71,6 +71,7 @@ import Testing
         let s = rt.snapshot()
         let address = { (node: String) in addressSuggestions(IfaceRef(node: node, iface: "eth0"), in: s) }
         #expect(address("b") == ["192.168.1.11/24", "192.168.1.12/24", "192.168.1.13/24"]) // past R1, SRV1, the pool and PC1
+        #expect(address("v") == ["192.168.1.11/24", "192.168.1.12/24", "192.168.1.13/24"]) // SRV1 skips its own pool too
         #expect(address("c") == ["10.0.0.2/30"]) // the only host left; .3 is the broadcast
         #expect(address("d").isEmpty) // nothing on its segment
         #expect(gatewaySuggestions("b", in: s) == ["192.168.1.1"]) // routers only, not SRV1 or PC1

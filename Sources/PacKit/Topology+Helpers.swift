@@ -380,9 +380,11 @@ private func segment(_ end: IfaceRef, in s: Snapshot) -> [(node: NodeView, iface
 public func addressSuggestions(_ end: IfaceRef, in s: Snapshot) -> [String] {
     let peers = segment(end, in: s)
     let used = peers.compactMap { $0.iface.cidr.flatMap(v4) }
-    let own = s.nodes.first { $0.id == end.node }?.ifaces.first { $0.name == end.iface }?.cidr.flatMap(v4)
+    let me = s.nodes.first { $0.id == end.node }
+    let own = me?.ifaces.first { $0.name == end.iface }?.cidr.flatMap(v4)
     let taken = Set((used + [own].compactMap { $0 }).map(\.addr))
-    let pools = peers.compactMap { $0.node.dhcpServer.flatMap { c in try? (parseIp(c.start), parseIp(c.end)) } }
+    // A DHCP server's own pool counts too: the segment leaves its node out.
+    let pools = (peers.map(\.node.dhcpServer) + [me?.dhcpServer]).compactMap { $0.flatMap { c in try? (parseIp(c.start), parseIp(c.end)) } }
     var nets: [(net: UInt32, prefix: Int)] = []
     for u in used where u.prefix <= 30 {
         let net = (net: u.addr & UInt32.max << (32 - u.prefix), prefix: u.prefix)
