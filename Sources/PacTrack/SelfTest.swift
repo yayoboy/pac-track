@@ -602,6 +602,10 @@ enum SelfTest {
         if !render(editor, to: sibling(output, "m9a-interfaces")) { failures.append("could not write the M9a interfaces image") }
         editor.inspectorTab = .tables
         if !render(editor, to: sibling(output, "m9a-tables")) { failures.append("could not write the M9a tables image") }
+        await editor.edit(.addRoute(node: id("R1"), cidr: "2001:db8:9::/64", nextHop: "2001:db8:2::99"))
+        if !(editor.snapshot.nodes.first { $0.name == "R1" }?.routes.contains { $0.dest == "2001:db8:9::/64" && $0.isStatic } ?? false) {
+            failures.append("R1 has no IPv6 static route")
+        }
         editor.select(.node(id("R1")))
         editor.inspectorTab = .routing
         if !render(editor, to: sibling(output, "m9a-routing")) { failures.append("could not write the M9a routing image") }

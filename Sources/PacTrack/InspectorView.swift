@@ -393,6 +393,7 @@ private struct RoutingTab: View {
                         }
                     }
                 }
+                Text("IPv4 o IPv6, es. 2001:db8:9::/64 via 2001:db8:1::2").font(Theme.small).foregroundStyle(Theme.muted)
                 ErrorLine(editor: editor, key: routeKey)
             }
         }
