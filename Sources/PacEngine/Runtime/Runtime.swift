@@ -265,6 +265,17 @@ public final class Runtime {
             guard server == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot advertise a DNS server") }
             let text = server?.trimmingCharacters(in: .whitespaces) ?? ""
             n.v6.rdnss = try text.isEmpty ? nil : parseIp6(text)
+        case let .setAccessPoint(node, config):
+            let n = try get(node)
+            guard let ap = n as? AccessPoint else { throw EngineError("\(n.name) is not an access point") }
+            try ap.radio.configure(config)
+        case let .setStation(node, config):
+            let n = try get(node)
+            guard let host = n as? Host, let kind = nodes[node]?.kind, [.pc, .laptop, .tablet, .smartphone].contains(kind) else {
+                throw EngineError("\(n.name) cannot use Wi-Fi")
+            }
+            guard config != nil || kind == .pc || kind == .laptop else { throw EngineError("\(n.name) has only a Wi-Fi card") }
+            try host.setStation(config)
         case let .setMode(value):
             guard value != mode else { return }
             if value == .simulation { runningBeforeSimulation = running }
@@ -429,9 +440,9 @@ public final class Runtime {
                 name: node.name,
                 powered: node.powered,
                 ifaces: node.interfaces.map {
-                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: ($0.dot1q?.parent ?? $0).link != nil,
+                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.radio?.lineUp ?? (($0.dot1q?.parent ?? $0).link != nil),
                               mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil,
-                              ipv6Config: $0.v6?.config, ipv6: addressLines($0))
+                              ipv6Config: $0.v6?.config, ipv6: addressLines($0), wireless: $0.radio != nil)
                 },
                 routes: ip.map { ip in
                     ip.routes.view().map {
@@ -488,7 +499,15 @@ public final class Runtime {
                 neighbors6: ip?.v6.neighbors.view().map {
                     NeighborRow(addr: formatIp6($0.addr), mac: $0.mac ?? "-", state: $0.state.rawValue, iface: $0.iface)
                 } ?? [],
-                rdnss: ip?.v6.rdnss.map(formatIp6)
+                rdnss: ip?.v6.rdnss.map(formatIp6),
+                accessPoint: (node as? AccessPoint).map { ap in
+                    AccessPointView(config: ap.radio.config, clients: ap.radio.clients.map {
+                        AssociationRow(aid: $0.aid, mac: $0.station.iface.mac, node: $0.station.iface.node.id)
+                    })
+                },
+                station: host?.station.map { s in
+                    StationView(config: s.config, state: s.state, bssid: s.bssid, ap: s.ap?.iface.node.id, channel: s.ap == nil ? nil : s.channel)
+                }
             )
         }
         let linkViews = linkOrder.map { id in
@@ -510,6 +529,8 @@ public final class Runtime {
     private func create(_ id: String, _ kind: DeviceKind) -> Node {
         switch kind {
         case .pc, .laptop, .server, .printer, .tv: Host(sim: sim, id: id)
+        case .tablet, .smartphone: Host(sim: sim, id: id, wifi: true)
+        case .accessPoint: AccessPoint(sim: sim, id: id)
         case .router: Router(sim: sim, id: id)
         case .switch: Switch(sim: sim, id: id)
         case .hub: Hub(sim: sim, id: id)
@@ -567,6 +588,9 @@ public final class Runtime {
         // Addresses before cables: a duplicate made by cabling two segments together (never refused) still opens.
         for n in t.nodes {
             try next.handle(.addNode(id: n.id, kind: n.kind, name: n.name))
+            // The card before the interfaces' settings: a PC with the Wi-Fi card has wlan0 (spec M11 §10).
+            if let c = n.station { try next.handle(.setStation(node: n.id, config: c)) }
+            if let c = n.accessPoint { try next.handle(.setAccessPoint(node: n.id, config: c)) }
             // The saved size is the interface count; a file listing no valid size (hand-written, abbreviated) keeps 8.
             if n.kind == .switch, SWITCH_PORTS.contains(n.ifaces.count) { try next.handle(.setPorts(id: n.id, count: n.ifaces.count)) }
             for i in n.ifaces {

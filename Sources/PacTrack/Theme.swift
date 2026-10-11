@@ -52,6 +52,9 @@ extension DeviceKind {
         case .cloud: "cloud"
         case .printer: "printer"
         case .tv: "tv"
+        case .accessPoint: "antenna.radiowaves.left.and.right"
+        case .tablet: "ipad"
+        case .smartphone: "iphone"
         }
     }
 }

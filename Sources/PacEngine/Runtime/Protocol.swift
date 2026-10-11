@@ -1,6 +1,7 @@
 /// `cloud`: an ISP edge router whose "Internet" answers by itself (spec §5.5). `printer`, `tv`: hosts (spec M10 §2).
+/// `accessPoint`, `tablet`, `smartphone`: Wi-Fi (spec M11 §2).
 public enum DeviceKind: String, Codable, Sendable, CaseIterable {
-    case pc, laptop, server, router, `switch`, hub, cloud, printer, tv
+    case pc, laptop, server, router, `switch`, hub, cloud, printer, tv, accessPoint, tablet, smartphone
 }
 
 public struct IfaceRef: Codable, Hashable, Sendable {
@@ -200,6 +201,11 @@ public enum Command: Sendable {
     case setIpv6Routing(node: String, on: Bool)
     /// Routers: IOS `ipv6 nd ra dns server`, the DNS server their RAs advertise (RDNSS, spec M9 §10); nil clears it.
     case setRdnss(node: String, server: String?)
+    /// An access point's SSID (1–32 bytes) and channel (1, 6, 11), spec M11 §2.
+    case setAccessPoint(node: String, config: ApConfig)
+    /// The network a PC, laptop, tablet or smartphone looks for; on a PC or laptop a configuration puts in the Wi-Fi card and nil the
+    /// Ethernet one (spec M11 §2).
+    case setStation(node: String, config: StationConfig?)
     case setMode(SimMode)
     case step
     case setPower(id: String, on: Bool)
@@ -248,6 +254,8 @@ public enum Command: Sendable {
         case .setIpv6: "setIpv6"
         case .setIpv6Routing: "setIpv6Routing"
         case .setRdnss: "setRdnss"
+        case .setAccessPoint: "setAccessPoint"
+        case .setStation: "setStation"
         case .setMode: "setMode"
         case .step: "step"
         case .setPower: "setPower"
@@ -269,7 +277,7 @@ public struct IfaceView: Equatable, Sendable {
     public let name: String
     public let mac: String
     public let cidr: String?
-    /// A subinterface is linked when its physical interface is.
+    /// A subinterface is linked when its physical interface is; a Wi-Fi interface while associated (an access point's radio: with clients).
     public let linked: Bool
     public let mode: IfaceMode
     /// Switch ports only: the 802.1Q role.
@@ -278,6 +286,8 @@ public struct IfaceView: Equatable, Sendable {
     public let ipv6Config: Ipv6Config?
     /// Every IPv6 address with its origin and state: "2001:db8:1::10/64 · SLAAC · tentativo" (spec M9 §8).
     public let ipv6: [String]
+    /// Has a radio (spec M11).
+    public let wireless: Bool
 }
 
 public struct RouteRow: Equatable, Sendable {
@@ -344,6 +354,28 @@ public struct DhcpClientView: Equatable, Sendable {
         self.leaseS = leaseS
         self.renewS = renewS
     }
+}
+
+/// An access point's radio (spec M11 §7): its network and the stations associated to it, by AID.
+public struct AccessPointView: Equatable, Sendable {
+    public let config: ApConfig
+    public let clients: [AssociationRow]
+}
+
+/// One association: AID, the client's MAC and node id.
+public struct AssociationRow: Equatable, Sendable {
+    public let aid: Int
+    public let mac: String
+    public let node: String
+}
+
+/// A Wi-Fi client (spec M11 §7): its network and state and, once it chose one, the access point's BSSID, node id and channel.
+public struct StationView: Equatable, Sendable {
+    public let config: StationConfig
+    public let state: StationState
+    public let bssid: String?
+    public let ap: String?
+    public let channel: Int?
 }
 
 /// One 100 ms point of a traffic flow (spec §5.6).
@@ -462,6 +494,10 @@ public struct NodeView: Equatable, Identifiable, Sendable {
     public let neighbors6: [NeighborRow]
     /// Routers: the DNS server their RAs advertise (RDNSS).
     public let rdnss: String?
+    /// Access points: the network and the associations.
+    public let accessPoint: AccessPointView?
+    /// Hosts with a Wi-Fi card.
+    public let station: StationView?
 }
 
 public struct LinkView: Codable, Equatable, Identifiable, Sendable {
@@ -775,10 +811,15 @@ public struct TopologyNode: Codable, Equatable, Sendable {
     public var ipv6Routing: Bool
     /// Routers: the DNS server their RAs advertise (spec M9 §10).
     public var rdnss: String?
+    /// Access points: their network (spec M11 §10).
+    public var accessPoint: ApConfig?
+    /// Wi-Fi clients: the network they look for; on a PC or laptop also the Wi-Fi card (spec M11 §10).
+    public var station: StationConfig?
     public init(id: String, kind: DeviceKind, name: String, pos: Pos, ifaces: [TopologyIface], routes: [TopologyRoute], powered: Bool = true,
                 nameServer: String? = nil, dhcp: DhcpConfig? = nil, dns: [DnsRecord]? = nil, sink: Bool = false,
                 nat: NatConfig? = nil, firewall: FirewallConfig? = nil, stpPriorities: [StpPriority]? = nil, rip: RipConfig? = nil,
-                ospf: OspfConfig? = nil, ipv6Routing: Bool = false, rdnss: String? = nil) {
+                ospf: OspfConfig? = nil, ipv6Routing: Bool = false, rdnss: String? = nil,
+                accessPoint: ApConfig? = nil, station: StationConfig? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -797,9 +838,11 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         self.ospf = ospf
         self.ipv6Routing = ipv6Routing
         self.rdnss = rdnss
+        self.accessPoint = accessPoint
+        self.station = station
     }
 
-    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`, before M9a no `ipv6Routing`, before M9b no `rdnss`.
+    /// Files written before M2b have no `powered`, before M3 no services, before M4 no `sink`, before M5 no `nat`/`firewall`, before M7b no `stpPriorities`, before M8a no `rip`, before M8b no `ospf`, before M9a no `ipv6Routing`, before M9b no `rdnss`, before M11a no `accessPoint`/`station`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -820,6 +863,8 @@ public struct TopologyNode: Codable, Equatable, Sendable {
         ospf = try c.decodeIfPresent(OspfConfig.self, forKey: .ospf)
         ipv6Routing = try c.decodeIfPresent(Bool.self, forKey: .ipv6Routing) ?? false
         rdnss = try c.decodeIfPresent(String.self, forKey: .rdnss)
+        accessPoint = try c.decodeIfPresent(ApConfig.self, forKey: .accessPoint)
+        station = try c.decodeIfPresent(StationConfig.self, forKey: .station)
     }
 }
 

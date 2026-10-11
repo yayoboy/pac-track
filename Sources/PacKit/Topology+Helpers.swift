@@ -14,6 +14,9 @@ extension DeviceKind {
         case .cloud: "Cloud/ISP"
         case .printer: "Stampante"
         case .tv: "Smart TV"
+        case .accessPoint: "Access point"
+        case .tablet: "Tablet"
+        case .smartphone: "Smartphone"
         }
     }
 
@@ -28,13 +31,16 @@ extension DeviceKind {
         case .cloud: "ISP"
         case .printer: "PRN"
         case .tv: "TV"
+        case .accessPoint: "AP"
+        case .tablet: "TAB"
+        case .smartphone: "PHONE"
         }
     }
 
-    public var hasIp: Bool { self != .switch && self != .hub }
+    public var hasIp: Bool { ![.switch, .hub, .accessPoint].contains(self) }
 
-    /// PCs, laptops, servers, printers and Smart TVs: DHCP client and a name server setting.
-    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv].contains(self) }
+    /// PCs, laptops, servers, printers, Smart TVs, tablets and smartphones: DHCP client and a name server setting.
+    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone].contains(self) }
 }
 
 /// Palette entries that drop a plain server with a service already on (spec M10 §3); the raw value is the drag payload.
@@ -54,7 +60,8 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .switch: [.ports, .services, .tables]
     case .hub: [.ports]
     case .router, .server, .cloud, .printer: [.interfaces, .routing, .services, .tables, .app]
-    case .pc, .laptop, .tv: [.interfaces, .routing, .tables, .app]
+    case .accessPoint: [.tables]
+    case .pc, .laptop, .tv, .tablet, .smartphone: [.interfaces, .routing, .tables, .app]
     }
 }
 

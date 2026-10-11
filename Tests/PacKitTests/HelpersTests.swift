@@ -145,4 +145,11 @@ import Testing
     @Test func theWifiChipReads80211() {
         #expect(Proto.wifi.label == "802.11" && Proto.ndp.label == "NDP")
     }
+
+    @Test func wirelessDevicesHaveItalianNamesAndOnlyTheClientsAreHosts() {
+        #expect([DeviceKind.accessPoint, .tablet, .smartphone].map(\.label) == ["Access point", "Tablet", "Smartphone"])
+        #expect(defaultName(.accessPoint, taken: ["AP1"]) == "AP2" && defaultName(.tablet, taken: []) == "TAB1"
+            && defaultName(.smartphone, taken: []) == "PHONE1")
+        #expect(DeviceKind.tablet.isHost && DeviceKind.smartphone.isHost && !DeviceKind.accessPoint.isHost && !DeviceKind.accessPoint.hasIp)
+    }
 }
