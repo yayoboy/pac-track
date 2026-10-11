@@ -43,7 +43,7 @@ Sei voci nuove nella palette, ognuna con la sua icona, un nome italiano e defaul
 - Nuova sezione **Casa** fra Wireless e Cavi: Modem DSL, NAS, Console, Lampadina smart, Termostato, Smart speaker.
   - *Decisione:* una sezione sola per i dispositivi di casa invece di spargerli fra Rete, Server e Wireless: chi costruisce la rete di casa li trova insieme, e le sezioni esistenti restano come le conosce.
 - La ricerca trova `casa`, `iot` e `home` (tutta la sezione), `dsl`, `smart` (Smart TV, Lampadina smart, Smart speaker) e i nomi.
-- La palette ora ha 23 voci: nella finestra del selftest (860 pt) e alla minima (640 pt) l'elenco scorre; nessuna voce va a capo o si tronca nei 170 pt.
+- La palette ora ha 23 voci: nella finestra del selftest (860 pt) entra tutta, Cavi compresi; alla minima (640 pt) l'elenco scorre dopo Wireless, con la ricerca in alto e il suggerimento in basso. Nessuna voce va a capo o si tronca nei 170 pt.
 - Il menu *Aggiungi dispositivo* elenca le stesse voci nello stesso ordine.
 
 ## 7. Persistenza e copie

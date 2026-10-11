@@ -46,6 +46,34 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(a.got.last.map { $0.time - start } == 67_200 + 500 + 1172)
     }
 
+    /// Spec M12 §2: the bottleneck is where it really is — 50 Mb/s of UDP fill the modem's dsl0 queue in upload and pass in download.
+    @Test func fiftyMbpsOfUdpOverflowTheUploadAndPassTheDownload() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "a", kind: .pc, name: "PC1"))
+        try rt.handle(.addNode(id: "m", kind: .modem, name: "MODEM1"))
+        try rt.handle(.addNode(id: "s", kind: .server, name: "SRV1"))
+        try rt.handle(.connect(id: "lan", a: IfaceRef(node: "a", iface: "eth0"), b: IfaceRef(node: "m", iface: "eth0")))
+        try rt.handle(.connect(id: "line", a: IfaceRef(node: "m", iface: "dsl0"), b: IfaceRef(node: "s", iface: "eth0")))
+        try rt.handle(.setIp(node: "a", iface: "eth0", cidr: "10.0.0.1/24"))
+        try rt.handle(.setIp(node: "s", iface: "eth0", cidr: "10.0.0.2/24"))
+        try rt.handle(.setSink(node: "s", on: true))
+        try rt.handle(.trafficUdp(node: "a", target: "10.0.0.2", bitsPerSecond: 50e6, seconds: 1))
+        runFor(rt, wallMs: 3_000)
+        var s = rt.snapshot()
+        let line = try #require(s.linkSamples["line"])
+        #expect(line.map(\.ab.queued).max() == 1000 && line.reduce(0) { $0 + $1.ab.drops } > 1000) // MODEM1 dsl0 → SRV1
+        #expect(s.apps[0].samples.last!.lossPct > 30) // 1 s at 20 Mb/s plus a full queue of 1000 out of 4251 datagrams
+        try rt.handle(.addNode(id: "b", kind: .server, name: "SRV2"))
+        try rt.handle(.disconnect(id: "lan"))
+        try rt.handle(.connect(id: "lan2", a: IfaceRef(node: "b", iface: "eth0"), b: IfaceRef(node: "m", iface: "eth0")))
+        try rt.handle(.setIp(node: "b", iface: "eth0", cidr: "10.0.0.3/24"))
+        try rt.handle(.setSink(node: "b", on: true))
+        try rt.handle(.trafficUdp(node: "s", target: "10.0.0.3", bitsPerSecond: 50e6, seconds: 1))
+        runFor(rt, wallMs: 3_000)
+        s = rt.snapshot()
+        #expect(s.apps[1].lines[2].hasSuffix("(0%)"))
+    }
+
     /// Spec M12 §3–§5: the NAS runs the sink, the console swaps its card like a laptop, the IoT devices have Wi-Fi only.
     @Test func nasConsoleAndIotAreHosts() throws {
         let rt = Runtime()
