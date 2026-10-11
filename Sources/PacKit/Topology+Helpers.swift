@@ -17,6 +17,12 @@ extension DeviceKind {
         case .accessPoint: "Access point"
         case .tablet: "Tablet"
         case .smartphone: "Smartphone"
+        case .modem: "Modem DSL"
+        case .nas: "NAS"
+        case .console: "Console"
+        case .smartBulb: "Lampadina smart"
+        case .thermostat: "Termostato"
+        case .smartSpeaker: "Smart speaker"
         }
     }
 
@@ -34,13 +40,20 @@ extension DeviceKind {
         case .accessPoint: "AP"
         case .tablet: "TAB"
         case .smartphone: "PHONE"
+        case .modem: "MODEM"
+        case .nas: "NAS"
+        case .console: "CONSOLE"
+        case .smartBulb: "LAMP"
+        case .thermostat: "THERM"
+        case .smartSpeaker: "SPK"
         }
     }
 
-    public var hasIp: Bool { ![.switch, .hub, .accessPoint].contains(self) }
+    public var hasIp: Bool { ![.switch, .hub, .accessPoint, .modem].contains(self) }
 
-    /// PCs, laptops, servers, printers, Smart TVs, tablets and smartphones: DHCP client and a name server setting.
-    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone].contains(self) }
+    /// PCs, laptops, servers, printers, Smart TVs, tablets and smartphones, and the home devices but the modem (spec M12): DHCP client
+    /// and a name server setting.
+    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone, .nas, .console, .smartBulb, .thermostat, .smartSpeaker].contains(self) }
 }
 
 /// Palette entries that drop a plain server with a service already on (spec M10 §3); the raw value is the drag payload.
@@ -63,6 +76,10 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .accessPoint: [.wifi, .tables]
     case .pc, .laptop, .tablet, .smartphone: [.interfaces, .routing, .wifi, .tables, .app]
     case .tv: [.interfaces, .routing, .tables, .app]
+    // Spec M12: a modem shows its two ports; a NAS is a printer with disks; a console and the IoT devices have a PC's tabs.
+    case .modem: [.ports]
+    case .nas: inspectorTabs(for: .printer)
+    case .console, .smartBulb, .thermostat, .smartSpeaker: inspectorTabs(for: .pc)
     }
 }
 

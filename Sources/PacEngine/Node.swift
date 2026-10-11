@@ -15,6 +15,8 @@ final class Interface {
     let dot1q: (parent: Interface, vlan: Int)?
     /// A Wi-Fi interface's radio (spec M11 §4); nil on a cable.
     var radio: Radio?
+    /// A DSL port's sync rates (spec M12 §2): it sends at `up` and receives at `down`, whatever the cable.
+    var sync: (down: Double, up: Double)?
 
     init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node

@@ -55,6 +55,12 @@ extension DeviceKind {
         case .accessPoint: "antenna.radiowaves.left.and.right"
         case .tablet: "ipad"
         case .smartphone: "iphone"
+        case .modem: "phone.connection"
+        case .nas: "externaldrive.connected.to.line.below"
+        case .console: "gamecontroller"
+        case .smartBulb: "lightbulb"
+        case .thermostat: "thermometer.medium"
+        case .smartSpeaker: "homepod"
         }
     }
 }

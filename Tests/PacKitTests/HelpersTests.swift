@@ -24,6 +24,16 @@ import Testing
         #expect(inspectorTabs(for: .pc) == [.interfaces, .routing, .wifi, .tables, .app]) // the Wi-Fi tab since M11
     }
 
+    /// Spec M12 §2–§5: Italian labels, short prefixes; all but the modem are hosts; tabs reused from the printer, the PC and the hub.
+    @Test func homeDevicesHaveItalianNamesPrefixesAndTabs() {
+        let kinds: [DeviceKind] = [.modem, .nas, .console, .smartBulb, .thermostat, .smartSpeaker]
+        #expect(kinds.map(\.label) == ["Modem DSL", "NAS", "Console", "Lampadina smart", "Termostato", "Smart speaker"])
+        #expect(kinds.map { defaultName($0, taken: []) } == ["MODEM1", "NAS1", "CONSOLE1", "LAMP1", "THERM1", "SPK1"])
+        #expect(kinds.map(\.isHost) == [false, true, true, true, true, true] && !DeviceKind.modem.hasIp && DeviceKind.nas.hasIp)
+        #expect(inspectorTabs(for: .modem) == [.ports] && inspectorTabs(for: .nas) == inspectorTabs(for: .printer))
+        #expect([DeviceKind.console, .smartBulb, .thermostat, .smartSpeaker].allSatisfy { inspectorTabs(for: $0) == inspectorTabs(for: .pc) })
+    }
+
     @Test func picksTheLowestFreeDefaultNamePerKind() throws {
         let nodes = try snapshot().nodes
         #expect(defaultName(.pc, existing: nodes) == "PC2")
