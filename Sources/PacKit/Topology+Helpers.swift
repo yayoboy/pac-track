@@ -37,6 +37,13 @@ extension DeviceKind {
     public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv].contains(self) }
 }
 
+/// Palette entries that drop a plain server with a service already on (spec M10 §3); the raw value is the drag payload.
+public enum ServerPreset: String, Sendable {
+    case dns = "server-dns", dhcp = "server-dhcp"
+
+    public var label: String { self == .dns ? "Server DNS" : "Server DHCP" }
+}
+
 /// Node inspector tabs, in display order.
 public enum InspectorTab: String, CaseIterable, Sendable {
     case interfaces = "Interfacce", ports = "Porte", routing = "Routing", services = "Servizi", tables = "Tabelle", app = "App"

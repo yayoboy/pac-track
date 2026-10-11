@@ -226,11 +226,11 @@ public final class Editor {
         grid ? snap(p) : p
     }
 
-    public func addDevice(_ kind: DeviceKind, at pos: Pos) async {
-        await serialized { await self.addDeviceNow(kind, at: pos) }
+    public func addDevice(_ kind: DeviceKind, at pos: Pos, preset: ServerPreset? = nil) async {
+        await serialized { await self.addDeviceNow(kind, at: pos, preset: preset) }
     }
 
-    private func addDeviceNow(_ kind: DeviceKind, at pos: Pos) async {
+    private func addDeviceNow(_ kind: DeviceKind, at pos: Pos, preset: ServerPreset?) async {
         let id = newId()
         positions[id] = pos
         var cmds: [Command] = [.addNode(id: id, kind: kind, name: defaultName(kind, existing: snapshot.nodes))]
@@ -242,6 +242,13 @@ public final class Editor {
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
         if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
+        // Server presets (spec M10 §3): 192.168.1.0/24 with .1 left to the router; the pool is the one the Servizi switch suggests.
+        switch preset {
+        case .dhcp?: cmds += [.setIp(node: id, iface: "eth0", cidr: "192.168.1.2/24"),
+                              .setDhcpServer(node: id, config: suggestedDhcpConfig(cidr: "192.168.1.2/24"))]
+        case .dns?: cmds += [.setIp(node: id, iface: "eth0", cidr: "192.168.1.3/24"), .setDnsServer(node: id, records: [])]
+        case nil: break
+        }
         if await editNow(cmds) {
             selection = .node(id)
         }

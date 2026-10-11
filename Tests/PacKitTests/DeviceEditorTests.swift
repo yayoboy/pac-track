@@ -69,4 +69,37 @@ import Testing
         #expect(editor.snapshot.nodes.map { "\($0.name) \($0.sink)" }
             == ["PRN1 true", "SRV1 true", "PRN2 false", "PRN3 true", "SRV2 true", "PRN4 false"])
     }
+
+    @Test func serverPresetsArriveWithTheirServiceInOneStep() async {
+        await editor.addDevice(.server, at: Pos(x: 0, y: 0), preset: .dhcp)
+        await editor.addDevice(.server, at: Pos(x: 100, y: 0), preset: .dns)
+        let (dhcp, dns) = (editor.snapshot.nodes[0], editor.snapshot.nodes[1])
+        #expect(dhcp.kind == .server && dhcp.name == "SRV1" && dhcp.ifaces[0].cidr == "192.168.1.2/24")
+        #expect(dhcp.dhcpServer == DhcpConfig(start: "192.168.1.100", end: "192.168.1.199") && dhcp.dnsRecords == nil)
+        #expect(dns.kind == .server && dns.name == "SRV2" && dns.ifaces[0].cidr == "192.168.1.3/24" && dns.dnsRecords == [] && dns.dhcpServer == nil)
+        #expect([ServerPreset.dns, .dhcp].map(\.label) == ["Server DNS", "Server DHCP"])
+        await editor.undo()
+        #expect(editor.snapshot.nodes.map(\.name) == ["SRV1"])
+        await editor.undo()
+        #expect(editor.snapshot.nodes.isEmpty)
+    }
+
+    /// Spec M10 §1: SW1, a Server DHCP, a Smart TV, a printer at 192.168.1.50 and a PC in DHCP, nothing else typed.
+    @Test func theSpecLabWorksAsDropped() async {
+        await editor.addDevice(.switch, at: Pos(x: 0, y: 0))
+        await editor.addDevice(.server, at: Pos(x: 0, y: 100), preset: .dhcp)
+        await editor.addDevice(.tv, at: Pos(x: 100, y: 100))
+        await editor.addDevice(.printer, at: Pos(x: 200, y: 100))
+        await editor.addDevice(.pc, at: Pos(x: 300, y: 100))
+        let node = { (name: String) in self.editor.snapshot.nodes.first { $0.name == name }! }
+        for name in ["SRV1", "TV1", "PRN1", "PC1"] { await editor.connect(node("SW1").id, node(name).id) }
+        await editor.edit(.setIp(node: node("PRN1").id, iface: "eth0", cidr: "192.168.1.50/24"))
+        await editor.edit(.setIfaceMode(node: node("PC1").id, iface: "eth0", mode: .dhcp))
+        // Ports forward at 30 s (STP); the DISCOVER retries at 4, 12, 28 and 60 s.
+        for _ in 0..<610 { await editor.tick(wallMs: 100) }
+        #expect(Set([node("TV1").ifaces[0].cidr, node("PC1").ifaces[0].cidr]) == ["192.168.1.100/24", "192.168.1.101/24"])
+        await editor.startTraffic(node("PC1").id, target: "192.168.1.50", kind: .tcp, amount: "100000", seconds: "")
+        for _ in 0..<20 { await editor.tick(wallMs: 100) }
+        #expect(editor.snapshot.apps.last?.lines.last == "iperf Done.")
+    }
 }
