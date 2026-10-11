@@ -1,6 +1,6 @@
 # Pac-Track
 
-Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: disegni una rete, la configuri e guardi ARP, switching, routing, DHCP, DNS, TCP, NAT e firewall pacchetto per pacchetto, con i campi reali di ogni header.
+Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: disegni una rete, la configuri e guardi ARP, switching, VLAN, spanning tree, routing statico e dinamico, IPv6, DHCP, DNS, TCP, NAT e firewall pacchetto per pacchetto, con i campi reali di ogni header.
 
 ![Pac-Track](docs/screenshot.png)
 
@@ -8,8 +8,11 @@ Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: diseg
 
 - **Dispositivi**: PC, laptop, server, router, switch (8, 24 o 48 porte), hub e Cloud/ISP, un router con un'uscita "Internet" simulata che risponde a ping e fa da DNS pubblico.
 - **Protocolli**: Ethernet con MAC learning e ARP; IPv4 con routing statico; ICMP (ping, traceroute); DHCP (DORA, rinnovo, scadenza) e DNS (record A, cache con TTL, NXDOMAIN, nslookup); UDP e TCP (handshake, finestra, ritrasmissioni RFC 6298, fast retransmit, Reno); NAT/PAT e firewall stateful sui router.
+- **VLAN e spanning tree**: porte access e trunk 802.1Q (VLAN ammesse, nativa), MAC table per VLAN, router-on-a-stick con sottointerfacce; PVST+ (802.1D per VLAN) con elezione della root, stati e timer reali, topology change, PortFast e priorità per VLAN.
+- **Routing dinamico**: RIPv2 (RFC 2453, split horizon, triggered update) e OSPFv2 in area 0 (hello/dead, elezione DR/BDR, LSA di tipo 1 e 2, SPF), con distanza amministrativa e metrica in tabella.
+- **IPv6**: dual stack; link-local EUI-64 e indirizzi globali; NDP (NS/NA/RS/RA) con cache dei vicini, SLAAC con DAD; ICMPv6 (ping, traceroute, errori); route statiche IPv6; UDP e TCP su IPv6, DNS AAAA con RDNSS e regole firewall IPv6.
 - **Tempo**: modalità Realtime (da 0.1× a 100×) e Simulation (orologio fermo, un evento alla volta). Stesso seed e stessa rete danno la stessa simulazione.
-- **Osservare**: lista eventi filtrabile e ispettore PDU header per header; pacchetti colorati per protocollo sui cavi; tabelle live (ARP, MAC, routing, NAT, lease DHCP, cache DNS, connessioni TCP); generatore di traffico TCP/UDP con metriche (utilizzo e code dei cavi, throughput, RTT, jitter, perdita).
+- **Osservare**: lista eventi filtrabile e ispettore PDU header per header; pacchetti colorati per protocollo sui cavi; tabelle live (ARP, MAC, routing IPv4 e IPv6, vicini IPv6, spanning tree, vicini e database OSPF, NAT, lease DHCP, cache DNS, connessioni TCP); stato STP alle estremità dei cavi; generatore di traffico TCP/UDP con metriche (utilizzo e code dei cavi, throughput, RTT, jitter, perdita).
 - **Documento**: file `.ptk` (JSON) con apertura, salvataggio automatico, versioni e finestre multiple di macOS; annulla e ripeti; esportazione PNG del canvas.
 
 ## Requisiti
@@ -51,7 +54,7 @@ Convenzioni: testi dell'interfaccia in italiano; codice, commenti e commit in in
 
 ## Fuori perimetro
 
-Wi-Fi, VLAN 802.1Q, STP, routing dinamico (RIP, OSPF), IPv6, CLI per dispositivo, applicazioni oltre DNS e DHCP.
+Wi-Fi, CLI per dispositivo, applicazioni oltre DNS e DHCP. Restano fuori anche RSTP/MST, OSPF multi-area, RIPng/OSPFv3, DHCPv6 e NAT per IPv6.
 
 ## Licenza
 
