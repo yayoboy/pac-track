@@ -40,6 +40,21 @@ import Testing
         #expect(opened && node("HR1").nat != nil && node("HR1").ifaces[0].mode == .dhcp)
     }
 
+    /// Spec M11 §8: Servizi's DHCP switch proposes the LAN's pool with HR1 as gateway and DNS; a copy arrives with the factory LAN,
+    /// DHCP and NAT (settings out of the box, not the user's addresses).
+    @Test func dhcpSwitchAndCopiesKeepTheLan() async {
+        await editor.addDevice(.homeRouter, at: Pos(x: 0, y: 0))
+        let hr = node("HR1").id
+        await editor.edit([.setIfaceMode(node: hr, iface: "Internet", mode: .static), .setIp(node: hr, iface: "Internet", cidr: "203.0.113.7/24")])
+        await editor.enableDhcp(hr, false)
+        await editor.enableDhcp(hr, true)
+        #expect(node("HR1").dhcpServer == DhcpConfig(start: "192.168.0.100", end: "192.168.0.199", gateway: "192.168.0.1", dns: "192.168.0.1"))
+        await editor.duplicate([hr])
+        let copy = node("HR2")
+        #expect(copy.ifaces.last?.cidr == "192.168.0.1/24" && copy.nat == NatConfig(inside: ["LAN"], outside: "Internet")
+            && copy.dhcpServer == DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1", dns: "192.168.0.1"))
+    }
+
     /// Spec M11 §8: the Cloud/ISP hands out the customer's address too.
     @Test func theCloudArrivesWithADhcpPool() async {
         await editor.addDevice(.cloud, at: Pos(x: 0, y: 0))

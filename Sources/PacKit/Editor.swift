@@ -246,15 +246,7 @@ public final class Editor {
                      .setDhcpServer(node: id, config: DhcpConfig(start: "203.0.113.100", end: "203.0.113.199", gateway: "203.0.113.1",
                                                                  dns: "203.0.113.1"))]
         }
-        // A home Wi-Fi router arrives as out of its box (spec M11 §8): its LAN with DHCP and NAT, the Internet port in DHCP; the radio
-        // has an access point's defaults.
-        if kind == .homeRouter {
-            cmds += [.setIp(node: id, iface: "LAN", cidr: "192.168.0.1/24"),
-                     .setDhcpServer(node: id, config: DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1",
-                                                                 dns: "192.168.0.1")),
-                     .setNat(node: id, config: NatConfig(inside: ["LAN"], outside: "Internet")),
-                     .setIfaceMode(node: id, iface: "Internet", mode: .dhcp)]
-        }
+        if kind == .homeRouter { cmds += Self.homeRouterDefaults(id) }
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
         if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
@@ -272,6 +264,15 @@ public final class Editor {
         if await editNow(cmds) {
             selection = .node(id)
         }
+    }
+
+    /// A home Wi-Fi router as out of its box (spec M11 §8): its LAN with DHCP and NAT, the Internet port in DHCP; the radio has an
+    /// access point's defaults.
+    private static func homeRouterDefaults(_ id: String) -> [Command] {
+        [.setIp(node: id, iface: "LAN", cidr: "192.168.0.1/24"),
+         .setDhcpServer(node: id, config: DhcpConfig(start: "192.168.0.100", end: "192.168.0.149", gateway: "192.168.0.1", dns: "192.168.0.1")),
+         .setNat(node: id, config: NatConfig(inside: ["LAN"], outside: "Internet")),
+         .setIfaceMode(node: id, iface: "Internet", mode: .dhcp)]
     }
 
     public func connect(_ aId: String, _ bId: String) async {
@@ -325,12 +326,14 @@ public final class Editor {
         pendingMove = nil
         guard before != current else { return }
         remember(before)
-        await serialized { await self.place(from: PacKit.positions(of: before)) }
+        // Where the drag ended, even if a later drag moves them again while this waits for the queue.
+        let target = positions
+        await serialized { await self.place(target, from: PacKit.positions(of: before)) }
     }
 
-    /// Tells the engine where the devices that moved since `old` are now.
-    private func place(from old: [String: Pos]) async {
-        for (id, pos) in positions.sorted(by: { $0.key < $1.key }) where old[id] != pos && snapshot.nodes.contains(where: { $0.id == id }) {
+    /// Tells the engine where the devices that moved since `old` are in `target`.
+    private func place(_ target: [String: Pos], from old: [String: Pos]) async {
+        for (id, pos) in target.sorted(by: { $0.key < $1.key }) where old[id] != pos && snapshot.nodes.contains(where: { $0.id == id }) {
             await runNow(.move(node: id, to: pos), key: "move")
         }
     }
@@ -350,7 +353,7 @@ public final class Editor {
         let old = positions
         positions = PacKit.positions(of: t)
         // A move undone or redone: the engine follows (a reload already placed everything).
-        if !reload { await place(from: old) }
+        if !reload { await place(positions, from: old) }
         selection = nil
         error = nil
         return true
@@ -460,6 +463,9 @@ public final class Editor {
             if let c = src.station { cmds.append(.setStation(node: id, config: c)) }
             if let c = src.accessPoint { cmds.append(.setAccessPoint(node: id, config: c)) }
             if src.kind == .switch { cmds.append(.setPorts(id: id, count: src.ifaces.count)) }
+            // A home router's LAN, DHCP and NAT are its factory settings, not the user's addresses (spec M11 §8); the Internet port's
+            // mode comes with the other modes below.
+            if src.kind == .homeRouter { cmds += Self.homeRouterDefaults(id).filter { if case .setIfaceMode = $0 { false } else { true } } }
             // Port VLANs and subinterfaces are structure, like the size; their addresses stay behind.
             for i in src.ifaces {
                 if let c = i.switchport { cmds.append(.setSwitchport(node: id, iface: i.name, config: c)) }
@@ -504,14 +510,17 @@ public final class Editor {
                 await self.editNow([.setDhcpServer(node: id, config: nil)], key: key)
                 return
             }
-            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), let cidr = node.ifaces.lazy.compactMap(\.cidr).first,
+            // A home router serves its LAN, never the provider's side (spec M11 §8).
+            let candidates = { (n: NodeView) in n.kind == .homeRouter ? n.ifaces.filter { $0.name == "LAN" } : n.ifaces }
+            guard let node = self.snapshot.nodes.first(where: { $0.id == id }), let cidr = candidates(node).lazy.compactMap(\.cidr).first,
                   var config = suggestedDhcpConfig(cidr: cidr) else {
                 self.error = EditorError(key: key, message: "Assign an IPv4 address to an interface first")
                 return
             }
             let own = String(cidr.split(separator: "/")[0])
-            config.gateway = node.kind == .router || node.kind == .cloud ? own : gatewayOf(node)
-            config.dns = node.dnsRecords != nil ? own : node.nameServer
+            config.gateway = [.router, .cloud, .homeRouter].contains(node.kind) ? own : gatewayOf(node)
+            // A home router answers names itself, forwarding them to the provider (spec M11 §8).
+            config.dns = node.dnsRecords != nil || node.kind == .homeRouter ? own : node.nameServer
             await self.editNow([.setDhcpServer(node: id, config: config)], key: key)
         }
     }
