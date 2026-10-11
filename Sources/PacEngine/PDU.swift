@@ -52,13 +52,14 @@ let DOT11_DIFS_US = DOT11_SIFS_US + 2 * DOT11_SLOT_US
 let DOT11_BACKOFF_US = 7 * DOT11_SLOT_US
 /// ERP-OFDM's signal extension after every PPDU (§18, aSignalExtension).
 let DOT11_SIGNAL_EXTENSION_US = 6
-/// Mb/s: unicast data; management and group frames (the lowest basic rate); ACKs (the highest basic rate not above 54).
+/// Mb/s: unicast data; management and group frames (the lowest basic rate); ACKs after data (the highest basic rate not above 54).
+/// An ACK goes at the highest basic rate not above the frame's (§10.7.6.5.2): 24 after 54 Mb/s, 6 after 6.
 let DOT11_DATA_RATE = 54
 let DOT11_BASIC_RATE = 6
 let DOT11_ACK_RATE = 24
 /// An ACK: frame control, duration, receiver address, FCS.
 let DOT11_ACK_BYTES = 14
-/// SIFS + the ACK: the Duration of a unicast frame (§9.2.5.2), and how long the medium stays busy after it.
+/// SIFS + the ACK: the Duration of a unicast data frame (§9.2.5.2), and how long the medium stays busy after it.
 let DOT11_ACK_US = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: DOT11_ACK_RATE)
 /// Frames a radio holds while the medium is busy, like a cable's default queue (spec M11 §4).
 let DOT11_QUEUE_LIMIT = 1000
@@ -447,12 +448,13 @@ func dot11TxUs(bytes: Int, rateMbps: Int) -> Int {
 }
 
 /// The medium's time for one frame (spec M11 §4): DIFS, backoff and the PPDU until it is received, then SIFS + ACK for a unicast
-/// one (its Duration field). Unicast data goes at 54 Mb/s, management and group frames at 6.
+/// one (its Duration field). Unicast data goes at 54 Mb/s, management and group frames at 6; the ACK at 24 or 6.
 func dot11Airtime(_ f: EthernetFrame) -> (frame: Int, ack: Int) {
     let group = isGroupMac(f.receiver)
     let mgmt = if case .mgmt = f.payload { true } else { false }
     let rate = mgmt || group ? DOT11_BASIC_RATE : DOT11_DATA_RATE
-    return (DOT11_DIFS_US + DOT11_BACKOFF_US + dot11TxUs(bytes: f.size + 4, rateMbps: rate), group ? 0 : DOT11_ACK_US)
+    let ack = DOT11_SIFS_US + dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: min(rate, DOT11_ACK_RATE))
+    return (DOT11_DIFS_US + DOT11_BACKOFF_US + dot11TxUs(bytes: f.size + 4, rateMbps: rate), group ? 0 : ack)
 }
 
 func internetChecksum(_ bytes: [UInt8]) -> UInt16 {

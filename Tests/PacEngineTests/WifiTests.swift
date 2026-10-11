@@ -64,12 +64,12 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
             "40000 tx TAB1 Probe Request, SSID=pac-track",
             "60000 tx TAB1 Authentication, Open System, transazione 1",
             "60169 rx AP1 Authentication, Open System, transazione 1",
-            "60213 tx AP1 Authentication, Open System, transazione 2, stato 0",
-            "60382 rx TAB1 Authentication, Open System, transazione 2, stato 0",
-            "60426 tx TAB1 Association Request, SSID=pac-track",
-            "60619 rx AP1 Association Request, SSID=pac-track",
-            "60663 tx AP1 Association Response, stato 0, AID=1",
-            "60844 rx TAB1 Association Response, stato 0, AID=1",
+            "60229 tx AP1 Authentication, Open System, transazione 2, stato 0",
+            "60398 rx TAB1 Authentication, Open System, transazione 2, stato 0",
+            "60458 tx TAB1 Association Request, SSID=pac-track",
+            "60651 rx AP1 Association Request, SSID=pac-track",
+            "60711 tx AP1 Association Response, stato 0, AID=1",
+            "60892 rx TAB1 Association Response, stato 0, AID=1",
         ])
         let seqs = { (node: String) in sim.log.all.filter { $0.kind == .tx && $0.node == node }.compactMap { $0.frame?.air?.seq } }
         #expect(seqs("TAB1") == [0, 1, 2, 3, 4] && seqs("AP1") == [0, 1, 2])
@@ -101,7 +101,7 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
         sim.run(5_100 * MS)
         let probes = sim.log.all.filter { $0.kind == .tx && $0.node == "TAB1" && $0.frame?.payload == .mgmt(.probeRequest(ssid: "pac-track")) }
         #expect(probes.map { $0.time / US } == [0, 20_000, 40_000, 5_060_000, 5_080_000, 5_100_000])
-        #expect(mgmtLog(sim).last == "5120844 rx TAB1 Association Response, stato 0, AID=1" && tab.station!.state == .associated)
+        #expect(mgmtLog(sim).last == "5120892 rx TAB1 Association Response, stato 0, AID=1" && tab.station!.state == .associated)
     }
 
     /// Spec M11 §5: a new SSID on the access point is a group Deauthentication (reason 3) and the stations scan again; a new network
@@ -258,7 +258,7 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
     }
 
     /// Spec M11 §5: DAD and the DHCP client start when the association does (DISCOVER and NS wait for the end of the Association
-    /// Response's ACK, at 60.888 ms); the lease goes when the association ends and comes back with the next one.
+    /// Response's ACK, at 60.952 ms); the lease goes when the association ends and comes back with the next one.
     @Test func dhcpAndDadStartAtAssociationAndDhcpStopsWhenItEnds() throws {
         let sim = Sim()
         let ap = AccessPoint(sim: sim, id: "AP1")
@@ -272,7 +272,7 @@ private let WIFI_GOODPUT = 1470.0 * 8 / 389e-6
         try tab.station!.configure(StationConfig(ssid: "pac-track"))
         sim.run(2 * S)
         let data = sim.log.all.filter { $0.kind == .tx && $0.node == "TAB1" && !isMgmt($0) }
-        #expect(data.prefix(2).map { "\($0.time / US) \(eventView($0).proto)" } == ["60888 ndp", "61065 dhcp"])
+        #expect(data.prefix(2).map { "\($0.time / US) \(eventView($0).proto)" } == ["60952 ndp", "61129 dhcp"])
         #expect(drops(sim, .notAssociated) == 0 && tab.nic.ipv4.map { formatIp($0.addr) } == "192.168.1.100")
         ap.powered = false
         ap.reset()

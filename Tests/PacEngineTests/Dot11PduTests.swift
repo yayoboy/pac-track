@@ -38,15 +38,17 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
 
     /// 802.11g ERP-OFDM, short slot (spec M11 §4): DIFS 28 µs, backoff 7 × 9 µs, then 20 µs + 4 µs symbols + 6 µs of signal extension;
     /// unicast adds SIFS 10 µs + a 14-byte ACK at 24 Mb/s (34 µs). Management and group frames at 6 Mb/s, unicast data at 54.
+    /// The ACK goes at the highest basic rate not above the frame's (§10.7.6.5.2): after a 6 Mb/s management frame at 6 (50 µs).
     @Test func airtimeFollowsErpOfdmTiming() {
         #expect(DOT11_DIFS_US == 28 && DOT11_BACKOFF_US == 63)
         #expect(dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: DOT11_ACK_RATE) == 34 && DOT11_ACK_US == 44)
+        #expect(dot11TxUs(bytes: DOT11_ACK_BYTES, rateMbps: DOT11_BASIC_RATE) == 50)
         let probe = mgmt(.probeRequest(ssid: "pac-track"), to: BROADCAST_MAC, bssid: BROADCAST_MAC)
         #expect(probe.receiver == BROADCAST_MAC && air(probe) == [189, 0])
         #expect([mgmt(.probeResponse(ssid: "pac-track", channel: 6, timestamp: 0), from: AP, to: STA), mgmt(.authentication(seq: 1, status: 0)),
                  mgmt(.associationRequest(ssid: "pac-track")), mgmt(.associationResponse(status: 0, aid: 1), from: AP, to: STA),
                  mgmt(.deauthentication(reason: 3)), mgmt(.deauthentication(reason: 3), from: AP, to: BROADCAST_MAC)].map(air)
-            == [[209, 44], [169, 44], [193, 44], [181, 44], [161, 44], [161, 0]])
+            == [[209, 60], [169, 60], [193, 60], [181, 60], [161, 60], [161, 0]])
         // A 56-byte ping: 24 + LLC/SNAP 8 + 84 = 116 B, 46 µs at 54 Mb/s; to the AP its receiver (address 1) is the BSSID.
         #expect(echo(toDS: true).size == 116 && echo(toDS: true).receiver == AP && air(echo(toDS: true)) == [137, 44])
         #expect(echo(toDS: false).receiver == DST)
@@ -103,7 +105,7 @@ private func lines(_ l: PduLayer) -> [String] { l.fields.map { "\($0.name): \($0
                                           frame: mgmt(.associationResponse(status: 0, aid: 1), from: AP, to: STA)))
         #expect(response.map(\.title) == ["IEEE 802.11", "Gestione 802.11"] && response.map(\.bytes) == [40, 16])
         #expect(lines(response[0]) == [
-            "Versione: 0", "Tipo: 0 (gestione)", "Sottotipo: 1 (Association Response)", "Flag: 0x00", "Duration: 44 µs",
+            "Versione: 0", "Tipo: 0 (gestione)", "Sottotipo: 1 (Association Response)", "Flag: 0x00", "Duration: 60 µs",
             "Indirizzo 1 (ricevitore, destinazione): 02:00:00:00:00:01", "Indirizzo 2 (trasmettitore, sorgente): 02:00:00:00:00:0a",
             "Indirizzo 3 (BSSID): 02:00:00:00:00:0a", "Numero di sequenza: 0", "Frammento: 0",
         ])
