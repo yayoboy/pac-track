@@ -728,8 +728,9 @@ enum SelfTest {
         return failures
     }
 
-    /// M11a (spec M11 §1): the Wi-Fi lab as dropped. Images: the lab with TAB1's Wi-Fi tab and an Association Response in the PDU
-    /// inspector under the full chip row; AP1's Wi-Fi tab with an SSID error and its tables; LAPTOP1's tables.
+    /// M11a (spec M11 §1): the Wi-Fi lab as dropped. Images: TAB1's DHCP DISCOVER (To DS) in the PDU inspector; the lab with TAB1's
+    /// Wi-Fi tab and an Association Response in the PDU inspector under the full chip row; LAPTOP1's Wi-Fi tab (card, SSID, status);
+    /// AP1's Wi-Fi tab with an SSID error and its tables; LAPTOP1's tables.
     private static func m11aScenario(output: String) async -> [String] {
         var failures: [String] = []
         let editor = Editor(client: Simulation())
@@ -758,6 +759,10 @@ enum SelfTest {
         if let discover = editor.events.first(where: { $0.proto == .dhcp && $0.kind == .tx && $0.node == id("TAB1") }) {
             await editor.selectEvent(discover.id)
             if editor.pdu?.map(\.title) != ["IEEE 802.11", "LLC/SNAP", "IPv4", "UDP", "DHCP"] { failures.append("M11a data PDU \(String(describing: editor.pdu?.map(\.title)))") }
+            let flag = editor.pdu?.first?.fields.first { $0.name == "Flag" }?.value
+            if flag != "0x01 (To DS)" { failures.append("M11a data frame flag \(String(describing: flag))") }
+            editor.bottomTab = .events
+            if !render(editor, to: sibling(output, "m11a-data")) { failures.append("could not write the M11a data frame image") }
         } else {
             failures.append("no DHCP frame from TAB1 in the event list")
         }
@@ -771,6 +776,11 @@ enum SelfTest {
         editor.select(.node(id("TAB1")))
         editor.inspectorTab = .wifi
         if !render(editor, to: sibling(output, "m11a-lab")) { failures.append("could not write the M11a lab image") }
+        editor.select(.node(id("LAPTOP1")))
+        let laptop = editor.snapshot.nodes.first { $0.name == "LAPTOP1" }
+        let status = laptop?.station.map { wifiStatus($0, in: editor.snapshot.nodes) }
+        if status != "Associato a pac-track · AP1 · canale 6" { failures.append("M11a LAPTOP1 status \(String(describing: status))") }
+        if !render(editor, to: sibling(output, "m11a-laptop")) { failures.append("could not write the M11a laptop image") }
         await editor.edit(.setAccessPoint(node: id("AP1"), config: ApConfig(ssid: "", channel: 6)), key: "ssid:\(id("AP1"))")
         if editor.error?.message != "SSID must be 1 to 32 bytes" { failures.append("M11a SSID error \(String(describing: editor.error))") }
         editor.select(.node(id("AP1")))
