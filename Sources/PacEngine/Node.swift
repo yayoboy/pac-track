@@ -17,6 +17,8 @@ final class Interface {
     var radio: Radio?
     /// A home router's `LAN` (spec M11 §8): the IP interface of its bridge, which sends through the bridge's ports; no cable.
     var bridge = false
+    /// A DSL port's sync rates (spec M12 §2): it sends at `up` and receives at `down`, whatever the cable.
+    var sync: (down: Double, up: Double)?
 
     init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node
@@ -57,7 +59,7 @@ extension Interface {
         return link.map { [$0.peer(self)] } ?? []
     }
 
-    /// IP interfaces in this interface's broadcast domain: across cables, hubs, switches and the air within one VLAN (access ports, a
+    /// IP interfaces in this interface's broadcast domain: across cables, hubs, modems, switches and the air within one VLAN (access ports, a
     /// trunk's allowed and native VLANs, subinterfaces), whatever their power or link state; self excluded.
     func segmentPeers() -> [Interface] {
         /// An interface reached by a frame carrying `tag` on the wire.

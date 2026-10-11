@@ -250,8 +250,11 @@ public final class Editor {
         // A printer receives print jobs (the generator's traffic); a Smart TV takes its address like out of the box (spec M10 §2).
         if kind == .printer { cmds.append(.setSink(node: id, on: true)) }
         if kind == .tv { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
-        // Tablets and smartphones look for the network a new access point brings, in DHCP (spec M11 §2).
-        if kind == .tablet || kind == .smartphone {
+        // A NAS stores what is copied to it; a NAS and a console take their address like out of the box (spec M12 §3–§4).
+        if kind == .nas { cmds.append(.setSink(node: id, on: true)) }
+        if kind == .nas || kind == .console { cmds.append(.setIfaceMode(node: id, iface: "eth0", mode: .dhcp)) }
+        // Tablets and smartphones look for the network a new access point brings, in DHCP (spec M11 §2); IoT devices too (spec M12 §5).
+        if [.tablet, .smartphone, .smartBulb, .thermostat, .smartSpeaker].contains(kind) {
             cmds += [.setStation(node: id, config: StationConfig(ssid: ApConfig().ssid)), .setIfaceMode(node: id, iface: "wlan0", mode: .dhcp)]
         }
         // Server presets (spec M10 §3): 192.168.1.0/24 with .1 left to the router; the pool is the one the Servizi switch suggests.

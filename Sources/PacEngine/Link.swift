@@ -110,8 +110,10 @@ final class Link {
     private func startTx(_ from: Interface, _ dir: Direction, _ frame: EthernetFrame) {
         dir.busy = true
         sim.emit(.tx, node: from.node.id, iface: from.name, frame: frame)
+        // A DSL port sends at its upstream and receives at its downstream sync rate (spec M12 §2); a slower cable wins.
+        let bps = min(opts.bandwidthBps, from.sync?.up ?? .infinity, peer(from).sync?.down ?? .infinity)
         // At least 1 ns, so time always advances (a zero-time loop would never end).
-        let txNs = max(1, Int((Double(frame.wireBytes * 8) * Double(S) / opts.bandwidthBps).rounded()))
+        let txNs = max(1, Int((Double(frame.wireBytes * 8) * Double(S) / bps).rounded()))
         dir.busyNs += txNs
         sim.sched.after(txNs) { [self] in
             let to = peer(from)

@@ -6,7 +6,7 @@ Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: diseg
 
 ## Cosa fa
 
-- **Dispositivi**: PC, laptop, stampante (riceve il traffico del generatore), Smart TV (in DHCP), server (anche già pronti come server DNS o DHCP), router, switch (8, 24 o 48 porte), hub e Cloud/ISP, un router con un'uscita "Internet" simulata che risponde a ping, fa da DNS pubblico e dà l'indirizzo al router del cliente in DHCP; router Wi-Fi domestico (porta Internet in DHCP, quattro porte LAN e il Wi-Fi in un'unica rete 192.168.0.1/24 con server DHCP, NAT e DNS che inoltra al provider).
+- **Dispositivi**: PC, laptop, stampante (riceve il traffico del generatore), Smart TV (in DHCP), server (anche già pronti come server DNS o DHCP), router, switch (8, 24 o 48 porte), hub e Cloud/ISP, un router con un'uscita "Internet" simulata che risponde a ping, fa da DNS pubblico e dà l'indirizzo al router del cliente in DHCP. Per la rete di casa: router Wi-Fi domestico (porta Internet in DHCP, quattro porte LAN e il Wi-Fi in un'unica rete 192.168.0.1/24 con server DHCP, NAT e DNS che inoltra al provider), modem DSL in bridge (linea VDSL2 100/20 Mb/s fra `dsl0` e la Cloud), NAS (riceve le copie del generatore, in DHCP), console (in DHCP, cavo o Wi-Fi) e dispositivi IoT solo Wi-Fi: lampadina smart, termostato e smart speaker.
 - **Protocolli**: Ethernet con MAC learning e ARP; IPv4 con routing statico; ICMP (ping, traceroute); DHCP (DORA, rinnovo, scadenza) e DNS (record A, cache con TTL, NXDOMAIN, nslookup); UDP e TCP (handshake, finestra, ritrasmissioni RFC 6298, fast retransmit, Reno); NAT/PAT e firewall stateful sui router.
 - **VLAN e spanning tree**: porte access e trunk 802.1Q (VLAN ammesse, nativa), MAC table per VLAN, router-on-a-stick con sottointerfacce; PVST+ (802.1D per VLAN) con elezione della root, stati e timer reali, topology change, PortFast e priorità per VLAN.
 - **Routing dinamico**: RIPv2 (RFC 2453, split horizon, triggered update) e OSPFv2 in area 0 (hello/dead, elezione DR/BDR, LSA di tipo 1 e 2, SPF), con distanza amministrativa e metrica in tabella.
@@ -55,7 +55,7 @@ Convenzioni: testi dell'interfaccia in italiano; codice, commenti e commit in in
 
 ## Fuori perimetro
 
-CLI per dispositivo, applicazioni oltre DNS e DHCP. Restano fuori anche RSTP/MST, OSPF multi-area, RIPng/OSPFv3, DHCPv6 e NAT per IPv6. Del Wi-Fi: controller WLC/CAPWAP, 802.1X/RADIUS ed EAP, WEP, WPA3, mesh e WDS, più SSID per access point, ad hoc, 5 GHz, 802.11n/ac/ax, risparmio energetico, frammentazione, collisioni e interferenza fra canali, perdite e ritrasmissioni in aria.
+CLI per dispositivo, applicazioni oltre DNS e DHCP (anche su NAS e IoT: niente SMB, MQTT o Matter); modem via cavo o in fibra e PPPoE. Restano fuori anche RSTP/MST, OSPF multi-area, RIPng/OSPFv3, DHCPv6 e NAT per IPv6. Del Wi-Fi: controller WLC/CAPWAP, 802.1X/RADIUS ed EAP, WEP, WPA3, mesh e WDS, più SSID per access point, ad hoc, 5 GHz, 802.11n/ac/ax, risparmio energetico, frammentazione, collisioni e interferenza fra canali, perdite e ritrasmissioni in aria.
 
 ## Licenza
 

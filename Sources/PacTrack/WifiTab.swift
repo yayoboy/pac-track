@@ -13,7 +13,7 @@ struct WifiTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let ap = node.accessPoint { accessPoint(ap) }
-            if node.kind == .pc || node.kind == .laptop { card }
+            if [.pc, .laptop, .console].contains(node.kind) { card }
             if let s = node.station { station(s) }
         }
     }

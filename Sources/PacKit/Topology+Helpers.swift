@@ -18,6 +18,12 @@ extension DeviceKind {
         case .tablet: "Tablet"
         case .smartphone: "Smartphone"
         case .homeRouter: "Router Wi-Fi"
+        case .modem: "Modem DSL"
+        case .nas: "NAS"
+        case .console: "Console"
+        case .smartBulb: "Lampadina smart"
+        case .thermostat: "Termostato"
+        case .smartSpeaker: "Smart speaker"
         }
     }
 
@@ -36,13 +42,20 @@ extension DeviceKind {
         case .tablet: "TAB"
         case .smartphone: "PHONE"
         case .homeRouter: "HR"
+        case .modem: "MODEM"
+        case .nas: "NAS"
+        case .console: "CONSOLE"
+        case .smartBulb: "LAMP"
+        case .thermostat: "THERM"
+        case .smartSpeaker: "SPK"
         }
     }
 
-    public var hasIp: Bool { ![.switch, .hub, .accessPoint].contains(self) }
+    public var hasIp: Bool { ![.switch, .hub, .accessPoint, .modem].contains(self) }
 
-    /// PCs, laptops, servers, printers, Smart TVs, tablets and smartphones: DHCP client and a name server setting.
-    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone].contains(self) }
+    /// PCs, laptops, servers, printers, Smart TVs, tablets and smartphones, and the home devices but the modem (spec M12): DHCP client
+    /// and a name server setting.
+    public var isHost: Bool { [.pc, .laptop, .server, .printer, .tv, .tablet, .smartphone, .nas, .console, .smartBulb, .thermostat, .smartSpeaker].contains(self) }
 }
 
 /// Palette entries that drop a plain server with a service already on (spec M10 §3); the raw value is the drag payload.
@@ -67,6 +80,10 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .homeRouter: [.interfaces, .routing, .services, .tables, .app]
     case .pc, .laptop, .tablet, .smartphone: [.interfaces, .routing, .wifi, .tables, .app]
     case .tv: [.interfaces, .routing, .tables, .app]
+    // Spec M12: a modem shows its two ports; a NAS is a printer with disks; a console and the IoT devices have a PC's tabs.
+    case .modem: [.ports]
+    case .nas: inspectorTabs(for: .printer)
+    case .console, .smartBulb, .thermostat, .smartSpeaker: inspectorTabs(for: .pc)
     }
 }
 
@@ -154,13 +171,21 @@ func defaultName(_ kind: DeviceKind, taken: Set<String>) -> String {
 }
 
 /// A cable never goes into a Wi-Fi interface (spec M11 §7).
-/// The port a new cable takes: the first free one. A home router's Internet port takes the cable toward a Cloud/ISP or a router, its
-/// LAN ports every other (spec M11 §8).
+/// The port a new cable takes: the first free one. A home router's Internet port takes the cable toward a Cloud/ISP, a router or a
+/// modem, its LAN ports every other (spec M11 §8). A modem's line faces a Cloud/ISP and its Ethernet port anything else, the other
+/// port when that one is taken (spec M12 §2).
 public func firstFreeIface(_ node: NodeView, toward peer: NodeView? = nil) -> String? {
-    let free = node.ifaces.filter { !$0.linked && !$0.wireless }
-    guard node.kind == .homeRouter else { return free.first?.name }
-    let provider = [.cloud, .router].contains(peer?.kind)
-    return free.first { ($0.name == "Internet") == provider }?.name
+    let free = node.ifaces.filter { !$0.linked && !$0.wireless }.map(\.name)
+    switch node.kind {
+    case .homeRouter:
+        let provider = [.cloud, .router, .modem].contains(peer?.kind)
+        return free.first { ($0 == "Internet") == provider }
+    case .modem:
+        guard let peer else { return free.first }
+        return free.first { ($0 == "dsl0") == (peer.kind == .cloud) } ?? free.first
+    default:
+        return free.first
+    }
 }
 
 /// Whether Interfacce offers an address on `iface`: everywhere but a home router's bridge ports (LAN1–LAN4, WLAN), spec M11 §8.
@@ -270,6 +295,21 @@ public func formatBandwidth(_ bps: Double) -> String {
     let units: [(Double, String)] = [(1e9, "Gb/s"), (1e6, "Mb/s"), (1e3, "kb/s")]
     let (scale, unit) = units.first { bps >= $0.0 } ?? (1, "b/s")
     return "\(plain(bps / scale)) \(unit)"
+}
+
+/// A DSL line's rates, down/up: "100/20 Mb/s" (spec M12 §2).
+public func syncLabel(_ sync: (down: Double, up: Double)) -> String {
+    "\(plain(sync.down / 1e6))/\(plain(sync.up / 1e6)) Mb/s"
+}
+
+/// A cable's rate on the canvas: a cable into a modem's line shows the line, capped by the cable (spec M12 §2). Line to line, each
+/// modem sends upstream: the engine's min(sender's up, receiver's down) both ways.
+public func cableRate(_ link: LinkView, in nodes: [NodeView]) -> String {
+    let bps = link.options.bandwidthBps
+    let isLine = { (end: IfaceRef) in end.iface == "dsl0" && nodes.contains { $0.id == end.node && $0.kind == .modem } }
+    guard isLine(link.a) || isLine(link.b) else { return formatBandwidth(bps) }
+    let bothLines = isLine(link.a) && isLine(link.b)
+    return syncLabel((min(bps, bothLines ? VDSL2_SYNC.up : VDSL2_SYNC.down), min(bps, VDSL2_SYNC.up)))
 }
 
 /// One editable DHCP server setting, in the units people type.

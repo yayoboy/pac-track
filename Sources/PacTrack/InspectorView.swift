@@ -155,6 +155,8 @@ private struct NodeInspector: View {
                         cableEnd(iface)
                     }
                     .font(Theme.mono)
+                    // A modem's line and its sync rates (spec M12 §2).
+                    if node.kind == .modem && iface.name == "dsl0" { Text("VDSL2 · " + syncLabel(VDSL2_SYNC)).font(Theme.small).foregroundStyle(Theme.muted) }
                     if let port = iface.switchport { SwitchportFields(node: node.id, iface: iface.name, port: port, editor: editor) }
                 }
             }

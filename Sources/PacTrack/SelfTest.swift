@@ -76,12 +76,19 @@ enum SelfTest {
         if PaletteItem(payload: "server-dhcp") != PaletteItem(kind: .server, preset: .dhcp) || PaletteItem(payload: "tv")?.label != "Smart TV" {
             failures.append("palette payloads")
         }
-        let wireless = [PaletteItem(kind: .accessPoint), PaletteItem(kind: .homeRouter), PaletteItem(kind: .tablet), PaletteItem(kind: .smartphone)]
+        let wireless = [PaletteItem(kind: .accessPoint), PaletteItem(kind: .tablet), PaletteItem(kind: .smartphone)]
         if PaletteView.groups(matching: "wireless").map(\.1) != [wireless] || PaletteView.groups(matching: "wifi").map(\.1) != [wireless]
             || PaletteView.groups(matching: "ap").last?.1 != wireless || PaletteView.groups(matching: "phone").map(\.1) != [[PaletteItem(kind: .smartphone)]] {
             failures.append("palette search: wireless")
         }
-        if PaletteView.groups(matching: "").map(\.0) != ["Rete", "Host", "Server", "Wireless"] { failures.append("palette sections") }
+        if PaletteView.groups(matching: "").map(\.0) != ["Rete", "Host", "Server", "Wireless", "Casa"] { failures.append("palette sections") }
+        // M12 (spec M12 §6): the Casa section by its name and aliases, the modem by its line, the smart devices across sections.
+        let home = [DeviceKind.homeRouter, .modem, .nas, .console, .smartBulb, .thermostat, .smartSpeaker].map { PaletteItem(kind: $0) }
+        if PaletteView.groups(matching: "casa").map(\.1) != [home] || PaletteView.groups(matching: "iot").map(\.1) != [home]
+            || PaletteView.groups(matching: "dsl").map(\.1) != [[PaletteItem(kind: .modem)]]
+            || PaletteView.groups(matching: "smart").map(\.1) != [[PaletteItem(kind: .tv)], [PaletteItem(kind: .smartphone)], [PaletteItem(kind: .smartBulb), PaletteItem(kind: .smartSpeaker)]] {
+            failures.append("palette search: home devices")
+        }
         if !PaletteView.groups(matching: "zzz").isEmpty { failures.append("palette search should find nothing") }
         editor.select(.link(cable))
         // Pinch anchored at the pointer: the world point under the fingers stays put.
@@ -107,6 +114,7 @@ enum SelfTest {
         failures += await m10Scenario(output: output)
         failures += await m11aScenario(output: output)
         failures += await m11bScenario(output: output)
+        failures += await m12Scenario(output: output)
         return failures
     }
 
@@ -859,6 +867,56 @@ enum SelfTest {
             editor.inspectorTab = tab
             if !render(editor, to: sibling(output, "m11b-hr-\(tab.rawValue.lowercased())")) { failures.append("could not write the M11b \(tab) image") }
         }
+        return failures
+    }
+
+    /// M12 (spec M12 §1): the home lab as dropped — ISP1, MODEM1, R1 with NAT and DHCP, SW1 with NAS1, CONSOLE1 and AP1, the IoT devices
+    /// on AP1. Images: the lab with MODEM1's ports, NAS1's Servizi, LAMP1's and CONSOLE1's Wi-Fi tabs, the palette in a short window.
+    private static func m12Scenario(output: String) async -> [String] {
+        var failures: [String] = []
+        let editor = Editor(client: Simulation())
+        // Wide gaps on the top row for the cable labels; the IoT devices left of SW1, clear of the minimap in the bottom-right corner.
+        let layout: [(DeviceKind, Double, Double)] = [(.cloud, 120, 60), (.modem, 380, 60), (.router, 640, 60), (.switch, 640, 190), (.nas, 520, 330),
+                                                      (.console, 720, 290), (.accessPoint, 300, 190), (.smartBulb, 130, 330), (.thermostat, 270, 370),
+                                                      (.smartSpeaker, 400, 310)]
+        for (kind, x, y) in layout { await editor.addDevice(kind, at: Pos(x: x, y: y)) }
+        let id = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.id ?? "" }
+        let cidr = { (name: String) in editor.snapshot.nodes.first { $0.name == name }?.ifaces.first?.cidr }
+        await editor.connect(id("MODEM1"), id("R1")) // R1 Gi0/0 — MODEM1 eth0, though cabled first
+        await editor.connect(id("ISP1"), id("MODEM1")) // ISP1 Gi0/0 — MODEM1 dsl0
+        for name in ["R1", "NAS1", "CONSOLE1", "AP1"] { await editor.connect(id("SW1"), id(name)) }
+        let r1 = id("R1")
+        await editor.edit([.setIp(node: r1, iface: "Gi0/0", cidr: "203.0.113.2/24"), .setIp(node: r1, iface: "Gi0/1", cidr: "192.168.1.1/24"),
+                           .addRoute(node: r1, cidr: "0.0.0.0/0", nextHop: "203.0.113.1"),
+                           .setNat(node: r1, config: NatConfig(inside: ["Gi0/1"], outside: "Gi0/0")),
+                           .setDhcpServer(node: r1, config: DhcpConfig(start: "192.168.1.100", end: "192.168.1.199", gateway: "192.168.1.1", dns: "8.8.8.8"))])
+        let line = editor.snapshot.links.first { [$0.a, $0.b].contains(IfaceRef(node: id("MODEM1"), iface: "dsl0")) }
+        if line.map({ cableRate($0, in: editor.snapshot.nodes) }) != "100/20 Mb/s" || line.map({ [$0.a.node, $0.b.node] }) != [id("ISP1"), id("MODEM1")] {
+            failures.append("M12 DSL line \(String(describing: line))")
+        }
+        for _ in 0..<610 { await editor.tick(wallMs: 100) }
+        let ips = ["NAS1", "CONSOLE1", "LAMP1", "THERM1", "SPK1"].compactMap(cidr)
+        if Set(ips).count != 5 || !ips.allSatisfy({ $0.hasPrefix("192.168.1.1") }) { failures.append("M12 leases \(ips)") }
+        await editor.startTraffic(id("CONSOLE1"), target: cidr("NAS1")?.split(separator: "/").first.map(String.init) ?? "", kind: .tcp, amount: "100000", seconds: "")
+        await editor.run(.ping(node: id("CONSOLE1"), target: "www.example.com"))
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        if editor.snapshot.apps.first?.lines.last != "iperf Done." { failures.append("M12 copy to the NAS \(editor.snapshot.apps.first?.lines ?? [])") }
+        if !(editor.snapshot.apps.last?.lines.contains("4 packets transmitted, 4 received, 0% packet loss") ?? false) {
+            failures.append("M12 ping through the modem \(editor.snapshot.apps.last?.lines ?? [])")
+        }
+        editor.bottomTab = .output
+        editor.select(.node(id("MODEM1")))
+        if !render(editor, to: sibling(output, "m12-lab")) { failures.append("could not write the M12 lab image") }
+        editor.select(.node(id("NAS1")))
+        editor.inspectorTab = .services
+        if !render(editor, to: sibling(output, "m12-nas")) { failures.append("could not write the M12 NAS image") }
+        editor.select(.node(id("LAMP1")))
+        editor.inspectorTab = .wifi
+        if !render(editor, to: sibling(output, "m12-iot")) { failures.append("could not write the M12 IoT image") }
+        editor.select(.node(id("CONSOLE1")))
+        if !render(editor, to: sibling(output, "m12-console")) { failures.append("could not write the M12 console image") }
+        // The minimum window (640 pt) less the toolbar: the palette scrolls, nothing cut or wrapped.
+        if !render(editor, to: sibling(output, "m12-palette-short"), height: 588) { failures.append("could not write the M12 short palette image") }
         return failures
     }
 

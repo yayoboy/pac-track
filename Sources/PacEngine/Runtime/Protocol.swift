@@ -2,6 +2,8 @@
 /// `accessPoint`, `tablet`, `smartphone`: Wi-Fi (spec M11 §2). `homeRouter`: a home Wi-Fi router (spec M11 §8).
 public enum DeviceKind: String, Codable, Sendable, CaseIterable {
     case pc, laptop, server, router, `switch`, hub, cloud, printer, tv, accessPoint, tablet, smartphone, homeRouter
+    /// Home devices (spec M12): a DSL modem in bridge mode, a NAS, a game console, and Wi-Fi-only IoT hosts.
+    case modem, nas, console, smartBulb, thermostat, smartSpeaker
 }
 
 public struct IfaceRef: Codable, Hashable, Sendable {
@@ -189,7 +191,7 @@ public enum Command: Sendable {
     case setDnsServer(node: String, records: [DnsRecord]?)
     case renewDhcp(node: String)
     case nslookup(node: String, name: String)
-    /// Discard sink on TCP/UDP port 9 (servers and printers).
+    /// Discard sink on TCP/UDP port 9 (servers, printers and NASes).
     case setSink(node: String, on: Bool)
     /// iperf3-style transfer of `bytes` to the target's sink.
     case trafficTcp(node: String, target: String, bytes: Int)

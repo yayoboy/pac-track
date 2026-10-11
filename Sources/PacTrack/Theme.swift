@@ -57,6 +57,12 @@ extension DeviceKind {
         case .smartphone: "iphone"
         // The filled router: a router with antennas, as the plain router already shows the outline.
         case .homeRouter: "wifi.router.fill"
+        case .modem: "phone.connection"
+        case .nas: "externaldrive.connected.to.line.below"
+        case .console: "gamecontroller"
+        case .smartBulb: "lightbulb"
+        case .thermostat: "thermometer.medium"
+        case .smartSpeaker: "homepod"
         }
     }
 }

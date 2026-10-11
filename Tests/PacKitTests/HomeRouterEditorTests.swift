@@ -77,6 +77,18 @@ import Testing
         #expect(editor.snapshot.links.count == 5 && editor.error?.message == "HR1 has no free port")
     }
 
+    /// Spec M11 §8, M12 §2: a modem is the provider side too; whichever end is cabled first, it is the modem's eth0 to the home
+    /// router's Internet port, and the Internet port leases its address from ISP1 across the modem's line.
+    @Test func cablesPickTheInternetPortTowardAModem() async {
+        for kind: DeviceKind in [.cloud, .modem, .homeRouter, .modem, .homeRouter] { await editor.addDevice(kind, at: Pos(x: 0, y: 0)) }
+        await editor.connect(node("HR1").id, node("MODEM1").id)
+        await editor.connect(node("MODEM2").id, node("HR2").id)
+        await editor.connect(node("ISP1").id, node("MODEM1").id)
+        #expect(editor.snapshot.links.map { "\($0.a.iface)-\($0.b.iface)" } == ["Internet-eth0", "eth0-Internet", "Gi0/0-dsl0"])
+        for _ in 0..<60 { await editor.tick(wallMs: 100) }
+        #expect(node("HR1").ifaces.first?.cidr == "203.0.113.100/24")
+    }
+
     /// Spec M11 §1 (success M11b), §8: HR1 on ISP1 with `casa` in WPA2-PSK; TAB1 with the right password associates, runs the
     /// handshake and leases 192.168.0.100 with ISP1's DNS, then reaches the Internet; PHONE1 with a wrong one stops on "Password
     /// errata"; dragged out of range TAB1 loses HR1, dragged back it finds it again, slower near the edge.

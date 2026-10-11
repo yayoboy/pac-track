@@ -235,7 +235,7 @@ public final class Runtime {
             start(node, "nslookup \(t)", .nslookup(try NsLookup(node: try liveIpNode(node), name: t)))
         case let .setSink(node, on):
             let n = try ipNode(node)
-            guard !on || nodes[node]?.kind == .server || nodes[node]?.kind == .printer else { throw EngineError("\(n.name) cannot run a traffic sink") }
+            guard !on || [.server, .printer, .nas].contains(nodes[node]?.kind) else { throw EngineError("\(n.name) cannot run a traffic sink") }
             try n.configureSink(on)
         case let .trafficTcp(node, target, bytes):
             let t = target.trimmingCharacters(in: .whitespaces)
@@ -282,10 +282,10 @@ public final class Runtime {
             try radio.configure(config)
         case let .setStation(node, config):
             let n = try get(node)
-            guard let host = n as? Host, let kind = nodes[node]?.kind, [.pc, .laptop, .tablet, .smartphone].contains(kind) else {
+            guard let host = n as? Host, let kind = nodes[node]?.kind, [.pc, .laptop, .tablet, .smartphone, .console, .smartBulb, .thermostat, .smartSpeaker].contains(kind) else {
                 throw EngineError("\(n.name) cannot use Wi-Fi")
             }
-            guard config != nil || kind == .pc || kind == .laptop else { throw EngineError("\(n.name) has only a Wi-Fi card") }
+            guard config != nil || [.pc, .laptop, .console].contains(kind) else { throw EngineError("\(n.name) has only a Wi-Fi card") }
             try host.setStation(config)
         case let .setMode(value):
             guard value != mode else { return }
@@ -552,6 +552,9 @@ public final class Runtime {
         case .hub: Hub(sim: sim, id: id)
         case .cloud: Cloud(sim: sim, id: id)
         case .homeRouter: HomeRouter(sim: sim, id: id)
+        case .nas, .console: Host(sim: sim, id: id)
+        case .smartBulb, .thermostat, .smartSpeaker: Host(sim: sim, id: id, wifi: true)
+        case .modem: Modem(sim: sim, id: id)
         }
     }
 
