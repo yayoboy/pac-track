@@ -58,6 +58,13 @@ final class HomeRouter: Router {
         return entry.iface
     }
 
+    /// A cable coming up on the Internet port without a lease asks at once, as dhcpcd does on carrier (spec M11 §8): the router is
+    /// usually dropped first and cabled later, and the retries are already a minute apart by then.
+    override func linkChanged(_ iface: Interface) {
+        super.linkChanged(iface)
+        if iface === wan, iface.lineUp, let dhcp, !dhcp.hasLease { dhcp.start() }
+    }
+
     /// Switched off or removed: the bridge forgets what it learned and the stations are dropped at once (spec M11 §5).
     override func reset() {
         super.reset()

@@ -139,6 +139,31 @@ private func runFor(_ rt: Runtime, wallMs: Int) {
         #expect(sim.log.all.contains { $0.kind == .tx && $0.node == "HR1" && $0.iface == "Internet" && eventView($0).info.contains("DNS") })
     }
 
+    /// Spec M11 §8: the Internet port asks again as soon as a cable comes up (as dhcpcd does on carrier), not at the next retry.
+    @Test func theInternetPortAsksAgainWhenTheCableComesUp() throws {
+        let sim = Sim()
+        let isp = Cloud(sim: sim, id: "ISP1")
+        try isp.setIp("Gi0/0", "203.0.113.1/24")
+        try isp.configureDhcpServer(DhcpConfig(start: "203.0.113.100", end: "203.0.113.199", gateway: "203.0.113.1"))
+        let hr = HomeRouter(sim: sim, id: "HR1")
+        try hr.setDhcp(true, on: hr.wan)
+        sim.run(70 * S) // retries at 4, 12, 28, 60 s; the next at 124 s
+        _ = try Link(sim: sim, try isp.iface("Gi0/0"), try hr.iface("Internet"))
+        sim.run(2 * S)
+        #expect(hr.wan.ipv4.map { formatIp($0.addr) } == "203.0.113.100")
+    }
+
+    /// Spec M11 §8: a forwarder told to ask itself answers SERVFAIL at once instead of asking itself over and over.
+    @Test func aForwarderNeverAsksItself() throws {
+        let (sim, hr, pc1, _, _) = try home()
+        hr.nameServer = try parseIp("192.168.0.1")
+        var answers: [Resolution] = []
+        pc1.resolver.lookup("www.example.com", server: .v4(try parseIp("192.168.0.1")), useCache: false) { answers.append($0) }
+        sim.run(1 * S)
+        #expect(answers == [.failed])
+        #expect(sim.log.all.filter { $0.node == "HR1" && $0.kind == .tx && eventView($0).info.contains("DNS") }.count == 1)
+    }
+
     /// Spec M11 §8: no spanning tree: a switch's BPDUs stop at the bridge; tagged frames are dropped.
     @Test func noSpanningTreeNoBpdusAndTaggedFramesDropped() throws {
         let (sim, hr, _, _, _) = try home()

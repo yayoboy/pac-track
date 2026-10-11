@@ -102,7 +102,8 @@ final class DnsForwarder {
                                answers: addrs.map { DnsAnswer(ttl: 0, addr: rdata($0)) }, type: q.type)
             self?.node.sendUdp(client, srcPort: PORT_DNS, dstPort: port, payload: .dns(m), src: server)
         }
-        guard let upstream = node.effectiveNameServer else { return reply(DNS_SERVFAIL, []) }
+        // Never itself: told to ask its own address it would ask itself forever (dnsmasq ignores such a server).
+        guard let upstream = node.effectiveNameServer, node.source(for: upstream) != upstream else { return reply(DNS_SERVFAIL, []) }
         node.resolver.lookup(q.name, server: upstream, type: q.type, useCache: false) { r in
             switch r {
             case .found(let addrs): reply(0, addrs)
