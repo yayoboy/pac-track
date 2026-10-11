@@ -20,7 +20,7 @@ Build and open: `scripts/bundle.sh && open build/PacTrack.app`.
 
 **Route statiche, dual stack, servizi IPv4**
 - [ ] Due router collegati (2001:db8:12::/64) con le reti dei PC dietro: R1 ▸ Routing, route statica `2001:db8:2::/64` via `2001:db8:12::2` (e il ritorno su R2). Il ping fra i PC risponde con ttl=62. Un next hop `fe80::1` dà l'errore sotto il modulo.
-- [ ] Con NAT e firewall (policy nega) su R1, il ping IPv4 è bloccato (drop `firewall-default`) e quello IPv6 passa.
+- [ ] Con NAT e firewall (policy nega) su R1, il ping IPv4 è bloccato (drop `firewall-default`) e quello IPv6 passa. *Da M9b:* la policy nega blocca anche IPv6; il ping IPv6 passa solo con una regola che lo consente (NAT resta solo IPv4).
 - [ ] Router-on-a-stick: IPv6 su `Gi0/0.10`, i frame NDP escono con il tag 10.
 
 **File e copie**
