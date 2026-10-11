@@ -11,6 +11,7 @@ Simulatore di reti per macOS, fedele ai protocolli e realistico nei tempi: diseg
 - **VLAN e spanning tree**: porte access e trunk 802.1Q (VLAN ammesse, nativa), MAC table per VLAN, router-on-a-stick con sottointerfacce; PVST+ (802.1D per VLAN) con elezione della root, stati e timer reali, topology change, PortFast e priorità per VLAN.
 - **Routing dinamico**: RIPv2 (RFC 2453, split horizon, triggered update) e OSPFv2 in area 0 (hello/dead, elezione DR/BDR, LSA di tipo 1 e 2, SPF), con distanza amministrativa e metrica in tabella.
 - **IPv6**: dual stack; link-local EUI-64 e indirizzi globali; NDP (NS/NA/RS/RA) con cache dei vicini, SLAAC con DAD; ICMPv6 (ping, traceroute, errori); route statiche IPv6; UDP e TCP su IPv6, DNS AAAA con RDNSS e regole firewall IPv6.
+- **Wi-Fi**: access point (bridge fra cavo e radio, un SSID sui canali 1, 6 o 11), tablet, smartphone e la scheda Wi-Fi di PC e laptop; scansione attiva, autenticazione Open System e associazione; frame 802.11 con LLC/SNAP nell'ispettore; un mezzo radio condiviso per canale con i tempi di 802.11g (DIFS, backoff, ACK); DHCP all'associazione; una linea tratteggiata unisce ogni client al suo access point.
 - **Tempo**: modalità Realtime (da 0.1× a 100×) e Simulation (orologio fermo, un evento alla volta). Stesso seed e stessa rete danno la stessa simulazione.
 - **Osservare**: lista eventi filtrabile e ispettore PDU header per header; pacchetti colorati per protocollo sui cavi; tabelle live (ARP, MAC, routing IPv4 e IPv6, vicini IPv6, spanning tree, vicini e database OSPF, NAT, lease DHCP, cache DNS, connessioni TCP); stato STP alle estremità dei cavi; generatore di traffico TCP/UDP con metriche (utilizzo e code dei cavi, throughput, RTT, jitter, perdita).
 - **Documento**: file `.ptk` (JSON) con apertura, salvataggio automatico, versioni e finestre multiple di macOS; annulla e ripeti; esportazione PNG del canvas.
@@ -54,7 +55,7 @@ Convenzioni: testi dell'interfaccia in italiano; codice, commenti e commit in in
 
 ## Fuori perimetro
 
-Wi-Fi, CLI per dispositivo, applicazioni oltre DNS e DHCP. Restano fuori anche RSTP/MST, OSPF multi-area, RIPng/OSPFv3, DHCPv6 e NAT per IPv6.
+CLI per dispositivo, applicazioni oltre DNS e DHCP. Restano fuori anche RSTP/MST, OSPF multi-area, RIPng/OSPFv3, DHCPv6 e NAT per IPv6. Del Wi-Fi: controller WLC/CAPWAP, 802.1X/RADIUS ed EAP, WEP, WPA3, mesh e WDS, più SSID per access point, ad hoc, 5 GHz, 802.11n/ac/ax, risparmio energetico, frammentazione, collisioni e interferenza fra canali, perdite e ritrasmissioni in aria; WPA2-PSK, router Wi-Fi domestico e portata sul canvas: M11b.
 
 ## Licenza
 
