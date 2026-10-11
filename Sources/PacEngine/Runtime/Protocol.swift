@@ -1,7 +1,7 @@
 /// `cloud`: an ISP edge router whose "Internet" answers by itself (spec §5.5). `printer`, `tv`: hosts (spec M10 §2).
-/// `accessPoint`, `tablet`, `smartphone`: Wi-Fi (spec M11 §2).
+/// `accessPoint`, `tablet`, `smartphone`: Wi-Fi (spec M11 §2). `homeRouter`: a home Wi-Fi router (spec M11 §8).
 public enum DeviceKind: String, Codable, Sendable, CaseIterable {
-    case pc, laptop, server, router, `switch`, hub, cloud, printer, tv, accessPoint, tablet, smartphone
+    case pc, laptop, server, router, `switch`, hub, cloud, printer, tv, accessPoint, tablet, smartphone, homeRouter
 }
 
 public struct IfaceRef: Codable, Hashable, Sendable {

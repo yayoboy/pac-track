@@ -7,9 +7,11 @@ let RIP_TRIGGER_GAP_NS = 1 * S
 
 extension Interface {
     /// IOS "up/up" (spec M8 §2): the device is on, the interface not deleted, its cable (a subinterface's: the physical one's)
-    /// plugged and not failed, and the device at the other end on; over the air, the association (spec M11 §5).
+    /// plugged and not failed, and the device at the other end on; over the air, the association (spec M11 §5); a home router's
+    /// bridge interface, always (spec M11 §8).
     var lineUp: Bool {
         if let radio { return node.powered && up && radio.lineUp }
+        if bridge { return node.powered && up }
         let phys = dot1q?.parent ?? self
         guard node.powered, up, let link = phys.link, link.up else { return false }
         return link.peer(phys).node.powered

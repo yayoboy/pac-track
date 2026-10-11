@@ -175,7 +175,8 @@ public final class Runtime {
             forget(link: id)
         case let .setIp(node, iface, cidr):
             let ip = try ipNode(node)
-            if let client = (ip as? Host)?.dhcp, client.iface.name == iface { throw EngineError("\(iface) is configured by DHCP") }
+            try (ip as? HomeRouter)?.checkAddressable(iface)
+            if let client = ip.dhcp, client.iface.name == iface { throw EngineError("\(iface) is configured by DHCP") }
             if let cidr = cidr?.trimmingCharacters(in: .whitespaces), !cidr.isEmpty {
                 try ip.setIp(iface, cidr)
             } else {
@@ -206,6 +207,12 @@ public final class Runtime {
             start(node, "traceroute \(t)", .trace(try Traceroute(node: try liveIpNode(node), target: t)))
         case let .setIfaceMode(node, iface, mode):
             let n = try get(node)
+            if let home = n as? HomeRouter {
+                // A home router takes its address from the provider on the Internet port (spec M11 §8).
+                guard iface == home.wan.name else { throw EngineError("\(n.name) uses DHCP only on \(home.wan.name)") }
+                try home.setDhcp(mode == .dhcp, on: home.wan)
+                return
+            }
             guard let host = n as? Host else { throw EngineError("\(n.name) has no DHCP client") }
             _ = try host.iface(iface)
             try host.setDhcp(mode == .dhcp)
@@ -221,7 +228,7 @@ public final class Runtime {
             try n.configureDnsServer(records)
         case let .renewDhcp(node):
             let n = try liveIpNode(node)
-            guard let client = (n as? Host)?.dhcp else { throw EngineError("\(n.name) is not using DHCP") }
+            guard let client = n.dhcp else { throw EngineError("\(n.name) is not using DHCP") }
             client.renewNow()
         case let .nslookup(node, name):
             let t = name.trimmingCharacters(in: .whitespaces)
@@ -241,11 +248,11 @@ public final class Runtime {
             start(node, "iperf3 -u -c \(t) -p \(PORT_DISCARD) -b \(Int(bitsPerSecond)) -t \(seconds)", .udpFlow(flow))
         case let .setNat(node, config):
             let n = try ipNode(node)
-            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run NAT") }
+            guard config == nil || [.router, .homeRouter].contains(nodes[node]?.kind) else { throw EngineError("\(n.name) cannot run NAT") }
             n.nat = try config.map { try Nat(node: n, config: $0) }
         case let .setFirewall(node, config):
             let n = try ipNode(node)
-            guard config == nil || nodes[node]?.kind == .router else { throw EngineError("\(n.name) cannot run a firewall") }
+            guard config == nil || [.router, .homeRouter].contains(nodes[node]?.kind) else { throw EngineError("\(n.name) cannot run a firewall") }
             n.firewall = try config.map { try Firewall(node: n, config: $0) }
         case let .setRip(node, config):
             let n = try ipNode(node)
@@ -257,6 +264,7 @@ public final class Runtime {
             try n.configureOspf(config)
         case let .setIpv6(node, iface, config):
             let n = try ipNode(node)
+            try (n as? HomeRouter)?.checkAddressable(iface)
             guard config?.autoconfig != true || n is Host else { throw EngineError("\(n.name) cannot use SLAAC: only hosts autoconfigure") }
             try n.v6.configure(iface, config)
         case let .setIpv6Routing(node, on):
@@ -270,8 +278,8 @@ public final class Runtime {
             n.v6.rdnss = try text.isEmpty ? nil : parseIp6(text)
         case let .setAccessPoint(node, config):
             let n = try get(node)
-            guard let ap = n as? AccessPoint else { throw EngineError("\(n.name) is not an access point") }
-            try ap.radio.configure(config)
+            guard let radio = apRadio(n) else { throw EngineError("\(n.name) is not an access point") }
+            try radio.configure(config)
         case let .setStation(node, config):
             let n = try get(node)
             guard let host = n as? Host, let kind = nodes[node]?.kind, [.pc, .laptop, .tablet, .smartphone].contains(kind) else {
@@ -443,8 +451,8 @@ public final class Runtime {
                 name: node.name,
                 powered: node.powered,
                 ifaces: node.interfaces.map {
-                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.radio?.lineUp ?? (($0.dot1q?.parent ?? $0).link != nil),
-                              mode: host?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil,
+                    IfaceView(name: $0.name, mac: $0.mac, cidr: $0.ipv4.map { "\(formatIp($0.addr))/\($0.prefix)" }, linked: $0.radio?.lineUp ?? ($0.bridge || ($0.dot1q?.parent ?? $0).link != nil),
+                              mode: ip?.dhcp?.iface === $0 ? .dhcp : .`static`, switchport: node is Switch ? $0.switchport.config : nil,
                               ipv6Config: $0.v6?.config, ipv6: addressLines($0), wireless: $0.radio != nil,
                               segment: ip == nil ? [] : $0.segmentPeers().map { IfaceRef(node: $0.node.id, iface: $0.name) })
                 },
@@ -460,7 +468,7 @@ public final class Runtime {
                 mac: (node as? Switch)?.macTable().map { MacRow(vlan: $0.vlan, mac: $0.mac, iface: $0.iface, ageS: $0.ageNs / S) } ?? [],
                 nameServer: ip?.nameServer.map(formatIp),
                 learnedNameServer: ip?.learnedNameServer.map(formatIp) ?? ip?.v6.dnsServer.map(formatIp6),
-                dhcpClient: host?.dhcp.map { c in
+                dhcpClient: ip?.dhcp.map { c in
                     DhcpClientView(state: c.state.rawValue, server: c.server.map(formatIp),
                                    leaseS: c.hasLease ? secondsLeft(c.expiry - now) : nil,
                                    renewS: c.state == .bound ? secondsLeft(c.t1 - now) : nil)
@@ -504,8 +512,8 @@ public final class Runtime {
                     NeighborRow(addr: formatIp6($0.addr), mac: $0.mac ?? "-", state: $0.state.rawValue, iface: $0.iface)
                 } ?? [],
                 rdnss: ip?.v6.rdnss.map(formatIp6),
-                accessPoint: (node as? AccessPoint).map { ap in
-                    AccessPointView(config: ap.radio.config, clients: ap.radio.clients.map {
+                accessPoint: apRadio(node).map { radio in
+                    AccessPointView(config: radio.config, clients: radio.clients.map {
                         // Associated stations are in range (a move out of it ends the association).
                         let signal = dot11Signal(node, $0.station.iface.node) ?? DOT11_SENSITIVITY[0].dbm
                         return AssociationRow(aid: $0.aid, mac: $0.station.iface.mac, node: $0.station.iface.node.id, signal: signal,
@@ -543,7 +551,13 @@ public final class Runtime {
         case .switch: Switch(sim: sim, id: id)
         case .hub: Hub(sim: sim, id: id)
         case .cloud: Cloud(sim: sim, id: id)
+        case .homeRouter: HomeRouter(sim: sim, id: id)
         }
+    }
+
+    /// An access point's radio, or a home router's (spec M11 §8).
+    private func apRadio(_ node: Node) -> ApRadio? {
+        (node as? AccessPoint)?.radio ?? (node as? HomeRouter)?.radio
     }
 
     private func get(_ id: String) throws -> Node {
@@ -577,7 +591,7 @@ public final class Runtime {
 
     private func setDhcpServer(_ id: String, _ config: DhcpConfig?, requireInSubnet: Bool) throws {
         let ip = try ipNode(id)
-        guard config == nil || nodes[id]?.kind == .router || nodes[id]?.kind == .server || nodes[id]?.kind == .cloud else {
+        guard config == nil || [.router, .server, .cloud, .homeRouter].contains(nodes[id]?.kind) else {
             throw EngineError("\(ip.name) cannot run a DHCP server")
         }
         try ip.configureDhcpServer(config, requireInSubnet: requireInSubnet)

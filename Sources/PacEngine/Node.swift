@@ -15,6 +15,8 @@ final class Interface {
     let dot1q: (parent: Interface, vlan: Int)?
     /// A Wi-Fi interface's radio (spec M11 §4); nil on a cable.
     var radio: Radio?
+    /// A home router's `LAN` (spec M11 §8): the IP interface of its bridge, which sends through the bridge's ports; no cable.
+    var bridge = false
 
     init(node: Node, name: String, mac: Mac, dot1q: (parent: Interface, vlan: Int)? = nil) {
         self.node = node
@@ -33,13 +35,15 @@ final class Interface {
             tagged.vlan = dot1q.vlan
             return dot1q.parent.send(tagged)
         }
-        let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil && radio == nil ? .noLink : nil
+        let reason: DropReason? = !node.powered || !up ? .ifaceDown : link == nil && radio == nil && !bridge ? .noLink : nil
         if let reason {
             node.sim.emit(.drop, node: node.id, iface: name, frame: frame, reason: reason)
             return
         }
         // Over the air through the radio (spec M11 §4).
         if let radio { return radio.send(frame) }
+        // Through the home router's bridge (spec M11 §8).
+        if bridge { return (node as! HomeRouter).bridge(frame, from: nil) }
         link!.transmit(from: self, frame)
     }
 }
@@ -49,6 +53,7 @@ extension Interface {
     /// an access point's associated stations.
     func reach() -> [Interface] {
         if let radio { return radio.peers }
+        if bridge { return (node as! HomeRouter).ports.flatMap { $0.reach() } }
         return link.map { [$0.peer(self)] } ?? []
     }
 
@@ -67,7 +72,12 @@ extension Interface {
         var peers: [Interface] = []
         while let hop = todo.popLast() {
             for peer in hop.iface.reach() where seen.insert(Hop(iface: ObjectIdentifier(peer), tag: hop.tag)).inserted {
-                if peer.node is IpNode {
+                if let home = peer.node as? HomeRouter, home.ports.contains(where: { $0 === peer }) {
+                    // A home router's LAN port or radio: its bridge (untagged only) holds the IP interface LAN (spec M11 §8).
+                    if hop.tag != nil { continue }
+                    if seen.insert(Hop(iface: ObjectIdentifier(home.lan), tag: nil)).inserted { peers.append(home.lan) }
+                    for next in home.ports where next !== peer || next.radio != nil { todo.append((next, nil)) }
+                } else if peer.node is IpNode {
                     // Untagged: the physical interface; tagged: its subinterface for that VLAN, if any.
                     let ip = peer.node.interfaces.first { hop.tag == nil ? $0 === peer : $0.dot1q?.parent === peer && $0.dot1q?.vlan == hop.tag }
                     if let ip { peers.append(ip) }

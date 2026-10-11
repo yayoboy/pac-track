@@ -17,6 +17,7 @@ extension DeviceKind {
         case .accessPoint: "Access point"
         case .tablet: "Tablet"
         case .smartphone: "Smartphone"
+        case .homeRouter: "Router Wi-Fi"
         }
     }
 
@@ -34,6 +35,7 @@ extension DeviceKind {
         case .accessPoint: "AP"
         case .tablet: "TAB"
         case .smartphone: "PHONE"
+        case .homeRouter: "HR"
         }
     }
 
@@ -61,6 +63,7 @@ public func inspectorTabs(for kind: DeviceKind) -> [InspectorTab] {
     case .hub: [.ports]
     case .router, .server, .cloud, .printer: [.interfaces, .routing, .services, .tables, .app]
     case .accessPoint: [.wifi, .tables]
+    case .homeRouter: [.interfaces, .routing, .services, .wifi, .tables, .app]
     case .pc, .laptop, .tablet, .smartphone: [.interfaces, .routing, .wifi, .tables, .app]
     case .tv: [.interfaces, .routing, .tables, .app]
     }

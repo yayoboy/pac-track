@@ -55,6 +55,8 @@ extension DeviceKind {
         case .accessPoint: "antenna.radiowaves.left.and.right"
         case .tablet: "ipad"
         case .smartphone: "iphone"
+        // The filled router: a router with antennas, as the plain router already shows the outline.
+        case .homeRouter: "wifi.router.fill"
         }
     }
 }

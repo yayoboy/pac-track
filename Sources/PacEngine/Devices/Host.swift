@@ -1,7 +1,4 @@
 final class Host: IpNode {
-    /// Set while the card takes its address from DHCP.
-    private(set) var dhcp: DhcpClient?
-
     init(sim: Sim, id: String, wifi: Bool = false) {
         super.init(sim: sim, id: id)
         addNic(wifi: wifi)
@@ -16,19 +13,9 @@ final class Host: IpNode {
         if wifi { nic.radio = StationRadio(iface: nic) }
     }
 
-    /// Switches the card between a static address and DHCP. Entering DHCP drops the static address; leaving releases the lease.
+    /// Switches the card between a static address and DHCP.
     func setDhcp(_ on: Bool) throws {
-        guard on != (dhcp != nil) else { return }
-        guard on else {
-            dhcp?.shutdown()
-            dhcp = nil
-            return
-        }
-        nic.ipv4 = nil
-        let client = try DhcpClient(node: self, iface: nic)
-        dhcp = client
-        // A Wi-Fi card asks once associated (spec M11 §5).
-        if nic.radio == nil ? powered : nic.lineUp { client.start() }
+        try setDhcp(on, on: nic)
     }
 
     /// The card and its network (spec M11 §2): Wi-Fi looking for `config.ssid`, or Ethernet with nil. A new card takes the old one's
@@ -49,23 +36,15 @@ final class Host: IpNode {
         if let config { try station?.configure(config) }
     }
 
+    /// The DHCP client stops with the stack (IpNode); the radio forgets its access point.
     override func reset() {
         super.reset()
-        dhcp?.stop(release: false)
         station?.reset()
     }
 
+    /// DHCP on a cable asks again with the stack (IpNode); on Wi-Fi it waits for the association (spec M11 §5).
     override func powerOn() {
         super.powerOn()
-        if nic.radio == nil { dhcp?.start() } // on Wi-Fi at association (spec M11 §5)
         station?.restart()
-    }
-
-    /// A Wi-Fi card's DHCP client runs while it is associated (spec M11 §5), like NetworkManager's: it starts at association and stops,
-    /// address and all, when the association ends. On a cable it keeps M3's behaviour.
-    override func linkChanged(_ iface: Interface) {
-        super.linkChanged(iface)
-        guard iface.radio != nil, let dhcp else { return }
-        if iface.lineUp { dhcp.start() } else { dhcp.stop(release: false) }
     }
 }

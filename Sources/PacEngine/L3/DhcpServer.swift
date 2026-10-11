@@ -187,12 +187,17 @@ final class DhcpServer {
         reply(.ack, to: m, yiaddr: ip, iface, own)
     }
 
+    /// A home router with no DNS in its pool passes on the one it learned on its Internet port (spec M11 §8).
+    private var relayedDns: UInt32? {
+        node is HomeRouter ? node.learnedNameServer : nil
+    }
+
     private func reply(_ type: DhcpType, to m: DhcpMessage, yiaddr: UInt32, _ iface: Interface, _ own: Cidr) {
         let positive = type != .nak
         let msg = DhcpMessage(op: 2, xid: m.xid, broadcast: m.broadcast, ciaddr: positive ? m.ciaddr : 0, yiaddr: yiaddr, chaddr: m.chaddr, type: type,
                               leaseS: positive ? UInt32(pool.leaseS) : nil, serverId: own.addr,
                               subnetMask: positive ? prefixMask(own.prefix) : nil,
-                              router: positive ? pool.gateway : nil, dns: positive ? pool.dns : nil)
+                              router: positive ? pool.gateway : nil, dns: positive ? pool.dns ?? relayedDns : nil)
         let payload = L4.udp(makeUdp(srcPort: PORT_DHCP_SERVER, dstPort: PORT_DHCP_CLIENT, payload: .dhcp(msg)))
         // RFC 2131 §4.1 without relays: a client that has an address gets a unicast, otherwise a broadcast (Pac-Track clients
         // set the broadcast flag, so the unicast-to-chaddr case never arises). NAKs are always broadcast.

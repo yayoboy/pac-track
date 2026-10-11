@@ -20,6 +20,8 @@ class IpNode: Node {
     var nat: Nat?
     /// Stateful firewall (routers).
     var firewall: Firewall?
+    /// Set while an interface takes its address from DHCP: a host's card, a home router's Internet port (spec M11 §8).
+    private(set) var dhcp: DhcpClient?
     /// RIPv2 (routers), spec M8 §3.
     var rip: Rip?
     /// OSPFv2 in area 0 (routers), spec M8 §4.
@@ -54,11 +56,26 @@ class IpNode: Node {
             }
         }
         // Typed addresses only: a DHCP lease is run-time state (the server checks its pool before offering).
-        let typed = { (i: Interface) in (i.node as? Host)?.dhcp?.iface !== i }
+        let typed = { (i: Interface) in (i.node as? IpNode)?.dhcp?.iface !== i }
         if let other = iface.segmentPeers().first(where: { $0.ipv4?.addr == c.addr && typed($0) }) {
             throw EngineError("Duplicate address: \(formatIp(c.addr)) is already used by \(other.node.name) \(other.name) on this segment")
         }
         iface.ipv4 = c
+    }
+
+    /// Switches `iface` between a static address and DHCP. Entering DHCP drops the static address; leaving releases the lease.
+    func setDhcp(_ on: Bool, on iface: Interface) throws {
+        guard on != (dhcp != nil) else { return }
+        guard on else {
+            dhcp?.shutdown()
+            dhcp = nil
+            return
+        }
+        iface.ipv4 = nil
+        let client = try DhcpClient(node: self, iface: iface)
+        dhcp = client
+        // A Wi-Fi card asks once associated (spec M11 §5).
+        if iface.radio == nil ? powered : iface.lineUp { client.start() }
     }
 
     func setGateway(_ ip: String) throws {
@@ -183,16 +200,22 @@ class IpNode: Node {
         rip?.stop()
         ospf?.stop()
         v6.reset()
+        dhcp?.stop(release: false)
     }
 
-    /// IPv6 runs DAD again on every interface (spec M9 §5).
+    /// IPv6 runs DAD again on every interface (spec M9 §5); DHCP asks again on a cable (on Wi-Fi at association, spec M11 §5).
     override func powerOn() {
         v6.start()
+        if let dhcp, dhcp.iface.radio == nil { dhcp.start() }
     }
 
-    /// A line coming back up runs DAD again on its interfaces (spec M9 §5).
+    /// A line coming back up runs DAD again on its interfaces (spec M9 §5). A Wi-Fi card's DHCP client runs while it is associated
+    /// (spec M11 §5), like NetworkManager's: it starts at association and stops, address and all, when the association ends. On a
+    /// cable it keeps M3's behaviour.
     override func linkChanged(_ iface: Interface) {
         v6.linkChanged(iface)
+        guard iface.radio != nil, let dhcp, dhcp.iface === iface else { return }
+        if iface.lineUp { dhcp.start() } else { dhcp.stop(release: false) }
     }
 
     /// Originates a packet (from `src` if given, else the outgoing interface's address). Returns false when there is no route to `dst`.
