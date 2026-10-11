@@ -66,7 +66,9 @@ enum SelfTest {
         await editor.duplicate([id("PC2")])
         await editor.edit(.setPower(id: id("PC3"), on: false))
         if editor.snapshot.nodes.first(where: { $0.name == "PC3" })?.powered != false { failures.append("PC3 should be off") }
-        if PaletteView.groups(matching: "rou").map(\.1) != [[PaletteItem(kind: .router)]] { failures.append("palette search") }
+        if PaletteView.groups(matching: "rou").map(\.1) != [[PaletteItem(kind: .router)], [PaletteItem(kind: .homeRouter)]] {
+            failures.append("palette search")
+        }
         if PaletteView.groups(matching: "stamp").map(\.1) != [[PaletteItem(kind: .printer)]] { failures.append("palette search: printer") }
         if PaletteView.groups(matching: "server").map(\.0) != ["Server"] || PaletteView.groups(matching: "server").first?.1.count != 3 {
             failures.append("palette search: servers")
@@ -74,7 +76,7 @@ enum SelfTest {
         if PaletteItem(payload: "server-dhcp") != PaletteItem(kind: .server, preset: .dhcp) || PaletteItem(payload: "tv")?.label != "Smart TV" {
             failures.append("palette payloads")
         }
-        let wireless = [PaletteItem(kind: .accessPoint), PaletteItem(kind: .tablet), PaletteItem(kind: .smartphone)]
+        let wireless = [PaletteItem(kind: .accessPoint), PaletteItem(kind: .homeRouter), PaletteItem(kind: .tablet), PaletteItem(kind: .smartphone)]
         if PaletteView.groups(matching: "wireless").map(\.1) != [wireless] || PaletteView.groups(matching: "wifi").map(\.1) != [wireless]
             || PaletteView.groups(matching: "ap").last?.1 != wireless || PaletteView.groups(matching: "phone").map(\.1) != [[PaletteItem(kind: .smartphone)]] {
             failures.append("palette search: wireless")

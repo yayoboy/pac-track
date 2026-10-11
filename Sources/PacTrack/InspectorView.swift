@@ -88,7 +88,8 @@ private struct NodeInspector: View {
                         }
                     }
                     .font(.system(size: 11))
-                    if node.kind.isHost {
+                    // A home router takes its address from the provider on the Internet port (spec M11 §8).
+                    if node.kind.isHost || (node.kind == .homeRouter && iface.name == "Internet") {
                         Picker("", selection: Binding(get: { iface.mode }, set: { mode in
                             Task { await editor.edit(.setIfaceMode(node: node.id, iface: iface.name, mode: mode), key: modeKey) }
                         })) {
@@ -101,7 +102,9 @@ private struct NodeInspector: View {
                         .accessibilityIdentifier("mode-\(iface.name)")
                         ErrorLine(editor: editor, key: modeKey)
                     }
-                    if iface.mode == .dhcp {
+                    if !takesAddress(node, iface) {
+                        Text("Porta del bridge LAN: l'indirizzo è su LAN").font(Theme.small).foregroundStyle(Theme.muted)
+                    } else if iface.mode == .dhcp {
                         Text("Indirizzo IPv4 (da DHCP)").font(Theme.small).foregroundStyle(Theme.muted)
                         Text(iface.cidr ?? "in attesa…").font(Theme.mono).foregroundStyle(iface.cidr == nil ? Theme.muted : Theme.fgStrong)
                         if let client = node.dhcpClient {
@@ -114,7 +117,7 @@ private struct NodeInspector: View {
                             await editor.edit(.setIp(node: node.id, iface: iface.name, cidr: trimmed.isEmpty ? nil : trimmed), key: key)
                         }
                     }
-                    Ipv6Fields(node: node, iface: iface, editor: editor)
+                    if takesAddress(node, iface) { Ipv6Fields(node: node, iface: iface, editor: editor) }
                     Text("MAC \(iface.mac)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted)
                 }
             }
@@ -161,6 +164,7 @@ private struct NodeInspector: View {
     /// "● SW1 Gi0/2", the device and port at the other end of the cable, or "○ libera"; one line, shortened in the middle.
     private func cableEnd(_ iface: IfaceView) -> some View {
         Text(iface.wireless ? (iface.linked ? "● associata" : "○ non associata")
+             : node.kind == .homeRouter && iface.name == "LAN" ? "● bridge LAN1–4 + WLAN"
              : iface.linked ? "● " + (peerLabel(IfaceRef(node: node.id, iface: iface.name), in: editor.snapshot) ?? "collegata") : "○ libera")
             .foregroundStyle(iface.linked ? Theme.ok : Theme.muted)
             .lineLimit(1)
@@ -182,9 +186,13 @@ private struct NodeInspector: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-            } else if let ap = node.accessPoint {
+            } else if node.kind == .accessPoint, let ap = node.accessPoint {
                 TableSection(title: "Client associati", head: ["AID", "MAC", "Client"], rows: associationRows(ap, in: editor.snapshot.nodes))
             } else {
+                // A home router: its Wi-Fi clients over its routing tables (spec M11 §8).
+                if let ap = node.accessPoint {
+                    TableSection(title: "Client associati", head: ["AID", "MAC", "Client"], rows: associationRows(ap, in: editor.snapshot.nodes))
+                }
                 if let s = node.station {
                     // SSID over BSSID, as the IPv6 tables do: four columns on one line wrap the BSSID in the 300 pt column.
                     TableSection(title: "Wi-Fi", head: ["Stato", "SSID\nBSSID", "Canale"],

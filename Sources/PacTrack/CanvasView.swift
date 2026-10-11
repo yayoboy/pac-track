@@ -34,15 +34,36 @@ struct CanvasView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 background
+                // The range of each access point and home router that is on (spec M11 §8): a light circle under everything.
+                ForEach(editor.snapshot.nodes.filter { $0.accessPoint != nil && $0.powered }) { ap in
+                    let d = 2 * CGFloat(WIFI_RANGE) * zoom
+                    Circle()
+                        .fill(Theme.accent.opacity(0.04))
+                        .overlay(Circle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
+                        .frame(width: d, height: d)
+                        .position(center(ap.id))
+                        .allowsHitTesting(false)
+                }
                 let air = airLinks(editor.snapshot.nodes)
-                // A dashed line from each associated client to its access point (spec M11 §7): not a cable, nothing to click.
+                // A dashed line from each associated client to its access point (spec M11 §7): not a cable, nothing to click. Its rate
+                // in the middle (spec M11 §8).
                 ForEach(air) { link in
+                    let (a, b) = (center(link.a.node), center(link.b.node))
                     Path { p in
-                        p.move(to: center(link.a.node))
-                        p.addLine(to: center(link.b.node))
+                        p.move(to: a)
+                        p.addLine(to: b)
                     }
                     .stroke(Theme.muted, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     .allowsHitTesting(false)
+                    if let rate = editor.snapshot.nodes.first(where: { $0.id == link.a.node })?.station?.rate {
+                        Text("\(rate) Mb/s")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(Theme.muted)
+                            .padding(.horizontal, 3)
+                            .background(Theme.bg)
+                            .position(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+                            .allowsHitTesting(false)
+                    }
                 }
                 ForEach(editor.snapshot.links) { link in cable(link) }
                 // Under the nodes: a PDU leaves from and disappears into its device.

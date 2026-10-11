@@ -25,6 +25,7 @@ struct ServicesTab: View {
                 sink
             } else {
                 if node.kind == .cloud { internet }
+                if node.kind == .homeRouter { home }
                 dhcp
                 if node.kind == .server || node.kind == .cloud { dns }
                 if node.kind == .server { sink }
@@ -34,12 +35,24 @@ struct ServicesTab: View {
                     nat
                     firewall
                 }
+                if node.kind == .homeRouter {
+                    nat
+                    firewall
+                }
             }
         }
     }
 
     private var internet: some View {
-        Text("Internet simulata: \(node.name) risponde da sé a ogni indirizzo pubblico per cui non ha una route (ping, traceroute) e su ognuno fa da DNS pubblico, per esempio 8.8.8.8. Collega a Gi0/0 il router del cliente: 203.0.113.x/24, gateway 203.0.113.1.")
+        Text("Internet simulata: \(node.name) risponde da sé a ogni indirizzo pubblico per cui non ha una route (ping, traceroute) e su ognuno fa da DNS pubblico, per esempio 8.8.8.8. Collega a Gi0/0 il router del cliente: 203.0.113.x/24, gateway 203.0.113.1, oppure in DHCP (203.0.113.100–199).")
+            .font(Theme.small)
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// What a home router does by itself (spec M11 §8).
+    private var home: some View {
+        Text("Router di casa: la porta Internet prende l'indirizzo dal provider (DHCP); LAN1–4 e il Wi-Fi sono un'unica rete su LAN, con server DHCP, NAT verso Internet e DNS che inoltra le domande al provider.")
             .font(Theme.small)
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)

@@ -162,6 +162,11 @@ public func firstFreeIface(_ node: NodeView, toward peer: NodeView? = nil) -> St
     return free.first { ($0.name == "Internet") == provider }?.name
 }
 
+/// Whether Interfacce offers an address on `iface`: everywhere but a home router's bridge ports (LAN1–LAN4, WLAN), spec M11 §8.
+public func takesAddress(_ node: NodeView, _ iface: IfaceView) -> Bool {
+    node.kind != .homeRouter || iface.name == "Internet" || iface.name == "LAN"
+}
+
 public func firstIp(_ node: NodeView) -> String? {
     node.ifaces.lazy.compactMap(\.cidr).first.map { String($0.split(separator: "/")[0]) }
 }

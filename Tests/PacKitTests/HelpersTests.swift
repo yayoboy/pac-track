@@ -234,6 +234,16 @@ import Testing
         #expect(firstFreeIface(nodes[1]) == nil && firstFreeIface(nodes[0]) == "Gi0")
     }
 
+    /// Spec M11 §8: of a home router only Internet and LAN take addresses (Interfacce shows no address fields on the bridge's ports).
+    @Test func onlyInternetAndLanOfAHomeRouterTakeAddresses() throws {
+        let rt = Runtime()
+        try rt.handle(.addNode(id: "hr", kind: .homeRouter, name: "HR1"))
+        try rt.handle(.addNode(id: "r", kind: .router, name: "R1"))
+        let (hr, r) = (rt.snapshot().nodes[0], rt.snapshot().nodes[1])
+        #expect(hr.ifaces.filter { takesAddress(hr, $0) }.map(\.name) == ["Internet", "LAN"])
+        #expect(r.ifaces.allSatisfy { takesAddress(r, $0) })
+    }
+
     /// Spec M11 §8: the two WPA2 states in Tabelle and under the network.
     @Test func theWpa2StatesHaveTheirWords() throws {
         #expect([StationState.handshake, .wrongPassword].map(\.label) == ["handshake", "password errata"])

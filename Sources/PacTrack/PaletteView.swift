@@ -30,7 +30,7 @@ struct PaletteView: View {
         ("Rete", [.router, .switch, .hub, .cloud].map { PaletteItem(kind: $0) }),
         ("Host", [.pc, .laptop, .printer, .tv].map { PaletteItem(kind: $0) }),
         ("Server", [PaletteItem(kind: .server), PaletteItem(kind: .server, preset: .dns), PaletteItem(kind: .server, preset: .dhcp)]),
-        ("Wireless", [.accessPoint, .tablet, .smartphone].map { PaletteItem(kind: $0) }),
+        ("Wireless", [.accessPoint, .homeRouter, .tablet, .smartphone].map { PaletteItem(kind: $0) }),
     ]
     /// Words that find a whole section besides its title (spec M11 §7).
     private static let aliases = ["Wireless": "wifi wi-fi ap"]
